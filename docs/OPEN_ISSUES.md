@@ -175,6 +175,22 @@ In the expected order of difficulty; priorities are to be decided:
   injectivity of the decimal printing of natural numbers and a pigeonhole
   argument; nothing in the build depends on it.
 
+## D1. Scope of further engines (TODO 4.11): decision needed from the maintainers
+
+Status: **awaiting a decision**. No work on these engines starts before it is answered.
+
+| Engine | Source open? | Distance from the current dialects | Cost of a dialect | Recommendation |
+|---|---|---|---|---|
+| DuckDB | yes (MIT) | PostgreSQL-like grammar; its own types (`LIST`, `STRUCT`, `MAP`), `QUALIFY`, `GROUP BY ALL`, `ASOF` joins, lambdas | medium: a `vsem` derived from PostgreSQL, plus nested types | **add first**: open source, active test suite in sqllogictest format, which `slt2coq.py` already reads |
+| CockroachDB | yes (source available) | PostgreSQL wire and grammar, serializable-only, its own `INT` = 8 bytes and decimal rules | small: PostgreSQL with type differences | add second (logic tests are sqllogictest-like) |
+| ClickHouse | yes (Apache 2) | far: no three-valued logic by default (`join_use_nulls`), `Nullable` types, array functions, `FINAL` | large | exclude for now: its default NULL handling departs from the standard core of the model |
+| Oracle Database | no | the OceanBase Oracle mode covers its documented `SELECT` | medium, from documentation only | defer: the Oracle mode is the documented subset; a separate dialect adds no source evidence |
+| SQL Server | no | `TOP`, `CROSS/OUTER APPLY` (already modelled), `+` on strings, collations by default case-insensitive | medium, documentation only | defer |
+| Snowflake, BigQuery | no (services) | `QUALIFY`, semi-structured types, `SAFE_` functions; results not reproducible locally | large, documentation only | exclude: no engine to validate against (Phase 5 needs one) |
+
+Questions for the maintainers: (1) agree to DuckDB then CockroachDB as the next dialects? (2) keep ClickHouse,
+Snowflake and BigQuery out of scope? (3) is Oracle Database / SQL Server worth a documentation-only dialect?
+
 ## I9. Completeness ledger
 
 **Status: open.** The goal is a formal semantics of queries with no gap, for PostgreSQL, MySQL,

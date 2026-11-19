@@ -106,6 +106,15 @@ the value of a bare column in MariaDB, and the optimizer-visible differences (wh
 Percona's source and the PolarDB engine are not open for the SQL layer in the same way: for these two the model
 relies on the documentation (`docs.percona.com` could not be fetched; the feature comparison was read through a mirror).
 
+## Versions (TODO 4.10)
+
+`src/data/dialects/Versions.v` gives the release which introduced each construct (`introduced`), per family
+(PostgreSQL, MySQL, SQLite, MariaDB, TiDB), and `at_version d fam v` restricts a dialect to the constructs of
+version `v` (`at_version_sub`: a version never extends a dialect). Named versions: `MySQL57`, `MySQL80` (8.0.30),
+`MySQL84`, `PostgreSQL12`, `PostgreSQL17`, `SQLite3_24`, `SQLite3_45`, `MariaDB10_4`, `MariaDB10_6`, `TiDB4`.
+Only the acceptance of constructs depends on the version; the values of functions are those of the latest
+version (a function added in a release is accepted by earlier ones). Tests: `src/testing/Test_Versions.v`.
+
 ## OceanBase Oracle mode (closeout, TODO 4.9)
 
 The parser of the Oracle mode (`sql_parser_oracle_mode.y`) is in the closed enterprise source of OceanBase, and
