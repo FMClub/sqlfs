@@ -59,7 +59,8 @@ Definition CI : dialect TNull :=
              (fun f => match f with 
                        | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false 
                        | _ => true 
-                       end).
+                       end)
+             (fun _ => true) (fun _ => true) (fun _ => true).
 
 Definition run (d : dialect TNull) q := 
   List.map (show_tuple TNull) 

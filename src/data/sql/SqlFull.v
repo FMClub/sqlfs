@@ -190,7 +190,11 @@ Record dialect : Type :=
           [NULLS FIRST] and [NULLS LAST] in the dialects which have them. *)
       nulls_smallest : bool;
       (** the constructs which the dialect supports *)
-      supports : feature -> bool
+      supports : feature -> bool;
+      (** the function symbols, the predicates and the aggregates which the dialect has *)
+      known_symbol : symb -> bool;
+      known_predicate : predicate -> bool;
+      known_aggregate : aggregate -> bool
     }.
 
 Hypothesis O : dialect.
@@ -326,101 +330,123 @@ Definition Fr_Cross f1 f2 := Fr_Join J_Inner false f1 f2 C_True.
 
 (** * The constructs which a query uses
 
-    [squery_features q] lists the constructs of [q] which are not supported by all the
+    [squery_uses q] lists the constructs of [q] which are not supported by all the
     dialects. A dialect accepts [q] if it supports all of them. *)
 
-Definition nulls_features (o : sorder) : list feature :=
+(** What a query uses, and which a dialect may lack: a construct of the language, a function
+    symbol, a predicate or an aggregate. *)
+Inductive use : Type :=
+  | U_Feature : feature -> use
+  | U_Symbol : symb -> use
+  | U_Pred : predicate -> use
+  | U_Agg : aggregate -> use.
+
+
+Definition nulls_features (o : sorder) : list use :=
   match o with
   | O_By _ _ Nulls_Default => nil
-  | O_By _ _ _ => F_Nulls_Order :: nil
+  | O_By _ _ _ => (U_Feature F_Nulls_Order) :: nil
   end.
 
-Definition frame_bound_is_groups (f : frame) : list feature :=
-  match f with Frame_Groups _ _ => F_Frame_Groups :: nil | Frame_Rows _ _ => nil end.
+Definition frame_bound_is_groups (f : frame) : list use :=
+  match f with Frame_Groups _ _ => (U_Feature F_Frame_Groups) :: nil | Frame_Rows _ _ => nil end.
 
-Fixpoint sexpr_features (e : sexpr) {struct e} : list feature :=
+Fixpoint sexpr_uses (e : sexpr) {struct e} : list use :=
   match e with
   | E_Const _ | E_Col _ => nil
-  | E_Fun _ l => flat_map sexpr_features l
-  | E_Agg _ _ e c => 
-    sexpr_features e ++ scond_features c ++
-    match c with C_True => nil | _ => F_Filter_Agg :: nil end
-  | E_Case c e1 e2 => scond_features c ++ sexpr_features e1 ++ sexpr_features e2
-  | E_Cond c => F_Cond_Value :: scond_features c
-  | E_Sub q => squery_features q
+  | E_Fun f l => U_Symbol f :: flat_map sexpr_uses l
+  | E_Agg ag _ e c => 
+    U_Agg ag :: sexpr_uses e ++ scond_uses c ++
+    match c with C_True => nil | _ => (U_Feature F_Filter_Agg) :: nil end
+  | E_Case c e1 e2 => scond_uses c ++ sexpr_uses e1 ++ sexpr_uses e2
+  | E_Cond c => (U_Feature F_Cond_Value) :: scond_uses c
+  | E_Sub q => squery_uses q
   end
 
-with scond_features (c : scond) {struct c} : list feature :=
+with scond_uses (c : scond) {struct c} : list use :=
   match c with
-  | C_Conj _ c1 c2 => scond_features c1 ++ scond_features c2
-  | C_Not c => scond_features c
+  | C_Conj _ c1 c2 => scond_uses c1 ++ scond_uses c2
+  | C_Not c => scond_uses c
   | C_True => nil
-  | C_Pred _ l => flat_map sexpr_features l
-  | C_Expr e => F_Cond_Value :: sexpr_features e
-  | C_Quant _ _ l q _ => F_Any_All :: flat_map sexpr_features l ++ squery_features q
+  | C_Pred p l => U_Pred p :: flat_map sexpr_uses l
+  | C_Expr e => (U_Feature F_Cond_Value) :: sexpr_uses e
+  | C_Quant _ p l q _ => (U_Feature F_Any_All) :: U_Pred p :: flat_map sexpr_uses l ++ squery_uses q
   | C_In l q _ => 
-    (match l with _ :: _ :: _ => F_Row_In :: nil | _ => nil end) ++
-    flat_map sexpr_features l ++ squery_features q
-  | C_Exists q => squery_features q
+    (match l with _ :: _ :: _ => (U_Feature F_Row_In) :: nil | _ => nil end) ++
+    flat_map sexpr_uses l ++ squery_uses q
+  | C_Exists q => squery_uses q
   end
 
-with squery_features (q : squery) {struct q} : list feature :=
+with squery_uses (q : squery) {struct q} : list use :=
   match q with
   | SQ_Table _ => nil
   | SQ_Set o sq q1 q2 => 
     (match o, sq with
-     | Inter, Set_Distinct => F_Intersect :: nil
-     | Inter, Set_All => F_Intersect :: F_Intersect_All :: nil
-     | Diff, Set_Distinct => F_Except :: nil
-     | Diff, Set_All => F_Except :: F_Except_All :: nil
+     | Inter, Set_Distinct => (U_Feature F_Intersect) :: nil
+     | Inter, Set_All => (U_Feature F_Intersect) :: (U_Feature F_Intersect_All) :: nil
+     | Diff, Set_Distinct => (U_Feature F_Except) :: nil
+     | Diff, Set_All => (U_Feature F_Except) :: (U_Feature F_Except_All) :: nil
      | _, _ => nil
-     end) ++ squery_features q1 ++ squery_features q2
-  | SQ_Select sp => sspec_features sp
+     end) ++ squery_uses q1 ++ squery_uses q2
+  | SQ_Select sp => sspec_uses sp
   | SQ_Order q lo _ _ => 
-    squery_features q ++ flat_map nulls_features lo ++ 
-    flat_map (fun o => match o with O_By e _ _ => sexpr_features e end) lo
+    squery_uses q ++ flat_map nulls_features lo ++ 
+    flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo
   | SQ_Window q lw => 
-    F_Window :: squery_features q ++
+    (U_Feature F_Window) :: squery_uses q ++
     flat_map (fun w => 
                 match w with 
                 | W_As f lp lo _ => 
-                  flat_map sexpr_features lp ++ flat_map nulls_features lo ++
+                  flat_map sexpr_uses lp ++ flat_map nulls_features lo ++
                   match f with
-                  | W_Agg _ _ e fr => sexpr_features e ++ frame_bound_is_groups fr
-                  | W_First_Value e fr => sexpr_features e ++ frame_bound_is_groups fr
-                  | W_Last_Value e fr => sexpr_features e ++ frame_bound_is_groups fr
-                  | W_Nth_Value e _ fr => sexpr_features e ++ frame_bound_is_groups fr
-                  | W_Lag e _ d => sexpr_features e ++ sexpr_features d
-                  | W_Lead e _ d => sexpr_features e ++ sexpr_features d
+                  | W_Agg ag _ e fr => U_Agg ag :: sexpr_uses e ++ frame_bound_is_groups fr
+                  | W_First_Value e fr => sexpr_uses e ++ frame_bound_is_groups fr
+                  | W_Last_Value e fr => sexpr_uses e ++ frame_bound_is_groups fr
+                  | W_Nth_Value e _ fr => sexpr_uses e ++ frame_bound_is_groups fr
+                  | W_Lag e _ d => sexpr_uses e ++ sexpr_uses d
+                  | W_Lead e _ d => sexpr_uses e ++ sexpr_uses d
                   | _ => nil
                   end
                 end) lw
-  | SQ_With _ q1 q2 => F_With :: squery_features q1 ++ squery_features q2
+  | SQ_With _ q1 q2 => (U_Feature F_With) :: squery_uses q1 ++ squery_uses q2
   end
 
-with sspec_features (sp : sspec) {struct sp} : list feature :=
+with sspec_uses (sp : sspec) {struct sp} : list use :=
   match sp with
   | Select _ s lf w g h =>
     (match s with 
      | S_Star => nil 
-     | S_List l => flat_map (fun x => match x with S_As e _ => sexpr_features e end) l
+     | S_List l => flat_map (fun x => match x with S_As e _ => sexpr_uses e end) l
      end) ++
-    flat_map sfrom_features lf ++ scond_features w ++
-    (match g with G_Fine => nil | G_By l => flat_map sexpr_features l end) ++ 
-    scond_features h
+    flat_map sfrom_uses lf ++ scond_uses w ++
+    (match g with G_Fine => nil | G_By l => flat_map sexpr_uses l end) ++ 
+    scond_uses h
   end
 
-with sfrom_features (f : sfrom) {struct f} : list feature :=
+with sfrom_uses (f : sfrom) {struct f} : list use :=
   match f with
-  | Fr_Query q _ => squery_features q
+  | Fr_Query q _ => squery_uses q
   | Fr_Join jt lateral f1 f2 c =>
-    (match jt with J_Right => F_Right_Join :: nil | J_Full => F_Full_Join :: nil | _ => nil end) ++
-    (if lateral then F_Lateral :: nil else nil) ++
-    sfrom_features f1 ++ sfrom_features f2 ++ scond_features c
+    (match jt with J_Right => (U_Feature F_Right_Join) :: nil | J_Full => (U_Feature F_Full_Join) :: nil | _ => nil end) ++
+    (if lateral then (U_Feature F_Lateral) :: nil else nil) ++
+    sfrom_uses f1 ++ sfrom_uses f2 ++ scond_uses c
   end.
 
-(** Does the dialect accept the query? *)
-Definition accepted_by (q : squery) : bool := forallb (supports O) (squery_features q).
+Definition use_ok (u : use) : bool :=
+  match u with
+  | U_Feature f => supports O f
+  | U_Symbol f => known_symbol O f
+  | U_Pred p => known_predicate O p
+  | U_Agg a => known_aggregate O a
+  end.
+
+(** The constructs which a query uses. *)
+Definition squery_features (q : squery) : list feature :=
+  flat_map (fun u => match u with U_Feature f => f :: nil | _ => nil end) (squery_uses q).
+
+(** Does the dialect accept the query? It must support its constructs, and have its functions,
+    predicates and aggregates. *)
+Definition accepted_by (q : squery) : bool := forallb use_ok (squery_uses q).
 
 (** * Sort of a query: the set of the attributes of its result
 
@@ -502,28 +528,63 @@ Definition store (a : attribute) (v : value) := if is_null O v then null_of a el
 
 (** * Columns and aggregates *)
 
-(** The columns of an expression, outside its subqueries. *)
-Fixpoint sexpr_cols (e : sexpr) : list attribute :=
+(** The columns which an expression reads from the blocks which enclose it: its own
+    columns, and the columns which its subqueries read from outside themselves (the
+    columns of a subquery which its own FROM clause binds are not counted). *)
+Fixpoint sexpr_cols (ce : cte_env) (e : sexpr) {struct e} : list attribute :=
   match e with
   | E_Const _ => nil
   | E_Col a => a :: nil
-  | E_Fun _ l => flat_map sexpr_cols l
-  | E_Agg _ _ e c => sexpr_cols e ++ scond_cols c
-  | E_Case c e1 e2 => scond_cols c ++ sexpr_cols e1 ++ sexpr_cols e2
-  | E_Cond c => scond_cols c
-  | E_Sub _ => nil
+  | E_Fun _ l => flat_map (sexpr_cols ce) l
+  | E_Agg _ _ e c => sexpr_cols ce e ++ scond_cols ce c
+  | E_Case c e1 e2 => scond_cols ce c ++ sexpr_cols ce e1 ++ sexpr_cols ce e2
+  | E_Cond c => scond_cols ce c
+  | E_Sub q => squery_cols ce q
   end
 
-with scond_cols (c : scond) : list attribute :=
+with scond_cols (ce : cte_env) (c : scond) {struct c} : list attribute :=
   match c with
-  | C_Conj _ c1 c2 => scond_cols c1 ++ scond_cols c2
-  | C_Not c => scond_cols c
+  | C_Conj _ c1 c2 => scond_cols ce c1 ++ scond_cols ce c2
+  | C_Not c => scond_cols ce c
   | C_True => nil
-  | C_Pred _ l => flat_map sexpr_cols l
-  | C_Expr e => sexpr_cols e
-  | C_Quant _ _ l _ _ => flat_map sexpr_cols l
-  | C_In l _ _ => flat_map sexpr_cols l
-  | C_Exists _ => nil
+  | C_Pred _ l => flat_map (sexpr_cols ce) l
+  | C_Expr e => sexpr_cols ce e
+  | C_Quant _ _ l q _ => flat_map (sexpr_cols ce) l ++ squery_cols ce q
+  | C_In l q _ => flat_map (sexpr_cols ce) l ++ squery_cols ce q
+  | C_Exists q => squery_cols ce q
+  end
+
+(** the columns which a query reads from outside itself *)
+with squery_cols (ce : cte_env) (q : squery) {struct q} : list attribute :=
+  match q with
+  | SQ_Table _ => nil
+  | SQ_Set _ _ q1 q2 => squery_cols ce q1 ++ squery_cols ce q2
+  | SQ_Select sp => sspec_cols ce sp
+  | SQ_Order q _ _ _ => squery_cols ce q
+  | SQ_Window q _ => squery_cols ce q
+  | SQ_With r q1 q2 => 
+    squery_cols ce q1 ++ squery_cols ((r, (squery_sort ce q1, nil)) :: ce) q2
+  end
+
+with sspec_cols (ce : cte_env) (sp : sspec) {struct sp} : list attribute :=
+  match sp with
+  | Select _ s lf w g h =>
+    let bound := Fset.Union (A T) (map (sfrom_sort ce) lf) in
+    let own := 
+        (match s with 
+         | S_Star => nil 
+         | S_List l => flat_map (fun x => match x with S_As e _ => sexpr_cols ce e end) l 
+         end) ++
+        scond_cols ce w ++
+        (match g with G_Fine => nil | G_By l => flat_map (sexpr_cols ce) l end) ++
+        scond_cols ce h ++ flat_map (sfrom_cols ce) lf in
+    filter (fun a => negb (a inS? bound)) own
+  end
+
+with sfrom_cols (ce : cte_env) (f : sfrom) {struct f} : list attribute :=
+  match f with
+  | Fr_Query q _ => squery_cols ce q
+  | Fr_Join _ _ f1 f2 c => sfrom_cols ce f1 ++ sfrom_cols ce f2 ++ scond_cols ce c
   end.
 
 (** An aggregate belongs to the innermost block which binds one of the columns
@@ -545,36 +606,87 @@ Definition agg_env (cols : list attribute) (env : senv) : senv :=
   | env' => env'
   end.
 
-(** Does this expression contain an aggregate of the block, the FROM clause of
-    which has sort [sa]? Subqueries are not inspected. *)
-Fixpoint sexpr_has_agg (sa : setA) (e : sexpr) : bool :=
+(** Aggregates which are written in a subquery and belong to an enclosing block: an
+    aggregate belongs to the innermost block which binds one of its columns, so that
+    [SELECT (SELECT sum(t.a) FROM u) FROM t] aggregates the rows of [t]. [sexpr_foreign ce sa bound e]
+    tells whether [e], which is in a subquery whose own FROM clause binds [bound], contains
+    an aggregate which reads the block of sort [sa] and nothing of the subquery. *)
+Fixpoint sexpr_foreign (ce : cte_env) (sa bound : setA) (e : sexpr) {struct e} : bool :=
   match e with
-  | E_Const _ | E_Col _ | E_Sub _ => false
-  | E_Fun _ l => existsb (sexpr_has_agg sa) l
+  | E_Const _ | E_Col _ => false
+  | E_Fun _ l => existsb (sexpr_foreign ce sa bound) l
+  | E_Agg _ _ a c =>
+    match sexpr_cols ce a ++ scond_cols ce c with
+    | nil => false
+    | cols => existsb (fun x => x inS? sa) cols && negb (existsb (fun x => x inS? bound) cols)
+    end
+  | E_Case c e1 e2 => 
+    scond_foreign ce sa bound c || sexpr_foreign ce sa bound e1 || sexpr_foreign ce sa bound e2
+  | E_Cond c => scond_foreign ce sa bound c
+  | E_Sub q => squery_foreign ce sa q
+  end
+
+with scond_foreign (ce : cte_env) (sa bound : setA) (c : scond) {struct c} : bool :=
+  match c with
+  | C_Conj _ c1 c2 => scond_foreign ce sa bound c1 || scond_foreign ce sa bound c2
+  | C_Not c => scond_foreign ce sa bound c
+  | C_True => false
+  | C_Pred _ l => existsb (sexpr_foreign ce sa bound) l
+  | C_Expr e => sexpr_foreign ce sa bound e
+  | C_Quant _ _ l q _ => existsb (sexpr_foreign ce sa bound) l || squery_foreign ce sa q
+  | C_In l q _ => existsb (sexpr_foreign ce sa bound) l || squery_foreign ce sa q
+  | C_Exists q => squery_foreign ce sa q
+  end
+
+with squery_foreign (ce : cte_env) (sa : setA) (q : squery) {struct q} : bool :=
+  match q with
+  | SQ_Table _ => false
+  | SQ_Set _ _ q1 q2 => squery_foreign ce sa q1 || squery_foreign ce sa q2
+  | SQ_Select (Select _ s lf w _ h) =>
+    let bound := Fset.Union (A T) (map (sfrom_sort ce) lf) in
+    (match s with
+     | S_Star => false
+     | S_List l => existsb (fun x => match x with S_As e _ => sexpr_foreign ce sa bound e end) l
+     end) || scond_foreign ce sa bound h || scond_foreign ce sa bound w
+  | SQ_Order q _ _ _ => squery_foreign ce sa q
+  | SQ_Window q _ => squery_foreign ce sa q
+  | SQ_With r q1 q2 => 
+    squery_foreign ce sa q1 || squery_foreign ((r, (squery_sort ce q1, nil)) :: ce) sa q2
+  end.
+
+(** Does this expression contain an aggregate of the block, the FROM clause of
+    which has sort [sa]? The aggregates which the subqueries contain are not counted,
+    but their columns are, when they read the block. *)
+Fixpoint sexpr_has_agg (ce : cte_env) (sa : setA) (e : sexpr) : bool :=
+  match e with
+  | E_Const _ | E_Col _ => false
+  | E_Sub q => squery_foreign ce sa q
+  | E_Fun _ l => existsb (sexpr_has_agg ce sa) l
   | E_Agg _ _ e c =>
-    match sexpr_cols e ++ scond_cols c with
+    match sexpr_cols ce e ++ scond_cols ce c with
     | nil => true
     | cols => existsb (fun a => a inS? sa) cols
     end
-  | E_Case c e1 e2 => scond_has_agg sa c || sexpr_has_agg sa e1 || sexpr_has_agg sa e2
-  | E_Cond c => scond_has_agg sa c
+  | E_Case c e1 e2 => scond_has_agg ce sa c || sexpr_has_agg ce sa e1 || sexpr_has_agg ce sa e2
+  | E_Cond c => scond_has_agg ce sa c
   end
 
-with scond_has_agg (sa : setA) (c : scond) : bool :=
+with scond_has_agg (ce : cte_env) (sa : setA) (c : scond) : bool :=
   match c with
-  | C_Conj _ c1 c2 => scond_has_agg sa c1 || scond_has_agg sa c2
-  | C_Not c => scond_has_agg sa c
-  | C_True | C_Exists _ => false
-  | C_Pred _ l => existsb (sexpr_has_agg sa) l
-  | C_Expr e => sexpr_has_agg sa e
-  | C_Quant _ _ l _ _ => existsb (sexpr_has_agg sa) l
-  | C_In l _ _ => existsb (sexpr_has_agg sa) l
+  | C_Conj _ c1 c2 => scond_has_agg ce sa c1 || scond_has_agg ce sa c2
+  | C_Not c => scond_has_agg ce sa c
+  | C_True => false
+  | C_Exists q => squery_foreign ce sa q
+  | C_Pred _ l => existsb (sexpr_has_agg ce sa) l
+  | C_Expr e => sexpr_has_agg ce sa e
+  | C_Quant _ _ l q _ => existsb (sexpr_has_agg ce sa) l || squery_foreign ce sa q
+  | C_In l q _ => existsb (sexpr_has_agg ce sa) l || squery_foreign ce sa q
   end.
 
-Definition sselect_has_agg (sa : setA) (s : sselect) :=
+Definition sselect_has_agg (ce : cte_env) (sa : setA) (s : sselect) :=
   match s with
   | S_Star => false
-  | S_List l => existsb (fun x => match x with S_As e _ => sexpr_has_agg sa e end) l
+  | S_List l => existsb (fun x => match x with S_As e _ => sexpr_has_agg ce sa e end) l
   end.
 
 (** * Collections of tuples as lists
@@ -927,8 +1039,8 @@ Definition mk_row (l : list (attribute * value)) :=
 
 (** Without GROUP BY, is the block nevertheless an aggregate query, with a
     single group? *)
-Definition implicit_group (sa : setA) (s : sselect) (h : scond) (ex : list sexpr) :=
-  sselect_has_agg sa s || scond_has_agg sa h || existsb (sexpr_has_agg sa) ex.
+Definition implicit_group (ce : cte_env) (sa : setA) (s : sselect) (h : scond) (ex : list sexpr) :=
+  sselect_has_agg ce sa s || scond_has_agg ce sa h || existsb (sexpr_has_agg ce sa) ex.
 
 (** The sort key of a row: a column of the row itself when the key is the name
     of such a column, the key evaluated in the environment of the row
@@ -947,7 +1059,7 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
   | E_Fun f l => interp_symbol T f (map (eval_sexpr ce env) l)
   | E_Agg ag sq e c =>
     let vals :=
-        match agg_env (sexpr_cols e ++ scond_cols c) env with
+        match agg_env (sexpr_cols ce e ++ scond_cols ce c) env with
         | nil => nil
         | (sa, g) :: env' =>
           map (fun t => eval_sexpr ce ((sa, t :: nil) :: env') e)
@@ -1059,7 +1171,7 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
     (** GROUP BY *)
     let groups :=
         match g with
-        | G_Fine => if implicit_group sa s h ex then rows :: nil else map (fun t => t :: nil) rows
+        | G_Fine => if implicit_group ce sa s h ex then rows :: nil else map (fun t => t :: nil) rows
         | G_By nil => rows :: nil
         | G_By lg => group_on (fun t => map (eval_sexpr ce (slice_t t :: env)) lg) rows
         end in

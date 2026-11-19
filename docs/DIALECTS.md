@@ -71,7 +71,7 @@ section). `planned` means that it is not modelled yet.
 | Row limiting | `LIMIT`/`OFFSET`, `FETCH FIRST` | `LIMIT`/`OFFSET` | `LIMIT`/`OFFSET` | `LIMIT`/`OFFSET` | `OFFSET ... FETCH FIRST ... ROWS [ONLY \| WITH TIES]`, `PERCENT` | `LIMIT`/`OFFSET` done; `WITH TIES`, `PERCENT` planned |
 | `ROLLUP`, `CUBE`, `GROUPING SETS` | yes | `WITH ROLLUP` | no | yes (grammar) | yes | planned |
 | `WITH RECURSIVE` | yes | yes | yes | yes (grammar) | yes | planned |
-| Names of functions which exist only in some dialects | | | | | | planned (acceptance by name) |
+| Functions, predicates and aggregates which exist only in some dialects (`string_agg`, `group_concat`, `listagg`, `total`, `ifnull`, `nvl`, `is distinct from`, `<=>`) | | | | | | done (`accepted_by` checks the names) |
 | Integer range and overflow | 4/8 bytes, error | 8 bytes, error | 8 bytes, to real | as MySQL | number | not modelled |
 | Floating-point numbers | IEEE | IEEE | IEEE | IEEE | binary float | not modelled (exact rationals) |
 | Accent folding (`_ai_ci`) | no | yes | no | yes | no | not modelled |

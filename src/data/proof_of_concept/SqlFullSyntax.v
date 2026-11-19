@@ -33,7 +33,8 @@ Definition TNull_PostgreSQL : dialect TNull :=
              (fun z => NullValues.Value_Z (Some z))
              (fun v => v)
              false
-             (fun _ => true).
+             (fun _ => true)
+             (fun _ => true) (fun _ => true) (fun _ => true).
 
 Definition TNull_ops := TNull_PostgreSQL.
 

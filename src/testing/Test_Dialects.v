@@ -316,3 +316,39 @@ Proof. check. Qed.
 
 Example accepted_condition_value : acceptance q_condition_value = [true; true; true; true; false].
 Proof. check. Qed.
+
+(** * Which dialect has which function, predicate and aggregate *)
+
+Definition q_string_agg := select_where [as_ (agg "string_agg" (col x)) x] [from_query letters] c_true.
+Definition q_group_concat := select_where [as_ (agg "group_concat" (col x)) x] [from_query letters] c_true.
+Definition q_listagg := select_where [as_ (agg "listagg" (col x)) x] [from_query letters] c_true.
+Definition q_total := select_where [as_ (agg "total" (col x)) x] [from_query three] c_true.
+Definition q_ifnull := sc (fn "ifnull" [int 1; int 2]).
+Definition q_nvl := sc (fn "nvl" [int 1; int 2]).
+Definition q_substr := sc (fn "substr" [str "abc"; int 1]).
+Definition q_distinct_from := 
+  select_where [as_ (int 1) x] [] (pred "is distinct from" [int 1; int 2]).
+Definition q_null_safe := select_where [as_ (int 1) x] [] (pred "<=>" [int 1; int 2]).
+Definition q_between := select_where [as_ (int 1) x] [] (pred "between" [int 1; int 0; int 2]).
+
+(** PostgreSQL, MySQL, SQLite, OceanBase MySQL mode, OceanBase Oracle mode *)
+Example has_string_agg : acceptance q_string_agg = [true; false; false; false; false].
+Proof. check. Qed.
+Example has_group_concat : acceptance q_group_concat = [false; true; true; true; false].
+Proof. check. Qed.
+Example has_listagg : acceptance q_listagg = [false; false; false; false; true].
+Proof. check. Qed.
+Example has_total : acceptance q_total = [false; false; true; false; false].
+Proof. check. Qed.
+Example has_ifnull : acceptance q_ifnull = [false; true; true; true; false].
+Proof. check. Qed.
+Example has_nvl : acceptance q_nvl = [false; false; false; false; true].
+Proof. check. Qed.
+Example has_substr : acceptance q_substr = [true; true; true; true; true].
+Proof. check. Qed.
+Example has_is_distinct_from : acceptance q_distinct_from = [true; false; true; false; false].
+Proof. check. Qed.
+Example has_null_safe_equal : acceptance q_null_safe = [false; true; false; true; false].
+Proof. check. Qed.
+Example has_between : acceptance q_between = [true; true; true; true; true].
+Proof. check. Qed.
