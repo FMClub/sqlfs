@@ -335,6 +335,8 @@ Definition rat_of_value (v : value) : option Q :=
   | _ => None
   end.
 
+Definition value_of_rat (q : Q) : value := Value_Q (Some (Q2Qc q)).
+
 Definition Qc_trunc (q : Qc) : Z := Z.quot (Qnum q) (Zpos (Qden q)).
 (** rounding to the nearest integer, ties away from zero *)
 Definition Qc_round (q : Qc) : Z :=

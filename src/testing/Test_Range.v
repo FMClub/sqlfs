@@ -57,3 +57,18 @@ Example range_unbounded :
   result_is MySQL (sums Asc Unbounded_Preceding (Following 1)) 2
     [["1"; "5"]; ["2"; "5"]; ["2"; "5"]; ["4"; "9"]; ["7"; "16"]; ["NULL"; "NULL"]] = true.
 Proof. check. Qed.
+
+(** * PERCENT_RANK and CUME_DIST *)
+
+Definition five := values_ [c0] [[int 1]; [int 2]; [int 2]; [int 3]; [int 5]].
+Definition ranks f := window five [w_as f [] [o_by (col c0) Asc] c1].
+
+Example percent_rank_values : 
+  result_is PostgreSQL (ranks w_percent_rank) 2
+    [["1"; "0"]; ["2"; "0.25"]; ["2"; "0.25"]; ["3"; "0.75"]; ["5"; "1"]] = true.
+Proof. check. Qed.
+
+Example cume_dist_values : 
+  result_is MySQL (ranks w_cume_dist) 2
+    [["1"; "0.2"]; ["2"; "0.6"]; ["2"; "0.6"]; ["3"; "0.8"]; ["5"; "1"]] = true.
+Proof. check. Qed.

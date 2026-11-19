@@ -145,3 +145,23 @@ Proof. check. Qed.
 Example accepted_grouped_expression :
   acceptance (select_grouped [as_ (fn "+" [b; z]) c0] items (g_by [b; z])) = [true; true; true; true; true].
 Proof. check. Qed.
+
+(** * ORDER BY under grouping sets: the keys see the masked (NULL) values *)
+
+Definition shown_rows (d : vsem) (q : squery) :=
+  map (fun t => map (fun i => show_value (dot (TD d) t (out_attr i))) (seq 0 3)) (run d q).
+
+Example order_by_rollup : 
+  shown_rows PostgreSQL (order_by (sel_grouped (g_rollup [b; z])) [o_by z Asc; o_by b Asc]) =
+  [["Bar"; "L"; "5"]; ["Foo"; "L"; "10"]; ["Bar"; "M"; "15"]; ["Foo"; "M"; "20"];
+   ["Bar"; "NULL"; "20"]; ["Foo"; "NULL"; "30"]; ["NULL"; "NULL"; "50"]].
+Proof. check. Qed.
+
+(** a key which is not an output column *)
+Example order_by_masked_key : 
+  shown_rows PostgreSQL 
+    (order_by (select_grouped [as_ (agg "sum" (col sales)) c2; as_ z c1; as_ b c0] items (g_rollup [b; z]))
+       [o_by (col brand) Asc; o_by (col size) Asc]) =
+  [["Bar"; "L"; "5"]; ["Bar"; "M"; "15"]; ["Bar"; "NULL"; "20"]; 
+   ["Foo"; "L"; "10"]; ["Foo"; "M"; "20"]; ["Foo"; "NULL"; "30"]; ["NULL"; "NULL"; "50"]].
+Proof. check. Qed.
