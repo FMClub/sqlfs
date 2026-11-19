@@ -244,7 +244,8 @@ Definition lite_aggregate_table : list (string * (list value -> value)) :=
     [EXCEPT ALL], no [ANY] and [ALL] subqueries. *)
 Definition lite_supports (f : feature) : bool :=
   match f with
-  | F_Lateral | F_Intersect_All | F_Except_All | F_Any_All => false
+  | F_Lateral | F_Intersect_All | F_Except_All | F_Any_All 
+  | F_Grouping_Sets | F_Rollup | F_Cube => false
   | _ => true
   end.
 

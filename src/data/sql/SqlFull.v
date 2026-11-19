@@ -157,6 +157,10 @@ Inductive feature : Type :=
   (** [e op ANY (q)], [e op ALL (q)] *)
   | F_Any_All
   | F_With
+  (** [GROUPING SETS], [ROLLUP], [CUBE] *)
+  | F_Grouping_Sets
+  | F_Rollup
+  | F_Cube
   (** a condition used as a value, or a value used as a condition (booleans) *)
   | F_Cond_Value
   (** [(e1, ..., en) IN (q)] with [n > 1] *)
@@ -222,6 +226,8 @@ Inductive sexpr : Type :=
   | E_Cond : scond -> sexpr
   (** scalar subquery *)
   | E_Sub : squery -> sexpr
+  (** [GROUPING(e)]: 1 if [e] is not grouped in the current grouping set (its value is NULL there), 0 otherwise *)
+  | E_Grouping : sexpr -> sexpr
 
 with scond : Type :=
   | C_Conj : and_or -> scond -> scond -> scond
@@ -277,6 +283,12 @@ with sgroup : Type :=
   | G_Fine : sgroup
   (** [GROUP BY e1, ..., en]; when the list is empty, there is a single group. *)
   | G_By : list sexpr -> sgroup
+  (** [GROUP BY GROUPING SETS ((e1, e2), (e1), ())]: the rows are grouped for each of the sets *)
+  | G_Sets : list (list sexpr) -> sgroup
+  (** [GROUP BY ROLLUP (e1, ..., en)]: the sets [(e1, ..., en)], [(e1, ..., en-1)], ..., [()] *)
+  | G_Rollup : list sexpr -> sgroup
+  (** [GROUP BY CUBE (e1, ..., en)]: all the subsets *)
+  | G_Cube : list sexpr -> sgroup
 
 with sorder : Type :=
   | O_By : sexpr -> order_dir -> nulls_order -> sorder
@@ -328,6 +340,51 @@ Definition SQ_Values (la : list attribute) (rows : list (list sexpr)) :=
 (** [f1 CROSS JOIN f2] *)
 Definition Fr_Cross f1 f2 := Fr_Join J_Inner false f1 f2 C_True.
 
+(** * Grouping sets *)
+
+Definition rollup_sets {A : Type} (l : list A) : list (list A) :=
+  map (fun n => firstn n l) (rev (seq 0 (S (List.length l)))).
+
+Fixpoint cube_sets {A : Type} (l : list A) : list (list A) :=
+  match l with
+  | nil => nil :: nil
+  | x :: r => let sub := cube_sets r in map (cons x) sub ++ sub
+  end.
+
+(** The grouping sets of a [GROUP BY] which has some. *)
+Definition group_sets (g : sgroup) : option (list (list sexpr)) :=
+  match g with
+  | G_Sets ss => Some ss
+  | G_Rollup l => Some (rollup_sets l)
+  | G_Cube l => Some (cube_sets l)
+  | _ => None
+  end.
+
+(** the expressions of a [GROUP BY] *)
+Definition group_exprs (g : sgroup) : list sexpr :=
+  match g with
+  | G_Fine => nil
+  | G_By l | G_Rollup l | G_Cube l => l
+  | G_Sets ss => List.concat ss
+  end.
+
+(** Equality of the expressions which can be grouping expressions: constants, columns and
+    functions of them. *)
+Fixpoint sexpr_eqb (e1 e2 : sexpr) {struct e1} : bool :=
+  match e1, e2 with
+  | E_Const v1, E_Const v2 => Oset.eq_bool (OVal T) v1 v2
+  | E_Col a1, E_Col a2 => Oset.eq_bool (OAtt T) a1 a2
+  | E_Fun f1 l1, E_Fun f2 l2 => 
+    Oset.eq_bool (OSymb T) f1 f2 &&
+    (fix eqs (l1 l2 : list sexpr) {struct l1} : bool :=
+       match l1, l2 with
+       | nil, nil => true
+       | x :: r1, y :: r2 => sexpr_eqb x y && eqs r1 r2
+       | _, _ => false
+       end) l1 l2
+  | _, _ => false
+  end.
+
 (** * The constructs which a query uses
 
     [squery_uses q] lists the constructs of [q] which are not supported by all the
@@ -361,6 +418,7 @@ Fixpoint sexpr_uses (e : sexpr) {struct e} : list use :=
   | E_Case c e1 e2 => scond_uses c ++ sexpr_uses e1 ++ sexpr_uses e2
   | E_Cond c => (U_Feature F_Cond_Value) :: scond_uses c
   | E_Sub q => squery_uses q
+  | E_Grouping e => sexpr_uses e
   end
 
 with scond_uses (c : scond) {struct c} : list use :=
@@ -419,7 +477,16 @@ with sspec_uses (sp : sspec) {struct sp} : list use :=
      | S_List l => flat_map (fun x => match x with S_As e _ => sexpr_uses e end) l
      end) ++
     flat_map sfrom_uses lf ++ scond_uses w ++
-    (match g with G_Fine => nil | G_By l => flat_map sexpr_uses l end) ++ 
+    (match g with 
+     | G_Sets _ => (U_Feature F_Grouping_Sets) :: nil 
+     | G_Rollup _ => (U_Feature F_Rollup) :: nil 
+     | G_Cube _ => (U_Feature F_Cube) :: nil 
+     | _ => nil end) ++ (match g with
+     | G_Fine => nil
+     | G_By l | G_Rollup l | G_Cube l => flat_map sexpr_uses l
+     | G_Sets ss => (fix go (ss : list (list sexpr)) : list use := 
+                       match ss with nil => nil | l :: r => flat_map sexpr_uses l ++ go r end) ss
+     end) ++ 
     scond_uses h
   end
 
@@ -498,13 +565,24 @@ with sfrom_sort (ce : cte_env) (f : sfrom) {struct f} : setA :=
     group is empty for an aggregate query without GROUP BY over an empty
     collection. *)
 
-Definition slice := (setA * list tuple)%type.
+(** The third component of a slice is the list of the grouping expressions which are not grouped in
+    the current grouping set: they are NULL there. *)
+Definition slice := (setA * list tuple * list sexpr)%type.
 Definition senv := list slice.
 
-Definition slice_t (t : tuple) : slice := (labels T t, t :: nil).
+Definition slice_t (t : tuple) : slice := (labels T t, t :: nil, nil).
 
-Definition slice_g (sa : setA) (g : list tuple) : slice :=
-  (match g with t :: _ => labels T t | nil => sa end, g).
+Definition slice_gs (sa : setA) (g : list tuple) (hid : list sexpr) : slice :=
+  (match g with t :: _ => labels T t | nil => sa end, g, hid).
+
+Definition slice_g (sa : setA) (g : list tuple) : slice := slice_gs sa g nil.
+
+(** Is the expression one of the grouping expressions which the current grouping set does not group? *)
+Definition is_hidden (env : senv) (e : sexpr) : bool :=
+  match env with
+  | (_, _, hid) :: _ => match hid with nil => false | _ => existsb (sexpr_eqb e) hid end
+  | _ => false
+  end.
 
 Definition null_of (a : attribute) := default_value T (type_of_attribute T a).
 
@@ -516,7 +594,7 @@ Definition null_tuple (sa : setA) := mk_tuple T sa null_of.
 Fixpoint lookup (env : senv) (a : attribute) : value :=
   match env with
   | nil => null_of a
-  | (sa, g) :: env' =>
+  | (sa, g, _) :: env' =>
     if a inS? sa
     then match g with t :: _ => dot T t a | nil => null_of a end
     else lookup env' a
@@ -540,6 +618,7 @@ Fixpoint sexpr_cols (ce : cte_env) (e : sexpr) {struct e} : list attribute :=
   | E_Case c e1 e2 => scond_cols ce c ++ sexpr_cols ce e1 ++ sexpr_cols ce e2
   | E_Cond c => scond_cols ce c
   | E_Sub q => squery_cols ce q
+  | E_Grouping e => sexpr_cols ce e
   end
 
 with scond_cols (ce : cte_env) (c : scond) {struct c} : list attribute :=
@@ -576,7 +655,12 @@ with sspec_cols (ce : cte_env) (sp : sspec) {struct sp} : list attribute :=
          | S_List l => flat_map (fun x => match x with S_As e _ => sexpr_cols ce e end) l 
          end) ++
         scond_cols ce w ++
-        (match g with G_Fine => nil | G_By l => flat_map (sexpr_cols ce) l end) ++
+        (match g with
+         | G_Fine => nil
+         | G_By l | G_Rollup l | G_Cube l => flat_map (sexpr_cols ce) l
+         | G_Sets ss => (fix go (ss : list (list sexpr)) : list attribute := 
+                           match ss with nil => nil | l :: r => flat_map (sexpr_cols ce) l ++ go r end) ss
+         end) ++
         scond_cols ce h ++ flat_map (sfrom_cols ce) lf in
     filter (fun a => negb (a inS? bound)) own
   end
@@ -596,7 +680,7 @@ with sfrom_cols (ce : cte_env) (f : sfrom) {struct f} : list attribute :=
 Fixpoint agg_env_rec (cols : list attribute) (env : senv) : senv :=
   match env with
   | nil => nil
-  | (sa, g) :: env' =>
+  | (sa, g, _) :: env' =>
     if existsb (fun a => a inS? sa) cols then env else agg_env_rec cols env'
   end.
 
@@ -624,6 +708,7 @@ Fixpoint sexpr_foreign (ce : cte_env) (sa bound : setA) (e : sexpr) {struct e} :
     scond_foreign ce sa bound c || sexpr_foreign ce sa bound e1 || sexpr_foreign ce sa bound e2
   | E_Cond c => scond_foreign ce sa bound c
   | E_Sub q => squery_foreign ce sa q
+  | E_Grouping e => sexpr_foreign ce sa bound e
   end
 
 with scond_foreign (ce : cte_env) (sa bound : setA) (c : scond) {struct c} : bool :=
@@ -661,6 +746,7 @@ Fixpoint sexpr_has_agg (ce : cte_env) (sa : setA) (e : sexpr) : bool :=
   match e with
   | E_Const _ | E_Col _ => false
   | E_Sub q => squery_foreign ce sa q
+  | E_Grouping _ => false
   | E_Fun _ l => existsb (sexpr_has_agg ce sa) l
   | E_Agg _ _ e c =>
     match sexpr_cols ce e ++ scond_cols ce c with
@@ -1053,7 +1139,15 @@ Definition is_output_col (t : tuple) (e : sexpr) :=
   end.
 
 Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :=
+  if is_hidden env e
+  then null O
+  else 
   match e with
+  | E_Grouping x => 
+    value_of_Z O (match env with
+                  | (_, _, hid) :: _ => if existsb (sexpr_eqb x) hid then 1%Z else 0%Z
+                  | nil => 0%Z
+                  end)
   | E_Const v => v
   | E_Col a => lookup env a
   | E_Fun f l => interp_symbol T f (map (eval_sexpr ce env) l)
@@ -1061,9 +1155,9 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
     let vals :=
         match agg_env (sexpr_cols ce e ++ scond_cols ce c) env with
         | nil => nil
-        | (sa, g) :: env' =>
-          map (fun t => eval_sexpr ce ((sa, t :: nil) :: env') e)
-              (filter (fun t => is_true3 (eval_scond ce ((sa, t :: nil) :: env') c)) g)
+        | (sa, g, _) :: env' =>
+          map (fun t => eval_sexpr ce ((sa, t :: nil, nil) :: env') e)
+              (filter (fun t => is_true3 (eval_scond ce ((sa, t :: nil, nil) :: env') c)) g)
         end in
     interp_aggregate T ag (quantify sq vals)
   | E_Case c e1 e2 =>
@@ -1169,13 +1263,62 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
     (** WHERE *)
     let rows := filter (fun t => is_true3 (eval_scond ce (slice_t t :: env) w)) from in
     (** GROUP BY *)
-    let groups :=
+    let plain_groups :=
         match g with
         | G_Fine => if implicit_group ce sa s h ex then rows :: nil else map (fun t => t :: nil) rows
         | G_By nil => rows :: nil
         | G_By lg => group_on (fun t => map (eval_sexpr ce (slice_t t :: env)) lg) rows
+        | _ => nil
         end in
-    let genvs := map (fun grp => slice_g sa grp :: env) groups in
+    (** With grouping sets, the grouping expressions are evaluated once for each row; each grouping set is a
+        list of positions in the list [univ] of all the grouping expressions. The groups of a set are
+        those of the rows which agree on its expressions, and the expressions of [univ] which it does not
+        contain are NULL in the groups it produces. *)
+    let univ : list sexpr := 
+        match g with
+        | G_Sets ss => List.concat ss
+        | G_Rollup l | G_Cube l => l
+        | _ => nil
+        end in
+    let row_vals (t : tuple) : list value :=
+        match g with
+        | G_Sets ss => 
+          (fix go (ss : list (list sexpr)) : list value :=
+             match ss with
+             | nil => nil
+             | l :: r => map (eval_sexpr ce (slice_t t :: env)) l ++ go r
+             end) ss
+        | G_Rollup l | G_Cube l => map (eval_sexpr ce (slice_t t :: env)) l
+        | _ => nil
+        end in
+    let positions : list (list nat) :=
+        match g with
+        | G_Sets ss => 
+          (fix go (off : nat) (ss : list (list sexpr)) : list (list nat) :=
+             match ss with
+             | nil => nil
+             | l :: r => seq off (List.length l) :: go (off + List.length l)%nat r
+             end) 0%nat ss
+        | G_Rollup l => rollup_sets (seq 0 (List.length l))
+        | G_Cube l => cube_sets (seq 0 (List.length l))
+        | _ => nil
+        end in
+    let groupings : list (list tuple * list sexpr) :=
+        match g with
+        | G_Sets _ | G_Rollup _ | G_Cube _ =>
+          flat_map 
+            (fun pos =>
+               let set := map (fun i => nth i univ (E_Const (null O))) pos in
+               let hid := filter (fun e => negb (existsb (sexpr_eqb e) set)) univ in
+               let gs := match pos with
+                         | nil => rows :: nil
+                         | _ => group_on (fun t => let vs := row_vals t in 
+                                                   map (fun i => nth i vs (null O)) pos) rows
+                         end in
+               map (fun grp => (grp, hid)) gs) positions
+        | _ => map (fun grp => (grp, nil)) plain_groups
+        end in
+    let genvs := map (fun gh => slice_gs sa (fst gh) (snd gh) :: env) groupings in
     (** HAVING *)
     let genvs := filter (fun ge => is_true3 (eval_scond ce ge h)) genvs in
     (** SELECT *)
@@ -1184,7 +1327,7 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
                (match s with
                 | S_Star =>
                   match ge with
-                  | (_, t :: _) :: _ => t
+                  | (_, t :: _, _) :: _ => t
                   | _ => null_tuple sa
                   end
                 | S_List l =>

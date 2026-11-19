@@ -156,6 +156,10 @@ Definition join_lateral (jt : join_type) (f1 f2 : sfrom) (c : scond) : sfrom :=
   @Fr_Join TNull relname jt true f1 f2 c.
 Definition g_fine := @G_Fine TNull relname.
 Definition g_by (l : list sexpr) := @G_By TNull relname l.
+Definition g_sets (l : list (list sexpr)) := @G_Sets TNull relname l.
+Definition g_rollup (l : list sexpr) := @G_Rollup TNull relname l.
+Definition g_cube (l : list sexpr) := @G_Cube TNull relname l.
+Definition grouping (e : sexpr) : sexpr := @E_Grouping TNull relname e.
 Definition s_star := @S_Star TNull relname.
 Definition s_list (l : list sitem) := @S_List TNull relname l.
 
@@ -178,6 +182,10 @@ Definition select_star_where (lf : list sfrom) (c : scond) : squery :=
 Definition select_group (l : list sitem) (lf : list sfrom) (c : scond) 
            (g : list sexpr) (h : scond) : squery :=
   select_full Set_All (s_list l) lf c (g_by g) h.
+
+(** the same, with any grouping *)
+Definition select_grouped (l : list sitem) (lf : list sfrom) (g : sgroup TNull relname) : squery :=
+  select_full Set_All (s_list l) lf c_true g c_true.
 
 Definition set_op_ (o : set_op) (sq : set_quantifier) (q1 q2 : squery) : squery := 
   @SQ_Set TNull relname o sq q1 q2.
