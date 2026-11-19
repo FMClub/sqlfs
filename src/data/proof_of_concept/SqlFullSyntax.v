@@ -195,6 +195,8 @@ Definition o_by_nulls (e : sexpr) (d : order_dir) (n : nulls_order) := @O_By TNu
 Definition order_by (q : squery) lo : squery := @SQ_Order TNull relname q lo None None.
 Definition order_limit (q : squery) lo (off lim : option N) : squery := 
   @SQ_Order TNull relname q lo off lim.
+Definition fetch_first (q : squery) lo (off : option N) (ties percent : bool) (n : N) : squery :=
+  @SQ_Fetch TNull relname q lo off ties percent n.
 Definition with_ (r : string) (q1 q2 : squery) : squery := @SQ_With TNull relname (Rel r) q1 q2.
 Definition with_rec (sq : set_quantifier) (r : string) (q1 q2 q3 : squery) : squery := @SQ_WithRec TNull relname sq (Rel r) q1 q2 q3.
 Definition window (q : squery) lw : squery := @SQ_Window TNull relname q lw.

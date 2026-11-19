@@ -171,6 +171,10 @@ Inductive feature : Type :=
   (** a column which is neither grouped nor in an aggregate, in a block with aggregates or a [GROUP BY]
       (rejected by [ONLY_FULL_GROUP_BY], by PostgreSQL and by Oracle; SQLite takes the value of a row) *)
   | F_Bare_Column
+  (** [FETCH FIRST n ROWS WITH TIES] *)
+  | F_Fetch_Ties
+  (** [FETCH FIRST p PERCENT ROWS ONLY] *)
+  | F_Fetch_Percent
   (** a condition used as a value, or a value used as a condition (booleans) *)
   | F_Cond_Value
   (** [(e1, ..., en) IN (q)] with [n > 1] *)
@@ -262,6 +266,10 @@ with squery : Type :=
   | SQ_Select : sspec -> squery
   (** [q ORDER BY ... OFFSET ... LIMIT ...] *)
   | SQ_Order : squery -> list sorder -> option N -> option N -> squery
+  (** [q ORDER BY ... OFFSET off FETCH FIRST ... ROWS ONLY | WITH TIES]; the boolean tells whether the
+      ties of the last row are returned too, the number is a number of rows or a percentage of
+      the rows of [q] (computed before the offset, rounded up). *)
+  | SQ_Fetch : squery -> list sorder -> option N -> bool -> bool -> N -> squery
   (** [SELECT *, w1, ..., wn FROM q], the [wi] being window functions *)
   | SQ_Window : squery -> list swindow -> squery
   (** [WITH r AS (q1) q2] *)
@@ -515,6 +523,11 @@ with squery_uses (q : squery) {struct q} : list use :=
   | SQ_Order q lo _ _ => 
     squery_uses q ++ flat_map nulls_features lo ++ 
     flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo
+  | SQ_Fetch q lo _ ties percent _ => 
+    squery_uses q ++ flat_map nulls_features lo ++ 
+    flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo ++
+    (if ties then (U_Feature F_Fetch_Ties) :: nil else nil) ++
+    (if percent then (U_Feature F_Fetch_Percent) :: nil else nil)
   | SQ_Window q lw => 
     (U_Feature F_Window) :: squery_uses q ++
     flat_map (fun w => 
@@ -606,6 +619,7 @@ Fixpoint squery_sort (ce : cte_env) (q : squery) {struct q} : setA :=
   | SQ_Set _ _ q1 _ => squery_sort ce q1
   | SQ_Select sp => sspec_sort ce sp
   | SQ_Order q _ _ _ => squery_sort ce q
+  | SQ_Fetch q _ _ _ _ _ => squery_sort ce q
   | SQ_Window q lw =>
     Fset.union (A T) (squery_sort ce q) (Fset.mk_set (A T) (map swindow_att lw))
   | SQ_With r q1 q2 => squery_sort ((r, (squery_sort ce q1, nil)) :: ce) q2
@@ -715,6 +729,7 @@ with squery_cols (ce : cte_env) (q : squery) {struct q} : list attribute :=
   | SQ_Set _ _ q1 q2 => squery_cols ce q1 ++ squery_cols ce q2
   | SQ_Select sp => sspec_cols ce sp
   | SQ_Order q _ _ _ => squery_cols ce q
+  | SQ_Fetch q lo _ _ _ _ => squery_cols ce q
   | SQ_Window q _ => squery_cols ce q
   | SQ_With r q1 q2 => 
     squery_cols ce q1 ++ squery_cols ((r, (squery_sort ce q1, nil)) :: ce) q2
@@ -812,6 +827,7 @@ with squery_foreign (ce : cte_env) (sa : setA) (q : squery) {struct q} : bool :=
      | S_List l => existsb (fun x => match x with S_As e _ => sexpr_foreign ce sa bound e end) l
      end) || scond_foreign ce sa bound h || scond_foreign ce sa bound w
   | SQ_Order q _ _ _ => squery_foreign ce sa q
+  | SQ_Fetch q _ _ _ _ _ => squery_foreign ce sa q
   | SQ_Window q _ => squery_foreign ce sa q
   | SQ_With r q1 q2 => 
     squery_foreign ce sa q1 || squery_foreign ((r, (squery_sort ce q1, nil)) :: ce) sa q2
@@ -1356,6 +1372,44 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
                         end
                       end) lo in
     map (@fst _ _) (offset_limit off lim (sort_on (map sorder_spec lo) keys rows))
+  | SQ_Fetch q lo off ties percent n =>
+    let rows :=
+        match q with
+        | SQ_Select sp => eval_sspec ce env sp (map (fun o => match o with O_By e _ _ => e end) lo)
+        | _ => map (fun t => (t, slice_t t :: env)) (eval_squery ce env q)
+        end in
+    let keys (x : tuple * senv) :=
+        map (fun o => match o with
+                      | O_By e _ _ =>
+                        match is_output_col (fst x) e with
+                        | Some v => v
+                        | None => eval_sexpr ce (snd x) e
+                        end
+                      end) lo in
+    let specs := map sorder_spec lo in
+    let sorted := sort_on specs keys rows in
+    let after := match off with Some k => skipn (N.to_nat k) sorted | None => sorted end in
+    let count := if percent
+                 then Nat.div (N.to_nat n * List.length sorted + 99) 100
+                 else N.to_nat n in
+    let first := firstn count after in
+    let rest := skipn count after in
+    let extra :=
+        if ties
+        then match rev first with
+             | last :: _ =>
+               (fix take (l : list (tuple * senv)) : list (tuple * senv) :=
+                  match l with
+                  | x :: l' => match compare_keys specs (keys last) (keys x) with
+                               | Eq => x :: take l'
+                               | _ => nil
+                               end
+                  | nil => nil
+                  end) rest
+             | nil => nil
+             end
+        else nil in
+    map (@fst _ _) (first ++ extra)
   | SQ_Window q lw =>
     let compiled :=
         map (fun w =>

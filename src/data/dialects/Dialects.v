@@ -195,6 +195,7 @@ with squery_to (q : squery T1 relname) {struct q} : squery T2 relname :=
   | SQ_Set o sq q1 q2 => @SQ_Set T2 relname o sq (squery_to q1) (squery_to q2)
   | SQ_Select sp => @SQ_Select T2 relname (sspec_to sp)
   | SQ_Order q lo off lim => @SQ_Order T2 relname (squery_to q) (map sorder_to lo) off lim
+  | SQ_Fetch q lo off ties pct n => @SQ_Fetch T2 relname (squery_to q) (map sorder_to lo) off ties pct n
   | SQ_Window q lw => @SQ_Window T2 relname (squery_to q) (map swindow_to lw)
   | SQ_With r q1 q2 => @SQ_With T2 relname r (squery_to q1) (squery_to q2)
   | SQ_WithRec sq r q1 q2 q3 => @SQ_WithRec T2 relname sq r (squery_to q1) (squery_to q2) (squery_to q3)

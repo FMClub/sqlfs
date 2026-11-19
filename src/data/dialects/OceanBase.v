@@ -40,7 +40,8 @@ Import NullValues.
 
 Definition ob_my_supports (f : feature) : bool :=
   match f with
-  | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order | F_Intersect_All | F_Except_All => false
+  | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order | F_Intersect_All | F_Except_All
+  | F_Fetch_Ties | F_Fetch_Percent => false
   | _ => true
   end.
 
