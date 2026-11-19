@@ -255,7 +255,7 @@ Definition my_locate (l : list value) : value :=
   | _ => Value_Z None
   end.
 
-Definition my_symbol_table : list (string * (list value -> value)) :=
+Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
   let plus := my_arith2 (Some Z.add) my_dplus (num_fun2 conv (fun a b => Some (num_plus a b))) in
   let minus := my_arith2 (Some Z.sub) my_dminus (num_fun2 conv (fun a b => Some (num_minus a b))) in
@@ -264,8 +264,7 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
                | Value_D (Some (q, f, s)) :: nil => VDec (Qcopp q) f s
                | _ => num_fun1 conv num_opp l
                end in
-  let div := my_arith2 None (my_ddiv div_precision_increment) 
-                       (num_fun2 conv (num_div_dec div_precision_increment)) in
+  let div := my_arith2 None (my_ddiv div_precision_increment) (num_fun2 conv num_div_exact) in
   let idiv := num_fun2 conv num_div_trunc in
   let modulo := num_fun2 conv num_rem in
   let logic_and := fun l => my_of_truth (fold_truth my_truth andb3 true3 l) in
@@ -363,7 +362,19 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
                                | v :: nil => match lenient v with Some n => Value_Q (Some (Qc_of_num n)) | None => Value_Q None end
                                | _ => Value_Q None end)
   :: ("cast_string", fun l => match l with v :: nil => Value_string (text_of v) | _ => Value_string None end)
+  :: ("cast_double", fun l => match l with v :: nil => my_double (match lenient v with Some n => value_of_num n | None => Value_Q None end) | _ => Value_F None end)
   :: nil.
+
+(** For a floating-point argument, the mathematical functions return a double: "for string or
+    floating-point arguments, the return value has a floating-point type" (MySQL manual, [FLOOR],
+    [ROUND], ...) *)
+Definition my_float_funs : list string :=
+  "abs" :: "floor" :: "ceil" :: "ceiling" :: "round" :: "truncate" :: "power" :: "pow" :: "opp" :: "neg" :: "%" :: "mod" :: nil.
+
+Definition my_symbol_table : list (string * (list value -> value)) :=
+  map (fun p => if existsb (String.eqb (fst p)) my_float_funs
+                then (fst p, fun l => if existsb is_F l then my_double ((snd p) l) else (snd p) l)
+                else p) my_symbol_table_raw.
 
 Definition my_aggregate_table : list (string * (list value -> value)) :=
      ("count", agg_count_by is_null)

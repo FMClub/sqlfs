@@ -42,14 +42,10 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 570 queries are translated and replayed, 566 give
-the recorded result. The 4 which do not are on `FLOAT` and `DOUBLE` columns, which are not yet
-floating-point numbers (TODO 1.2.2):
-
-| Case | Reason | Status |
-|---|---|---|
-| `func_group_1:57,58` | `sum` of a `FLOAT` column: the engine sums single-precision values (`147.57999897003174`) | TODO 1.2.2 |
-| `func_group_5:4`, `func_group_7:48` | `avg` of a `DOUBLE` column is a double (`-5.00000000003`, `15`), not a decimal | TODO 1.2.2 |
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 570 queries are translated and replayed, and **all 570**
+give the recorded result. The last ones were fixed by the decimal scale (TODO 1.2.1: `length(0.00)`,
+`4/3 = 1.333333333`) and by binary floating point (TODO 1.2.2: the `sum` of a `FLOAT` column is
+`147.57999897003174`, the `avg` of a `DOUBLE` column is a double).
 
 Since TODO 1.2.1, a decimal of the model has a scale, and is compared with the recorded text exactly
 (`1.3333`, `0.00`): the former deviations `length(0.00)` and `4/3 = 1.333333333` are gone. The latter was

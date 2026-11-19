@@ -76,7 +76,7 @@ section). `planned` means that it is not modelled yet.
 | `WITH RECURSIVE` | yes | yes | yes | yes (grammar) | yes | yes (bounded by `rec_fuel`) |
 | Functions, predicates and aggregates which exist only in some dialects (`string_agg`, `group_concat`, `listagg`, `total`, `ifnull`, `nvl`, `is distinct from`, `<=>`) | | | | | | done (`accepted_by` checks the names) |
 | Integer range and overflow | 4/8 bytes, error | 8 bytes, error | 8 bytes, to real | as MySQL | number | not modelled |
-| Floating-point numbers | IEEE | IEEE | IEEE | IEEE | binary float | not modelled (exact rationals) |
+| Floating-point numbers | `float8`/`float4`, errors on overflow, underflow and division by zero, NaN = NaN and greatest; shortest text, `1e+15` | `DOUBLE`, `FLOAT` (binary32); strings in arithmetic are doubles; overflow is an error; shortest text, `1e15` | `REAL` (binary64); text `%!.15g` (`0.3`, `1.0e+15`) | as MySQL | `NUMBER` (no float literal) | done (`IEEE.v`, `Value_F`: correctly rounded operations, binary64 and binary32) |
 | Accent folding (`_ai_ci`) | no | yes | no | yes | no | not modelled |
 | Blobs, dates, JSON, regular expressions | | | | | | not modelled |
 

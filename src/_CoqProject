@@ -42,6 +42,7 @@ data/sql/SqlAlgebraExt.v
 data/sql/SqlFull.v
 data/sql/SqlFullFacts.v
 data/proof_of_concept/TuplesImpl.v
+data/proof_of_concept/IEEE.v
 data/proof_of_concept/Values.v
 data/proof_of_concept/GenericInstance.v
 data/proof_of_concept/SqlSyntax.v
@@ -107,3 +108,4 @@ testing/Test_Fetch.v
 testing/Test_MariaDB.v
 testing/Test_Session.v
 testing/Test_Decimal.v
+testing/Test_Float.v

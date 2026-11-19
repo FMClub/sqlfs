@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon Qround.
 
-Require Import Bool3 OrderedSet Values.
+Require Import Bool3 OrderedSet IEEE Values.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -61,6 +61,7 @@ Definition lenient (v : value) : option num :=
   | Value_Z (Some z) => Some (Num_Z z)
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
   | Value_bool (Some b) => Some (Num_Z (if b then 1%Z else 0%Z))
   | Value_string (Some s) => Some (parse_prefix s)
   | _ => None
@@ -73,6 +74,7 @@ Definition strict_conv (v : value) : option num :=
   | Value_Z (Some z) => Some (Num_Z z)
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
   | Value_string (Some s) => 
     let (n, ok) := parse_number s in if ok then Some n else None
   | _ => None
@@ -232,6 +234,8 @@ Definition text_of (v : value) : option string :=
   | Value_Z (Some z) => Some (string_of_Z z)
   | Value_Q (Some q) => Some (string_of_dec q)
   | Value_D (Some (q, _, s)) => Some (dec_text q s)
+  (* a float, as the MySQL family prints it ([my_gcvt]) *)
+  | Value_F (Some (x, k)) => Some (my_text (fmt_of (Nat.odd k)) (special_of_tag (Nat.div k 2)) x)
   | Value_bool (Some b) => Some (if b then "1" else "0")
   | _ => None
   end.
@@ -421,6 +425,7 @@ Definition mclass (v : value) : option mnum :=
   | Value_D (Some (q, f, s)) => Some (MD q f s)
   | Value_Q (Some q) => Some (MD q (dec_scale q) (dec_scale q))
   | Value_string (Some _) => Some MO
+  | Value_F (Some _) => Some MO
   | _ => None
   end.
 
@@ -462,6 +467,21 @@ Definition my_ddiv (incr : nat) (a b : Qc * nat * nat) : value :=
     let f := roundup9 (r1 + r2 + inc) in
     VDec (dec_trunc (Qcdiv q1 q2) f) f (Nat.min (s1 + incr) my_max_scale).
 
+(** A result of the double arithmetic: the exact result rounded to binary64; an overflow is an error
+    ([DOUBLE value is out of range], [ER_DATA_OUT_OF_RANGE]). *)
+Definition my_double (v : value) : value :=
+  let dbl q := match round_q binary64 q with
+               | (F_PosInf, _) | (F_NegInf, _) => Value_Err "DOUBLE value is out of range"
+               | r => VF false r
+               end in
+  match v with
+  | Value_Q (Some q) => dbl q
+  | Value_Z (Some z) => dbl (Qc_of_Z z)
+  | Value_D (Some (q, _, _)) => dbl q
+  | Value_Q None | Value_Z None | Value_D None => Value_F None
+  | _ => v
+  end.
+
 (** [fi] is the operation on integers, if the result of two integers is an integer *)
 Definition my_arith2 (fi : option (Z -> Z -> Z)) (fd : Qc * nat * nat -> Qc * nat * nat -> value)
            (other : list value -> value) (l : list value) : value :=
@@ -471,7 +491,9 @@ Definition my_arith2 (fi : option (Z -> Z -> Z)) (fd : Qc * nat * nat -> Qc * na
     | Some (MI a), Some (MI b), Some f => Value_Z (Some (f a b))
     | _, _, _ =>
     match mclass v1, mclass v2 with
-    | Some MO, Some _ | Some _, Some MO => other l
+    (* each operand is converted to a double, then the operation is done on doubles *)
+    | Some MO, Some _ | Some _, Some MO => 
+      my_double (other (map (fun v => match lenient v with Some n => my_double (value_of_num n) | None => v end) l))
     | Some m1, Some m2 => fd (mdec m1) (mdec m2)
     | _, _ => other l
     end
@@ -500,14 +522,28 @@ Definition has_decimal (isnull : value -> bool) (l : list value) : bool :=
   existsb (fun v => match v with Value_D (Some _) | Value_Q (Some _) => true | _ => false end) (non_nulls_by isnull l).
 
 Definition has_text (isnull : value -> bool) (l : list value) : bool :=
-  existsb (fun v => match v with Value_string (Some _) => true | _ => false end) (non_nulls_by isnull l).
+  existsb (fun v => match v with Value_string (Some _) | Value_F (Some _) => true | _ => false end) (non_nulls_by isnull l).
+
+(** [SUM] and [AVG] of doubles: the values are added one by one, each sum being rounded
+    ([Item_sum_sum::add] with a [double] result) *)
+Definition my_dbl_sum (isnull : value -> bool) (l : list value) : option Qc :=
+  match flat_map (fun v => match lenient v with Some n => n :: nil | None => nil end) (non_nulls_by isnull l) with
+  | nil => None
+  | n :: ns => Some (fold_left (fun acc x => snd (round_q binary64 (Qcplus acc (Qc_of_num x)))) ns 
+                               (snd (round_q binary64 (Qc_of_num n))))
+  end.
 
 Definition my_agg_sum (isnull : value -> bool) (l : list value) : value :=
-  if has_text isnull l || negb (has_decimal isnull l) then agg_sum_by isnull lenient l
+  if has_text isnull l 
+  then match my_dbl_sum isnull l with Some q => my_double (Value_Q (Some q)) | None => Value_F None end
+  else if negb (has_decimal isnull l) then agg_sum_by isnull lenient l
   else match my_dsum isnull l with Some (q, f, s) => VDec q f s | None => Value_D None end.
 
 Definition my_agg_avg (incr : nat) (isnull : value -> bool) (l : list value) : value :=
-  if has_text isnull l then agg_avg_dec incr isnull lenient l
+  if has_text isnull l 
+  then match my_dbl_sum isnull l with 
+       | Some q => my_double (Value_Q (Some (Qcdiv q (Qc_of_Z (Z.of_nat (List.length (non_nulls_by isnull l)))))))
+       | None => Value_F None end
   else match my_dsum isnull l with
        | Some d => my_ddiv incr d (Qc_of_Z (Z.of_nat (List.length (non_nulls_by isnull l))), 0%nat, 0%nat)
        | None => Value_D None

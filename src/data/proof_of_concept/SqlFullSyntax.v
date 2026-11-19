@@ -115,6 +115,10 @@ Definition VB (b : bool) := NullValues.Value_bool (Some b).
 Definition VQ (n : Z) (d : positive) := NullValues.Value_Q (Some (Q2Qc (Qmake n d))).
 (** a decimal literal: [VD 150 2] is [1.50] *)
 Definition VD (n : Z) (s : nat) := NullValues.dec_lit n s.
+(** the float nearest to [n * 10^e], binary32 if [w32]: [VFl false 15 (-1)] is the double [1.5] *)
+Definition VFl (w32 : bool) (n e : Z) : NullValues.value :=
+  NullValues.to_float w32 (if Z.leb 0 e then NullValues.Qc_of_Z (n * Z.pow 10 e)
+                           else Qcdiv (NullValues.Qc_of_Z n) (NullValues.Qc_of_Z (Z.pow 10 (Z.opp e)))).
 (** an integer displayed with [s] decimals: [VDi 4000 16] is [4000.0000000000000000] *)
 Definition VDi (z : Z) (s : nat) := NullValues.VDec (NullValues.Qc_of_Z z) s s.
 Definition NullZ := NullValues.Value_Z None.

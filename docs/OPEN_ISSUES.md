@@ -193,7 +193,7 @@ known gap and its status; it is updated by every pull request which touches one 
 | 8 | MariaDB, TiDB, Percona, PolarDB: constructs, default collation, `sql_mode` | resolved for the constructs of `SqlFull` (PR #12); their functions beyond those of MySQL, and MariaDB's Oracle mode, open |
 | 9 | `PERCENT_RANK`, `CUME_DIST` | resolved (rational values) |
 | 10 | Decimal scale (`length(0.00)`, `4/3 = 1.333333333` in OceanBase) | resolved (TODO 1.2.1) |
-| 11 | Floating-point numbers (IEEE rounding, `NaN`, `Infinity`, `-0`) | open: values are exact rationals |
+| 11 | Floating-point numbers (IEEE rounding, `NaN`, `Infinity`, `-0`) | resolved (TODO 1.2.2); `BINARY_DOUBLE` of Oracle mode, `extra_float_digits` other than 1 and `REAL_AS_FLOAT` open |
 | 12 | Dates, times, timestamps, intervals, time zones | open |
 | 13 | Integer ranges, overflow, `BIGINT UNSIGNED` | open |
 | 14 | Runtime errors (division by zero in PostgreSQL, invalid casts) are NULL here (I3) | resolved (TODO 1.1) |

@@ -46,7 +46,13 @@ Split `value` into exact decimal with scale, binary floating point, and fixed-wi
   `/` scale per dialect (MySQL/MariaDB/TiDB/Percona/PolarDB: scale of dividend + `div_precision_increment`; OceanBase: see source `ob_number`/`ObNumber` internal precision, which explains `4/3 = 1.333333333`;
   PostgreSQL: `numeric` division scale rule `select_div_scale`; Oracle mode: 38 significant digits); `ROUND`, `TRUNCATE`, `CAST(.. AS DECIMAL(p,s))` with overflow and rounding rule; `SUM`/`AVG` scale rules.
   *Done when*: the 6 remaining OceanBase conformance cases pass (`length(0.00)` is 4; `4/3 = 1.333333333`), `SELECT 1.0 = 1.00` is true, `SELECT 1.50 || ''` is `1.50` in PostgreSQL.
-- **1.2.2 Floating point.** Add `Value_F` with IEEE 754 binary64/binary32 semantics (round to nearest even, `NaN`, `±Infinity`, `-0`); implement it over `Z` mantissa/exponent
+- **1.2.2 Floating point. — DONE** (`IEEE.v`: rounding of a rational to binary64/binary32, ties to even,
+  overflow, subnormals; the shortest round-trip text of PostgreSQL (`d2s.c`) and of the MySQL family (`my_gcvt`), SQLite's
+  `%!.15g`; `Value_F`; PostgreSQL `float8`/`float4` arithmetic with its errors, NaN and infinities, `rint`, casts to and
+  from `numeric`; MySQL doubles, strings converted to doubles, sums rounded at each addition, binary32 `FLOAT`; SQLite
+  `REAL`; tests `Test_Float.v`. Open: Oracle `BINARY_DOUBLE`, `extra_float_digits` values other than the default,
+  `REAL_AS_FLOAT`, trigonometric and logarithmic functions (with Phase 2.1).)
+  Original plan: Add `Value_F` with IEEE 754 binary64/binary32 semantics (round to nearest even, `NaN`, `±Infinity`, `-0`); implement it over `Z` mantissa/exponent
   (a verified soft-float, or use the Flocq library if it is acceptable as a dependency; decide and record). Rules per dialect: PostgreSQL `float4`/`float8` text output (shortest round-trip, `extra_float_digits`),
   `NaN` sorts greatest and equals itself; MySQL `DOUBLE`, `FLOAT`, `REAL` (`REAL_AS_FLOAT` mode), no `NaN` stored; SQLite `REAL` (no `NaN`, becomes NULL); Oracle `BINARY_DOUBLE` vs `NUMBER`.
   *Done when*: `0.1+0.2` is `0.30000000000000004` where the engine gives it; sqllogictest `R` columns match without the `%.3f` rounding being relied on for non-trivial cases.
