@@ -589,6 +589,29 @@ def attr(kind, name):
     return '(Attr_%s %s)' % ({'Z': 'Z', 'S': 'string', 'Q': 'Q'}[kind], coq_str(name))
 
 
+# the size of FLOAT: binary32 in the MySQL family, binary64 in SQLite and PostgreSQL (set by slt2coq)
+FLOAT_BITS = 32
+# the size of REAL: binary64 in the MySQL family (without REAL_AS_FLOAT) and SQLite, binary32 in PostgreSQL
+REAL_BITS = 64
+
+
+def float_lit(txt):
+    """A literal with an exponent (1.5e3), as an unscaled integer and a power of ten: (15, 2)."""
+    t = txt.lower()
+    neg = t.startswith('-')
+    if neg:
+        t = t[1:]
+    mant, _, ex = t.partition('e')
+    a, b = mant.split('.') if '.' in mant else (mant, '')
+    n = int((a or '0') + (b or '')) * (-1 if neg else 1)
+    return n, int(ex or '0') - len(b)
+
+
+def float_coq(n, e, bits):
+    """The Coq value of the float nearest to n * 10^e."""
+    return '(VFl %s (%d) (%d) %s)' % ('true' if bits == 32 else 'false', n, e, '')
+
+
 def scaled_lit(txt):
     """The unscaled integer and the scale of a decimal literal: 1.50 is (150, 2)."""
     if 'e' in txt.lower():
@@ -696,7 +719,10 @@ class Tr:
         k = e[0]
         if k == 'num':
             txt = e[1]
-            if '.' in txt or 'e' in txt.lower():
+            if 'e' in txt.lower():
+                n, ex = float_lit(txt)
+                return '(cst (VFl false (%d) (%d)))' % (n, ex)
+            if '.' in txt:
                 n, sc = scaled_lit(txt)
                 return '(cst (VD (%s) %d))' % (n, sc)
             return '(int (%s))' % txt
@@ -1137,6 +1163,9 @@ def parse_create(toks):
             width = None
             if ty in STR_TYPES and p.op('(') and p.peek(1)[0] == 'num':
                 width = int(p.peek(1)[1])
+            if ty in ('float', 'real', 'double', 'float4', 'float8'):
+                bits = {'double': 64, 'float8': 64, 'float4': 32, 'real': REAL_BITS}.get(ty, FLOAT_BITS)
+                width = ('flt', bits)
             if ty in ('decimal', 'numeric'):
                 # DECIMAL(p, s); DECIMAL(p) and DECIMAL have the scale 0
                 width = ('dec', 0)
@@ -1208,7 +1237,7 @@ def conv_value(lit, kind, limit=None):
     """The Coq value which is stored, with the conversion of the column type."""
     if lit[0] == 'str' and isinstance(limit, int) and len(lit[1]) > limit:
         raise Skip('truncation')
-    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] != 'dec' and '.' not in lit[1] and not (limit[0] <= int(lit[1]) <= limit[1]):
+    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] not in ('dec', 'flt') and '.' not in lit[1] and 'e' not in lit[1].lower() and not (limit[0] <= int(lit[1]) <= limit[1]):
         raise Skip('out of range')
     if lit[0] == 'null':
         return {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[kind]
@@ -1225,6 +1254,13 @@ def conv_value(lit, kind, limit=None):
         return 'VZ (%s)' % txt
     if isinstance(limit, tuple) and limit[0] == 'dec':
         return 'VD (%s) %d' % (round_to_scale(txt, limit[1]), limit[1])
+    if isinstance(limit, tuple) and limit[0] == 'flt':
+        if 'e' in txt.lower():
+            n, ex = float_lit(txt)
+        else:
+            n, sc = scaled_lit(txt)
+            n, ex = int(n), -sc
+        return 'VFl %s (%d) (%d)' % ('true' if limit[1] == 32 else 'false', n, ex)
     n, d = dec_lit(txt)
     return 'VQ (%s) %d' % (n, d)
 

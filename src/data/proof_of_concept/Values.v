@@ -12,7 +12,7 @@
 (************************************************************************************)
 
 Require Import Arith NArith ZArith String List Ascii QArith Qcanon Qround DecimalString.
-Require Import OrderedSet FiniteSet Bool3.
+Require Import OrderedSet FiniteSet Bool3 IEEE.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -139,6 +139,13 @@ Module NullValues.
                        decimal digits which the engine holds (it can exceed [s], as in the
                        quotients of MySQL), and its scale [s], the number of decimals it is
                        displayed with ([1.50] is [(3/2, 2, 2)])
+    - [Value_F]      : a binary floating-point number [(x, k)]: its exact value [x] (a number of the
+                       format, 0 for the special values), and [k = 2 * tag + w], where [tag] is
+                       finite, -0, +inf, -inf or NaN ([IEEE.v]) and [w] is 1 for binary32
+                       ([REAL] of PostgreSQL, [FLOAT] of MySQL), 0 for binary64
+    - [Value_I]      : an integer of a narrower or unsigned type [(z, w)]: [w] is 16 or 32 for the
+                       [smallint] and [integer] of PostgreSQL, 1 for the [BIGINT UNSIGNED] of MySQL
+                       (a [Value_Z] is a [bigint], [BIGINT])
     - [Value_Err]    : the failure of an evaluation (division by zero in PostgreSQL,
                        an invalid conversion, ...), with the kind of the error. It
                        belongs to no SQL domain: a query whose evaluation produces it
@@ -150,7 +157,9 @@ Inductive value : Set :=
   | Value_bool : option bool -> value
   | Value_Q : option Qc -> value
   | Value_Err : string -> value
-  | Value_D : option (Qc * nat * nat) -> value.
+  | Value_D : option (Qc * nat * nat) -> value
+  | Value_F : option (Qc * nat) -> value
+  | Value_I : option (Z * nat) -> value.
 
 Register value as datacert.value.type.
 Register Value_string as datacert.value.Value_string.
@@ -165,6 +174,8 @@ match v with
   | Value_Q _ => type_Q
   | Value_Err _ => type_Z
   | Value_D _ => type_Q
+  | Value_F _ => type_Q
+  | Value_I _ => type_Z
   end.
 
 (** Default values for each type: the NULL of that type. *)
@@ -178,7 +189,8 @@ Definition default_value d :=
 
 Definition is_null v :=
   match v with
-  | Value_string None | Value_Z None | Value_bool None | Value_Q None | Value_D None => true
+  | Value_string None | Value_Z None | Value_bool None | Value_Q None | Value_D None | Value_F None 
+  | Value_I None => true
   | _ => false
   end.
 
@@ -202,6 +214,8 @@ split with Qccompare.
 Defined.
 
 Definition ODec : Oset.Rcd (Qc * nat * nat) := mk_opairs (mk_opairs OQc Onat) Onat.
+Definition OFlt : Oset.Rcd (Qc * nat) := mk_opairs OQc Onat.
+Definition OInt : Oset.Rcd (Z * nat) := mk_opairs OZ Onat.
 
 Definition value_rank v : N :=
   match v with
@@ -211,6 +225,8 @@ Definition value_rank v : N :=
   | Value_Q _ => 3%N
   | Value_Err _ => 4%N
   | Value_D _ => 5%N
+  | Value_F _ => 6%N
+  | Value_I _ => 7%N
   end.
 
 Definition value_compare x y :=
@@ -221,13 +237,15 @@ Definition value_compare x y :=
     | Value_Q q1, Value_Q q2 => option_compare _ Qccompare q1 q2
     | Value_Err e1, Value_Err e2 => string_compare e1 e2
     | Value_D d1, Value_D d2 => option_compare _ (Oset.compare ODec) d1 d2
+    | Value_F d1, Value_F d2 => option_compare _ (Oset.compare OFlt) d1 d2
+    | Value_I d1, Value_I d2 => option_compare _ (Oset.compare OInt) d1 d2
     | _, _ => N.compare (value_rank x) (value_rank y)
   end.
 
 Definition OVal : Oset.Rcd value.
 split with value_compare.
 - (* 1/3 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ]];
     simpl; try discriminate; trivial.
   + generalize (Oset.eq_bool_ok Ostring s1 s2); simpl; case (string_compare s1 s2).
     * apply (f_equal (fun x => Value_string (Some x))).
@@ -254,17 +272,29 @@ split with value_compare.
     * apply (f_equal (fun x => Value_D (Some x))).
     * intros H1 H2; injection H2; apply H1.
     * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok OFlt f1 f2); unfold Oset.eq_bool; simpl;
+    destruct (compareAB Qccompare Nat.compare f1 f2).
+    * apply (f_equal (fun x => Value_F (Some x))).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok OInt i1 i2); unfold Oset.eq_bool; simpl;
+    destruct (compareAB Z.compare Nat.compare i1 i2).
+    * apply (f_equal (fun x => Value_I (Some x))).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
 - (* 1/2 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ]]
-         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ] | e3 | [d3 | ]]; simpl; trivial; try discriminate.
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ]]
+         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ] | e3 | [d3 | ] | [f3 | ] | [i3 | ]]; simpl; trivial; try discriminate.
   + apply (Oset.compare_lt_trans Ostring).
   + apply (Oset.compare_lt_trans OZ).
   + apply (Oset.compare_lt_trans Obool).
   + apply (Oset.compare_lt_trans OQc).
   + apply (Oset.compare_lt_trans Ostring).
   + apply (Oset.compare_lt_trans ODec).
+  + apply (Oset.compare_lt_trans OFlt).
+  + apply (Oset.compare_lt_trans OInt).
 - (* 1/1 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ]];
     simpl; trivial.
   + apply (Oset.compare_lt_gt Ostring).
   + apply (Oset.compare_lt_gt OZ).
@@ -272,6 +302,8 @@ split with value_compare.
   + apply (Oset.compare_lt_gt OQc).
   + apply (Oset.compare_lt_gt Ostring).
   + apply (Oset.compare_lt_gt ODec).
+  + apply (Oset.compare_lt_gt OFlt).
+  + apply (Oset.compare_lt_gt OInt).
 Defined.
 
 Definition FVal := Fset.build OVal.
@@ -317,6 +349,9 @@ Definition num_of_value v :=
   | Value_Z (Some z) => Some (Num_Z z)
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
+  (* a finite float or a negative zero *)
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
+  | Value_I (Some (z, _)) => Some (Num_Z z)
   | _ => None
   end.
 
@@ -412,14 +447,29 @@ Definition Qcpower_opt (a b : Qc) : option Qc :=
     [sql_compare v1 v2] is [None] when one of the arguments is NULL, or when the
     two values are not comparable (a typing error in SQL); the comparison
     predicates are then UNKNOWN. *)
+(** The order of the floats of PostgreSQL ([float8_cmp_internal]): -Infinity < the numbers < Infinity < NaN,
+    and NaN is equal to NaN. *)
+Definition float_rank (v : value) : option nat :=
+  match v with
+  | Value_F (Some (_, k)) => 
+    match Nat.div k 2 with 2%nat => Some 2%nat | 3%nat => Some 0%nat | 4%nat => Some 3%nat | _ => Some 1%nat end
+  | Value_Z (Some _) | Value_Q (Some _) | Value_D (Some _) | Value_I (Some _) => Some 1%nat
+  | _ => None
+  end.
+
 Definition sql_compare v1 v2 : option comparison :=
   match v1, v2 with
   | Value_string (Some s1), Value_string (Some s2) => Some (string_compare s1 s2)
   | Value_bool (Some b1), Value_bool (Some b2) => Some (bool_compare b1 b2)
   | _, _ =>
-    match num_of_value v1, num_of_value v2 with
-    | Some (Num_Z a), Some (Num_Z b) => Some (Z.compare a b)
-    | Some a, Some b => Some (Qccompare (Qc_of_num a) (Qc_of_num b))
+    match float_rank v1, float_rank v2 with
+    | Some r1, Some r2 =>
+      if negb (Nat.eqb r1 1) || negb (Nat.eqb r2 1) then Some (Nat.compare r1 r2)
+      else match num_of_value v1, num_of_value v2 with
+           | Some (Num_Z a), Some (Num_Z b) => Some (Z.compare a b)
+           | Some a, Some b => Some (Qccompare (Qc_of_num a) (Qc_of_num b))
+           | _, _ => None
+           end
     | _, _ => None
     end
   end.
@@ -639,6 +689,117 @@ Definition bool_of_string (s : string) : option bool :=
        then Some false
        else None.
 
+(** * Binary floating-point numbers *)
+
+Definition fmt_of (w32 : bool) : format := if w32 then binary32 else binary64.
+
+Definition VF (w32 : bool) (r : fspecial * Qc) : value :=
+  Value_F (Some (snd r, (2 * tag_of (fst r) + (if w32 then 1 else 0))%nat)).
+
+(** the float of the format nearest to [q] *)
+Definition to_float (w32 : bool) (q : Qc) : value := VF w32 (round_q (fmt_of w32) q).
+
+Definition float_parts (v : value) : option (fspecial * Qc * bool) :=
+  match v with
+  | Value_F (Some (x, k)) => Some (special_of_tag (Nat.div k 2), x, Nat.odd k)
+  | _ => None
+  end.
+
+Definition is_F (v : value) : bool := match v with Value_F _ => true | _ => false end.
+Definition is_F32 (v : value) : bool := match v with Value_F (Some (_, k)) => Nat.odd k | _ => false end.
+Definition is_special (v : value) : bool :=
+  match float_parts v with Some (F_Finite, _, _) | Some (F_NegZero, _, _) | None => false | _ => true end.
+
+(** the text of a float, as PostgreSQL prints it *)
+Definition pg_float_text (v : value) : option string :=
+  match float_parts v with
+  | Some (sp, x, w) => Some (pg_text (fmt_of w) sp x)
+  | None => None
+  end.
+
+(** The arithmetic of [float8] and [float4] in PostgreSQL ([float.c]): an operation with a float
+    operand converts the other one to a float, and is correctly rounded (the exact result,
+    rounded once); [float4] with [float4] gives a [float4], otherwise a [float8]. A result which
+    overflows, or a non-zero result which underflows to zero, is an error ([float_overflow_error],
+    [float_underflow_error]); division by zero is an error. The infinities and NaN of the operands
+    follow IEEE 754. *)
+Definition special_op (op : string) (a b : fspecial) (sa sb : bool) : option fspecial :=
+  (* [sa], [sb]: the operands are negative (for the infinities and the zeros) *)
+  match a, b with
+  | F_NaN, _ | _, F_NaN => Some F_NaN
+  | F_Finite, F_Finite | F_Finite, F_NegZero | F_NegZero, F_Finite | F_NegZero, F_NegZero => None
+  | _, _ =>
+    let ia := match a with F_PosInf | F_NegInf => true | _ => false end in
+    let ib := match b with F_PosInf | F_NegInf => true | _ => false end in
+    match op with
+    | "+"%string | "-"%string =>
+      let sb' := if String.eqb op "-" then negb sb else sb in
+      if ia && ib then (if Bool.eqb sa sb' then Some a else Some F_NaN)
+      else if ia then Some a else Some (if sb' then F_NegInf else F_PosInf)
+    | "*"%string => Some (if xorb sa sb then F_NegInf else F_PosInf)
+    | _ => if ia && ib then Some F_NaN 
+           else if ia then Some (if xorb sa sb then F_NegInf else F_PosInf)
+           else Some (if xorb sa sb then F_NegZero else F_Finite)
+    end
+  end.
+
+Definition sign_neg (sp : fspecial) (x : Qc) : bool :=
+  match sp with F_NegInf | F_NegZero => true | F_Finite => match Qccompare x (Q2Qc 0) with Lt => true | _ => false end | _ => false end.
+
+Definition float_value (v : value) : option (fspecial * Qc * bool) :=
+  match v with
+  | Value_F _ => float_parts v
+  | Value_Z (Some z) => Some (F_Finite, Qc_of_Z z, false)
+  | Value_Q (Some q) => Some (F_Finite, q, false)
+  | Value_D (Some (q, _, _)) => Some (F_Finite, q, false)
+  | _ => None
+  end.
+
+Definition pg_flt2 (op : string) (exact : Qc -> Qc -> Qc) (old : list value -> value) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    if is_F v1 || is_F v2
+    then 
+      let w32 := (is_F32 v1 || negb (is_F v1)) && (is_F32 v2 || negb (is_F v2)) in
+      match float_value v1, float_value v2 with
+      | Some (a, x, _), Some (b, y, _) =>
+        match special_op op a b (sign_neg a x) (sign_neg b y) with
+        | Some sp => VF w32 (sp, Q2Qc 0)
+        | None =>
+          if String.eqb op "/" && match Qccompare y (Q2Qc 0) with Eq => true | _ => false end
+          then Value_Err "division by zero"
+          else
+            let r := exact x y in
+            let (sp, z) := round_q (fmt_of w32) r in
+            match sp with
+            | F_PosInf | F_NegInf => Value_Err "value out of range: overflow"
+            | _ => if match Qccompare z (Q2Qc 0) with Eq => true | _ => false end &&
+                      negb (match Qccompare r (Q2Qc 0) with Eq => true | _ => false end)
+                   then Value_Err "value out of range: underflow"
+                   else VF w32 (sp, z)
+            end
+        end
+      | _, _ => Value_F None
+      end
+    else old l
+  | _ => old l
+  end.
+
+(** [float8] from a text: a number, or ['NaN'], ['Infinity'], ['-Infinity'] ([float8in]) *)
+Definition float_of_text (w32 : bool) (t : string) (num : option Qc) : value :=
+  let u := string_map lower_ascii t in
+  if String.eqb u "nan" then VF w32 (F_NaN, Q2Qc 0)
+  else if String.eqb u "infinity" || String.eqb u "inf" then VF w32 (F_PosInf, Q2Qc 0)
+  else if String.eqb u "-infinity" || String.eqb u "-inf" then VF w32 (F_NegInf, Q2Qc 0)
+  else match num with
+       | Some q => let (sp, z) := round_q (fmt_of w32) q in
+                   match sp with
+                   | F_PosInf | F_NegInf => Value_Err "value out of range"
+                   | _ => VF w32 (sp, z)
+                   end
+       | None => Value_Err "invalid input syntax for type double precision"
+       end.
+
 (** * Decimal numbers
 
     A decimal [Value_D (q, f, s)] has the exact value [q], holds [f] decimal digits, and is
@@ -726,7 +887,7 @@ Definition pg_div_scale (q1 : Qc) (s1 : nat) (q2 : Qc) (s2 : nat) : nat :=
 Definition pg_dec2 (op : Qc * nat -> Qc * nat -> value) (old : list value -> value) (l : list value) : value :=
   match l with
   | v1 :: v2 :: nil =>
-    if is_D v1 || is_D v2
+    if (is_D v1 || is_D v2) && negb (is_F v1 || is_F v2)
     then match dec_of_value v1, dec_of_value v2 with
          | Some (q1, _, s1), Some (q2, _, s2) => op (q1, s1) (q2, s2)
          | _, _ => Value_D None
@@ -746,8 +907,50 @@ Definition pg_dec_div (a b : Qc * nat) :=
     error ([invalid input syntax for type ...], [src/backend/utils/adt/int.c], [numeric.c],
     [bool.c]). *)
 
+(** [float8] to an integer: [rint], ties to even ([dtoi4]); NaN and the infinities are out of range *)
+Definition float_to_Z (v : value) : value :=
+  match float_parts v with
+  | Some (F_Finite, x, _) | Some (F_NegZero, x, _) =>
+    Value_Z (Some (if Z.ltb (Qnum x) 0 then Z.opp (round_half_even (Z.opp (Qnum x)) (Zpos (Qden x)))
+                   else round_half_even (Qnum x) (Zpos (Qden x))))
+  | Some _ => Value_Err "integer out of range"
+  | None => Value_Z None
+  end.
+
+(** [float8] to [numeric]: the text with [DBL_DIG] = 15 significant digits ([float8_numeric]),
+    [float4]: [FLT_DIG] = 6 *)
+Definition float_to_numeric (v : value) : value :=
+  match float_parts v with
+  | Some (F_Finite, x, w) =>
+    if match Qccompare x (Q2Qc 0) with Eq => true | _ => false end then VDec x 0 0
+    else
+      let n := Z.abs (Qnum x) in
+      let d := Zpos (Qden x) in
+      let (dd0, e0) := digits_round n d (if w then 6 else 15) in
+      let (dd, e) := strip_zeros dd0 e0 in
+      let q := Q2Qc (q_of_digits (if Z.ltb (Qnum x) 0 then Z.opp dd else dd) e) in
+      let sc := Z.to_nat (Z.max 0 (Z.opp e)) in
+      VDec q sc sc
+  | Some (F_NegZero, _, _) => VDec (Q2Qc 0) 0 0
+  | Some (F_NaN, _, _) => Value_Err "cannot convert NaN to numeric"
+  | Some _ => Value_Err "cannot convert infinity to numeric"
+  | None => Value_D None
+  end.
+
+Definition cast_float (w32 : bool) (v : value) : value :=
+  match v with
+  | Value_F (Some (x, k)) => if w32 then VF true (round_q binary32 x) else Value_F (Some (x, (2 * Nat.div k 2)%nat))
+  | Value_Z (Some z) => to_float w32 (Qc_of_Z z)
+  | Value_Q (Some q) => to_float w32 q
+  | Value_D (Some (q, _, _)) => to_float w32 q
+  | Value_string (Some t) => 
+    let t := string_rtrim (string_ltrim t) in float_of_text w32 t (Qc_of_string t)
+  | _ => Value_F None
+  end.
+
 Definition cast_Z v :=
   match v with
+  | Value_F _ => float_to_Z v
   | Value_Z z => Value_Z z
   | Value_Q (Some q) => Value_Z (Some (Qc_round q))
   | Value_string (Some s) => 
@@ -761,6 +964,7 @@ Definition cast_Z v :=
 
 Definition cast_Q v :=
   match v with
+  | Value_F _ => float_to_numeric v
   | Value_Q q => Value_Q q
   | Value_Z (Some z) => Value_Q (Some (Qc_of_Z z))
   | Value_D d => Value_D d
@@ -782,6 +986,7 @@ Definition cast_string v :=
     | Value_Z (Some z) => Some (string_of_Z z)
     | Value_Q (Some q) => Some (string_of_Qc q)
     | Value_D (Some (q, _, sc)) => Some (dec_text q sc)
+    | Value_F _ => pg_float_text v
     | Value_bool (Some b) => Some (if b then "true" else "false")
     | _ => None
     end.
@@ -914,11 +1119,21 @@ Definition concat_ws (l : list value) :=
                            end) l EmptyString)).
 
 Definition symbol_table : list (string * (list value -> value)) :=
-  let plus := pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b))) in
-  let minus := pg_dec2 pg_dec_minus (arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b))) in
-  let mult := pg_dec2 pg_dec_mult (arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b))) in
+  let plus := pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)))) in
+  let minus := pg_flt2 "-" Qcminus (pg_dec2 pg_dec_minus (arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b)))) in
+  let mult := pg_flt2 "*" Qcmult (pg_dec2 pg_dec_mult (arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b)))) in
   let opp l := match l with
                | Value_D (Some (q, f, sc)) :: nil => VDec (Qcopp q) f sc
+               | Value_F (Some (x, k)) :: nil => 
+                 let w := Nat.odd k in
+                 match special_of_tag (Nat.div k 2) with
+                 | F_Finite => if match Qccompare x (Q2Qc 0) with Eq => true | _ => false end 
+                               then VF w (F_NegZero, x) else VF w (F_Finite, Qcopp x)
+                 | F_NegZero => VF w (F_Finite, x)
+                 | F_PosInf => VF w (F_NegInf, x)
+                 | F_NegInf => VF w (F_PosInf, x)
+                 | F_NaN => VF w (F_NaN, x)
+                 end
                | _ => arith1 (fun a => Some (- a)%Z) (fun a => Some (Qcopp a)) l
                end in
   (* integer division truncates towards zero; division by zero is NULL *)
@@ -933,8 +1148,8 @@ Definition symbol_table : list (string * (list value -> value)) :=
         end
       | _ => f l
       end in
-  let div := by_zero (pg_dec2 pg_dec_div (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
-                    (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b)))) in
+  let div := by_zero (pg_flt2 "/" Qcdiv (pg_dec2 pg_dec_div (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
+                    (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b))))) in
   let modulo := by_zero (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
                        (fun _ _ => None)) in
      ("plus", plus) :: ("+", plus)
@@ -943,7 +1158,15 @@ Definition symbol_table : list (string * (list value -> value)) :=
   :: ("opp", opp) :: ("neg", opp)
   :: ("div", div) :: ("/", div)
   :: ("mod", modulo) :: ("%", modulo)
-  :: ("abs", fun l => match l with
+ :: ("abs", fun l => match l with
+                      | Value_F (Some (x, k)) :: nil => 
+                        let w := Nat.odd k in
+                        match special_of_tag (Nat.div k 2) with
+                        | F_Finite => VF w (F_Finite, match Qccompare x (Q2Qc 0) with Lt => Qcopp x | _ => x end)
+                        | F_NegZero => VF w (F_Finite, x)
+                        | F_NegInf => VF w (F_PosInf, x)
+                        | sp => VF w (sp, x)
+                        end
                       | Value_D (Some (q, f, sc)) :: nil => 
                         VDec (match Qccompare q (Qc_of_Z 0) with Lt => Qcopp q | _ => q end) f sc
                       | _ => arith1 (fun a => Some (Z.abs a))
@@ -953,16 +1176,27 @@ Definition symbol_table : list (string * (list value -> value)) :=
                                               | Lt => (-1)%Z | Eq => 0%Z | Gt => 1%Z end))))
   :: ("power", arith2 Zpower_opt Qcpower_opt)
   :: ("floor", fun l => match l with
+                        | Value_F (Some (x, k)) :: nil => 
+                          if Nat.eqb (Nat.div k 2) 0 then VF (Nat.odd k) (F_Finite, Qc_of_Z (Qc_floor x)) else Value_F (Some (x, k))
                         | Value_D (Some (q, _, _)) :: nil => VDec (Qc_of_Z (Qc_floor q)) 0 0
                         | Value_Q (Some q) :: nil => Value_Z (Some (Qc_floor q))
                         | Value_Z z :: nil => Value_Z z
                         | _ => Value_Z None end)
   :: ("ceil", fun l => match l with
+                       | Value_F (Some (x, k)) :: nil => 
+                         if Nat.eqb (Nat.div k 2) 0 then VF (Nat.odd k) (F_Finite, Qc_of_Z (Qc_ceiling x)) else Value_F (Some (x, k))
                        | Value_D (Some (q, _, _)) :: nil => VDec (Qc_of_Z (Qc_ceiling q)) 0 0
                        | Value_Q (Some q) :: nil => Value_Z (Some (Qc_ceiling q))
                        | Value_Z z :: nil => Value_Z z
                        | _ => Value_Z None end)
   :: ("round", fun l => match l with
+                        (* [round(float8)] is [rint]: ties to even *)
+                        | Value_F (Some (x, k)) :: nil => 
+                          if Nat.eqb (Nat.div k 2) 0 
+                          then VF (Nat.odd k) (F_Finite, Qc_of_Z (if Z.ltb (Qnum x) 0 
+                                                                  then Z.opp (round_half_even (Z.opp (Qnum x)) (Zpos (Qden x)))
+                                                                  else round_half_even (Qnum x) (Zpos (Qden x))))
+                          else Value_F (Some (x, k))
                         | Value_D (Some (q, _, _)) :: nil => VDec (Qc_of_Z (Qc_round q)) 0 0
                         (* [round(x, d)]: a numeric of scale [d] ([numeric_round]) *)
                         | v :: Value_Z (Some d) :: nil => 
@@ -1061,6 +1295,8 @@ Definition symbol_table : list (string * (list value -> value)) :=
   :: ("cast_numeric", fun l => match l with v :: nil => cast_Q v | _ => Value_Q None end)
   :: ("cast_string", fun l => match l with v :: nil => cast_string v | _ => Value_string None end)
   :: ("cast_bool", fun l => match l with v :: nil => cast_bool v | _ => Value_bool None end)
+  :: ("cast_float8", fun l => match l with v :: nil => cast_float false v | _ => Value_F None end)
+  :: ("cast_float4", fun l => match l with v :: nil => cast_float true v | _ => Value_F None end)
   :: nil.
 
 (** A function symbol which is not in the table of functions, but which is the
@@ -1108,7 +1344,7 @@ Fixpoint value_dedup (l : list value) :=
   end.
 
 Definition value_plus v1 v2 :=
-  pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b))) (v1 :: v2 :: nil).
+  pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)))) (v1 :: v2 :: nil).
 
 Definition agg_sum (l : list value) :=
   match non_nulls l with
@@ -1123,9 +1359,15 @@ Definition agg_avg (l : list value) :=
   match nn with
   | nil => Value_D None
   | _ =>
-    match dec_of_value (agg_sum nn) with
+    match agg_sum nn with
+    (* [avg] of floats is a [float8] ([float8_avg], [float4_accum]) *)
+    | Value_F (Some (x, k)) => 
+      pg_flt2 "/" Qcdiv (fun _ => Value_F None) (Value_F (Some (x, (2 * Nat.div k 2)%nat)) :: Value_Z (Some (Z.of_nat (List.length nn))) :: nil)
+    | sm => 
+    match dec_of_value sm with
     | Some (q, _, sc) => pg_dec_div (q, sc) (Qc_of_Z (Z.of_nat (List.length nn)), 0%nat)
     | None => Value_D None
+    end
     end
   end.
 

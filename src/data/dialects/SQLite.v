@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Values Dialects ValueKit PostgreSQL MySQL.
+Require Import Bool3 OrderedSet SqlFull IEEE Values Dialects ValueKit PostgreSQL MySQL.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -133,7 +133,7 @@ Definition lite_mod (a b : num) : option num :=
 Definition type_name (v : value) : string :=
   match v with
   | Value_Z (Some _) | Value_bool (Some _) => "integer"
-  | Value_Q (Some _) => "real"
+  | Value_Q (Some _) | Value_F (Some _) => "real"
   | Value_string (Some _) => "text"
   | _ => "null"
   end.
@@ -146,7 +146,7 @@ Definition lite_concat (l : list value) : value :=
 Definition lite_concat_skip (l : list value) : value :=
   Value_string (Some (fold_left (fun acc v => match text_of v with Some s => acc ++ s | None => acc end) l EmptyString)).
 
-Definition lite_symbol_table : list (string * (list value -> value)) :=
+Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
   let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
   let minus := num_fun2 conv (fun a b => Some (num_minus a b)) in
@@ -226,7 +226,7 @@ Definition lite_symbol_table : list (string * (list value -> value)) :=
   :: ("cast_string", fun l => match l with v :: nil => Value_string (text_of v) | _ => Value_string None end)
   :: nil.
 
-Definition lite_aggregate_table : list (string * (list value -> value)) :=
+Definition lite_aggregate_table_raw : list (string * (list value -> value)) :=
      ("count", agg_count_by is_null)
   :: ("count(*)", fun l => Value_Z (Some (Z.of_nat (List.length l))))
   :: ("sum", agg_sum_by is_null lenient)
@@ -244,6 +244,40 @@ Definition lite_aggregate_table : list (string * (list value -> value)) :=
 
 (** The constructs of SQLite 3.39 and later: no [LATERAL], no [INTERSECT ALL] nor 
     [EXCEPT ALL], no [ANY] and [ALL] subqueries. *)
+(** * REAL
+
+    A number of SQLite which is not an integer is a [REAL], a binary64 float: every result of an
+    arithmetic function which is not an integer is the nearest double of the exact result (a
+    correctly rounded operation). A [REAL] is printed with ["%!.15g"] ([lite_text]): the functions
+    on texts see that text. *)
+Definition lite_real (v : value) : value :=
+  match v with
+  | Value_Q (Some q) => to_float false q
+  | Value_Q None => Value_F None
+  | Value_D (Some (q, _, _)) => to_float false q
+  | _ => v
+  end.
+
+Definition lite_textual (l : list value) : list value :=
+  map (fun v => match v with
+                | Value_F (Some (x, k)) => Value_string (Some (lite_text (special_of_tag (Nat.div k 2)) x))
+                | _ => v
+                end) l.
+
+Definition lite_text_funs : list string :=
+  "||" :: "concat" :: "length" :: "upper" :: "lower" :: "trim" :: "ltrim" :: "rtrim" :: "substr" :: "substring"
+       :: "replace" :: "instr" :: "cast_string" :: nil.
+
+Definition lite_symbol_table : list (string * (list value -> value)) :=
+  map (fun p => if existsb (String.eqb (fst p)) lite_text_funs
+                then (fst p, fun l => (snd p) (lite_textual l))
+                else (fst p, fun l => lite_real ((snd p) l))) lite_symbol_table_raw.
+
+Definition lite_aggregate_table : list (string * (list value -> value)) :=
+  map (fun p => if existsb (String.eqb (fst p)) ("group_concat" :: "group_concat_sep" :: "string_agg_sep" :: nil)
+                then (fst p, fun l => (snd p) (lite_textual l))
+                else (fst p, fun l => lite_real ((snd p) l))) lite_aggregate_table_raw.
+
 Definition lite_supports (f : feature) : bool :=
   match f with
   | F_Lateral | F_Intersect_All | F_Except_All | F_Any_All 
@@ -273,4 +307,4 @@ Definition SQLite : vsem :=
           true
           (fun _ _ => false)
           (* a literal with a decimal point is a [REAL] *)
-          (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end).
+          lite_real.

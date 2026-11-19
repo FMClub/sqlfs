@@ -58,6 +58,8 @@ Definition cell_ok (v : NullValues.value) (s : string) : bool :=
          match parse_number s with (n, true) => match num_cmp (NullValues.Num_Q q) n with Eq => true | _ => false end | _ => false end
        (* a decimal is compared by its text: the engine prints its scale *)
        | NullValues.Value_D (Some (q, _, sc)) => String.eqb s (NullValues.dec_text q sc)
+       (* a float is compared by its text, as the MySQL family prints it *)
+       | NullValues.Value_F (Some _) => match text_of v with Some t => String.eqb s t | None => false end
        | NullValues.Value_bool (Some b) => String.eqb s (if b then "1" else "0")
        | NullValues.Value_string (Some t) => String.eqb s t
        | _ => false
