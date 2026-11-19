@@ -129,6 +129,7 @@ testing/Test_Subqueries.v
 testing/Test_Naming.v
 testing/Test_OracleForms.v
 testing/Test_Versions.v
+testing/Test_Closeout.v
 testing/Test_Fetch.v
 testing/Test_MariaDB.v
 testing/Test_Session.v
