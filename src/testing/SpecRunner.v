@@ -106,7 +106,8 @@ Definition failures (d : vsem) (cs : list spec_case) : list string :=
 
 (** The text of a value, for the diagnosis of a failure *)
 Definition show_value (v : NullValues.value) : string :=
-  if NullValues.is_null v then "NULL"
+  if NullValues.is_err v then "ERROR"
+  else if NullValues.is_null v then "NULL"
   else match text_of v with Some s => s | None => "?" end.
 
 Definition show_actual (d : vsem) (c : spec_case) : list (list string) :=

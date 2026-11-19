@@ -62,7 +62,8 @@ Definition printable (c : ascii) : ascii :=
   let n := nat_of_ascii c in if (Nat.ltb n 32 || Nat.ltb 126 n)%bool then "@"%char else c.
 
 Definition render (ty : ascii) (v : NullValues.value) : string :=
-  if NullValues.is_null v then "NULL"
+  if NullValues.is_err v then "ERROR"
+  else if NullValues.is_null v then "NULL"
   else match ty with
        | "I"%char => match int_of_value v with Some z => NullValues.string_of_Z z | None => "NULL" end
        | "R"%char => match lenient v with

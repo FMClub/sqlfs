@@ -45,7 +45,12 @@ Definition ob_my_supports (f : feature) : bool :=
   | _ => true
   end.
 
-Definition OceanBaseMySQL : vsem := mysql_vs true true "OceanBase (MySQL mode)" ob_my_supports.
+(** The default session: [utf8mb4_general_ci] (PAD SPACE, case insensitive), [sql_mode] without
+    [ONLY_FULL_GROUP_BY] nor [PIPES_AS_CONCAT], [group_concat_max_len] = 1024
+    ([src/share/system_variable/ob_system_variable_init.json]). *)
+Definition ob_my_default_session : my_session := mk_my_session true true 4 false false 1024%N.
+
+Definition OceanBaseMySQL : vsem := mysql_vs ob_my_default_session "OceanBase (MySQL mode)" ob_my_supports.
 
 (** * Oracle mode
 
@@ -57,7 +62,9 @@ Definition OceanBaseMySQL : vsem := mysql_vs true true "OceanBase (MySQL mode)" 
       error);
     - NULLs are the largest values of [ORDER BY]; [NULLS FIRST/LAST] is available
       (assumed from Oracle, to be verified);
-    - [/] is the exact division, a division by zero is NULL (Oracle signals an error);
+    - [/] is the exact division, a division by zero fails ([ORA-01476: divisor is equal to zero]);
+      an arithmetic operation or a comparison on a string which is not a number fails
+      ([ORA-01722: invalid number]);
       [MOD(x, 0)] is [x];
     - [||] and [CONCAT] treat a NULL operand as the empty string: [NULL || 'a'] is ['a'];
     - [GREATEST] and [LEAST] are NULL as soon as one argument is NULL ([ObExprLeastGreatest::calc_oracle]);
@@ -81,6 +88,34 @@ Definition ora_compare (v1 v2 : value) : option comparison :=
                  | _, _ => None
                  end
        end.
+
+(** [ORA-01722]: a string which is not the text of a number, where a number is expected *)
+Definition ora_bad_number (v : value) : bool :=
+  match v with
+  | Value_string (Some s) => negb (ora_isnull v) && match strict_conv v with Some _ => false | None => true end
+  | _ => false
+  end.
+
+Definition is_number_value (v : value) : bool :=
+  match v with Value_Z (Some _) | Value_Q (Some _) => true | _ => false end.
+
+Definition ora_comparisons : list string := 
+  ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: "between" :: "not between" :: "in" :: "not in" :: nil)%string.
+
+Definition ora_pred_error (p : string) (l : list value) : bool :=
+  existsb (String.eqb p) ora_comparisons && existsb is_number_value l && existsb ora_bad_number l.
+
+(** arithmetic: NULL on a NULL operand, [ORA-01722] on a string which is not a number *)
+Definition ora_fun2 (f : num -> num -> value) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    if (ora_bad_number v1 || ora_bad_number v2)%bool then Value_Err "ORA-01722: invalid number"
+    else match strict_conv v1, strict_conv v2 with
+         | Some a, Some b => f a b
+         | _, _ => Value_Z None
+         end
+  | _ => Value_Z None
+  end.
 
 Definition ora_order (a b : value) : comparison :=
   match ora_compare a b with Some c => c | None => value_compare a b end.
@@ -160,17 +195,19 @@ Definition ora_mod (a b : num) : option num :=
 
 Definition ora_symbol_table : list (string * (list value -> value)) :=
   let conv := strict_conv in
-  let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
-  let minus := num_fun2 conv (fun a b => Some (num_minus a b)) in
-  let mult := num_fun2 conv (fun a b => Some (num_mult a b)) in
+  let plus := ora_fun2 (fun a b => value_of_num (num_plus a b)) in
+  let minus := ora_fun2 (fun a b => value_of_num (num_minus a b)) in
+  let mult := ora_fun2 (fun a b => value_of_num (num_mult a b)) in
   let opp := num_fun1 conv num_opp in
-  let div := num_fun2 conv num_div_exact in
+  let div := ora_fun2 (fun a b => match num_div_exact a b with 
+                                  | Some n => value_of_num n 
+                                  | None => Value_Err "ORA-01476: divisor is equal to zero" end) in
      ("plus", plus) :: ("+", plus)
   :: ("minus", minus) :: ("-", minus)
   :: ("mult", mult) :: ("*", mult)
   :: ("opp", opp) :: ("neg", opp)
   :: ("/", div)
-  :: ("mod", num_fun2 conv ora_mod)
+  :: ("mod", ora_fun2 (fun a b => match ora_mod a b with Some n => value_of_num n | None => Value_Z None end))
   :: ("abs", num_fun1 conv num_abs)
   :: ("sign", num_fun1 conv num_sign)
   :: ("floor", num_fun1 conv num_floor)
@@ -283,4 +320,6 @@ Definition OceanBaseOracle : vsem :=
           ora_order
           canon_ora
           false
-          ora_supports.
+          ora_supports
+          false
+          ora_pred_error.

@@ -56,13 +56,23 @@ Definition cycle :=
 Example cycle_terminates : rows_of PostgreSQL cycle 1 = [["1"]; ["2"]; ["3"]].
 Proof. check. Qed.
 
-(** The recursion is bounded: without the distinct, an infinite recursion returns [rec_fuel + 1] rows. *)
+(** The recursion is bounded: a recursion which does not reach a fixpoint within [rec_fuel] steps
+    fails, as [cte_max_recursion_depth] makes MySQL fail (and PostgreSQL does not terminate). *)
 Definition infinite :=
   with_rec Set_All "t" (values_ [c0] [[int 1]])
     (select_where [as_ (col c0) c0] [from_table "t"] c_true)
     (select_where [as_ (col c0) c0] [from_table "t"] c_true).
 
-Example fuel : List.length (rows_of PostgreSQL infinite 1) = 1001%nat.
+Definition fails (d : vsem) (q : squery) : bool :=
+  match eval_query_result ORN (dialect_of d) (_basesort _ db) (_instance _ db) (to_dialect d q) with
+  | QR_Error _ => true
+  | _ => false
+  end.
+
+Example fuel : fails PostgreSQL infinite = true.
+Proof. check. Qed.
+
+Example no_fuel_needed : fails PostgreSQL (upto Set_All) = false.
 Proof. check. Qed.
 
 (** The body can use the table several times and the working table is the last step only. *)

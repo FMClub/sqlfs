@@ -135,12 +135,17 @@ Module NullValues.
     - [Value_bool]   : BOOLEAN
     - [Value_Q]      : NUMERIC / DECIMAL / REAL, idealised as exact canonical
                        rationals (no rounding, no overflow)
+    - [Value_Err]    : the failure of an evaluation (division by zero in PostgreSQL,
+                       an invalid conversion, ...), with the kind of the error. It
+                       belongs to no SQL domain: a query whose evaluation produces it
+                       fails (see [eval_query_result] in [SqlFull.v]).
 *)
 Inductive value : Set :=
   | Value_string : option string -> value
   | Value_Z : option Z -> value
   | Value_bool : option bool -> value
-  | Value_Q : option Qc -> value.
+  | Value_Q : option Qc -> value
+  | Value_Err : string -> value.
 
 Register value as datacert.value.type.
 Register Value_string as datacert.value.Value_string.
@@ -153,6 +158,7 @@ match v with
   | Value_Z _ => type_Z
   | Value_bool _ => type_bool
   | Value_Q _ => type_Q
+  | Value_Err _ => type_Z
   end.
 
 (** Default values for each type: the NULL of that type. *)
@@ -195,6 +201,7 @@ Definition value_rank v : N :=
   | Value_Z _ => 1%N
   | Value_bool _ => 2%N
   | Value_Q _ => 3%N
+  | Value_Err _ => 4%N
   end.
 
 Definition value_compare x y :=
@@ -203,13 +210,14 @@ Definition value_compare x y :=
     | Value_Z z1, Value_Z z2 => option_compare _ Z.compare z1 z2
     | Value_bool b1, Value_bool b2 => option_compare _ bool_compare b1 b2
     | Value_Q q1, Value_Q q2 => option_compare _ Qccompare q1 q2
+    | Value_Err e1, Value_Err e2 => string_compare e1 e2
     | _, _ => N.compare (value_rank x) (value_rank y)
   end.
 
 Definition OVal : Oset.Rcd value.
 split with value_compare.
 - (* 1/3 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2];
     simpl; try discriminate; trivial.
   + generalize (Oset.eq_bool_ok Ostring s1 s2); simpl; case (string_compare s1 s2).
     * apply (f_equal (fun x => Value_string (Some x))).
@@ -227,20 +235,26 @@ split with value_compare.
     * apply (f_equal (fun x => Value_Q (Some x))).
     * intros H1 H2; injection H2; apply H1.
     * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok Ostring e1 e2); simpl; case (string_compare e1 e2).
+    * apply (f_equal (fun x => Value_Err x)).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
 - (* 1/2 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ]]
-         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ]]; simpl; trivial; try discriminate.
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2]
+         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ] | e3]; simpl; trivial; try discriminate.
   + apply (Oset.compare_lt_trans Ostring).
   + apply (Oset.compare_lt_trans OZ).
   + apply (Oset.compare_lt_trans Obool).
   + apply (Oset.compare_lt_trans OQc).
+  + apply (Oset.compare_lt_trans Ostring).
 - (* 1/1 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2];
     simpl; trivial.
   + apply (Oset.compare_lt_gt Ostring).
   + apply (Oset.compare_lt_gt OZ).
   + apply (Oset.compare_lt_gt Obool).
   + apply (Oset.compare_lt_gt OQc).
+  + apply (Oset.compare_lt_gt Ostring).
 Defined.
 
 Definition FVal := Fset.build OVal.
@@ -336,6 +350,19 @@ Definition rat_of_value (v : value) : option Q :=
   end.
 
 Definition value_of_rat (q : Q) : value := Value_Q (Some (Q2Qc q)).
+
+Definition is_err (v : value) : bool := match v with Value_Err _ => true | _ => false end.
+
+(** The functions which do not evaluate all their arguments: [COALESCE] and its variants stop at
+    the first non-NULL argument, the conditional functions evaluate one branch. *)
+Definition lazy_names : list string :=
+  ("coalesce" :: "ifnull" :: "nvl" :: "nvl2" :: "if" :: "iif" :: "case" :: "decode" :: nil)%string.
+
+Definition is_lazy_symbol (f : symbol value) : bool :=
+  match f with
+  | Symbol _ s => existsb (String.eqb s) lazy_names
+  | CstVal _ _ => false
+  end.
 
 Definition Qc_trunc (q : Qc) : Z := Z.quot (Qnum q) (Zpos (Qden q)).
 (** rounding to the nearest integer, ties away from zero *)
@@ -593,26 +620,34 @@ Definition bool_of_string (s : string) : option bool :=
        then Some false
        else None.
 
-(** * Casts. A cast which fails at runtime in SQL yields NULL here. *)
+(** * Casts (PostgreSQL). A string which is not the text of a value of the target type is an
+    error ([invalid input syntax for type ...], [src/backend/utils/adt/int.c], [numeric.c],
+    [bool.c]). *)
 
 Definition cast_Z v :=
-  Value_Z
-    match v with
-    | Value_Z z => z
-    | Value_Q (Some q) => Some (Qc_round q)
-    | Value_string (Some s) => Z_of_string (string_rtrim (string_ltrim s))
-    | Value_bool (Some b) => Some (if b then 1%Z else 0%Z)
-    | _ => None
-    end.
+  match v with
+  | Value_Z z => Value_Z z
+  | Value_Q (Some q) => Value_Z (Some (Qc_round q))
+  | Value_string (Some s) => 
+    match Z_of_string (string_rtrim (string_ltrim s)) with
+    | Some z => Value_Z (Some z)
+    | None => Value_Err "invalid input syntax for type integer"
+    end
+  | Value_bool (Some b) => Value_Z (Some (if b then 1%Z else 0%Z))
+  | _ => Value_Z None
+  end.
 
 Definition cast_Q v :=
-  Value_Q
-    match v with
-    | Value_Q q => q
-    | Value_Z (Some z) => Some (Qc_of_Z z)
-    | Value_string (Some s) => Qc_of_string (string_rtrim (string_ltrim s))
-    | _ => None
-    end.
+  match v with
+  | Value_Q q => Value_Q q
+  | Value_Z (Some z) => Value_Q (Some (Qc_of_Z z))
+  | Value_string (Some s) => 
+    match Qc_of_string (string_rtrim (string_ltrim s)) with
+    | Some q => Value_Q (Some q)
+    | None => Value_Err "invalid input syntax for type numeric"
+    end
+  | _ => Value_Q None
+  end.
 
 Definition cast_string v :=
   Value_string
@@ -625,13 +660,16 @@ Definition cast_string v :=
     end.
 
 Definition cast_bool v :=
-  Value_bool
-    match v with
-    | Value_bool b => b
-    | Value_Z (Some z) => Some (negb (Z.eqb z 0))
-    | Value_string (Some s) => bool_of_string (string_rtrim (string_ltrim s))
-    | _ => None
-    end.
+  match v with
+  | Value_bool b => Value_bool b
+  | Value_Z (Some z) => Value_bool (Some (negb (Z.eqb z 0)))
+  | Value_string (Some s) => 
+    match bool_of_string (string_rtrim (string_ltrim s)) with
+    | Some b => Value_bool (Some b)
+    | None => Value_Err "invalid input syntax for type boolean"
+    end
+  | _ => Value_bool None
+  end.
 
 (** * Interpretation of predicates
 
@@ -754,10 +792,21 @@ Definition symbol_table : list (string * (list value -> value)) :=
   let mult := arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b)) in
   let opp := arith1 (fun a => Some (- a)%Z) (fun a => Some (Qcopp a)) in
   (* integer division truncates towards zero; division by zero is NULL *)
-  let div := arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
-                    (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b)) in
-  let modulo := arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
-                       (fun _ _ => None) in
+  (** division and modulo by zero are errors ([ERRCODE_DIVISION_BY_ZERO], [src/backend/utils/adt/int.c], [numeric.c]) *)
+  let by_zero (f : list value -> value) (l : list value) :=
+      match l with
+      | _ :: b :: nil => 
+        match num_of_value b with
+        | Some (Num_Z z) => if Z.eqb z 0 then Value_Err "division by zero" else f l
+        | Some (Num_Q q) => if Qc_is_zero q then Value_Err "division by zero" else f l
+        | _ => f l
+        end
+      | _ => f l
+      end in
+  let div := by_zero (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
+                    (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b))) in
+  let modulo := by_zero (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
+                       (fun _ _ => None)) in
      ("plus", plus) :: ("+", plus)
   :: ("minus", minus) :: ("-", minus)
   :: ("mult", mult) :: ("*", mult)

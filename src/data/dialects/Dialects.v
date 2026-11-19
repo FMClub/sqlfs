@@ -51,7 +51,12 @@ Record vsem : Type :=
       vs_order : value -> value -> comparison;
       vs_canon : value -> value;
       vs_nulls_smallest : bool;
-      vs_supports : feature -> bool
+      vs_supports : feature -> bool;
+      (** a scalar subquery with several rows gives the value of its first row (SQLite) *)
+      vs_scalar_first : bool;
+      (** the predicates which fail on some arguments (Oracle: [ORA-01722] when a string which is not a
+          number is compared with a number) *)
+      vs_pred_error : string -> list value -> bool
     }.
 
 (** [DISTINCT] aggregates: the name of the aggregate starts with ["distinct "]. *)
@@ -143,7 +148,11 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (vs_supports d)
              (vs_known_symbol d)
              (vs_known_predicate d)
-             (vs_known_aggregate d).
+             (vs_known_aggregate d)
+             NullValues.is_err NullValues.Value_Err (Attr_string "#error")
+             NullValues.is_lazy_symbol 
+             (fun p l => match p with Values.Predicate s => vs_pred_error d s l end)
+             (vs_scalar_first d).
 
 (** * Moving a query to a dialect
 

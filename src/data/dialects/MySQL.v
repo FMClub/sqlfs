@@ -42,18 +42,44 @@ Import NullValues.
     - [utf8mb4_general_ci], the default of OceanBase (collation 45, from the default of the
       system variable [collation_server]), is [PAD SPACE]: ['a' = 'a '], but ['a' LIKE 'a '] is false.
     Accents are not folded. *)
+(** * The session
+
+    The system variables which change the result of a query, with the values which the server
+    uses by default. The variables which only change the parsing of the text of a query
+    ([ANSI_QUOTES], [NO_BACKSLASH_ESCAPES], [HIGH_NOT_PRECEDENCE]) do not appear: the syntax of
+    [SqlFull] is abstract. [ERROR_FOR_DIVISION_BY_ZERO] and the strict modes only concern [INSERT]
+    and [UPDATE] (in a [SELECT], a division by zero is NULL with a warning). *)
+Record my_session : Type :=
+  mk_my_session
+    {
+      (** the default collation: [PAD SPACE]? *)
+      ms_pad : bool;
+      (** the default collation: case insensitive? *)
+      ms_ci : bool;
+      (** [div_precision_increment] *)
+      ms_div_incr : nat;
+      (** [sql_mode] contains [PIPES_AS_CONCAT]: [||] is the concatenation, not the logical OR *)
+      ms_pipes_as_concat : bool;
+      (** [sql_mode] contains [ONLY_FULL_GROUP_BY] *)
+      ms_only_full_group_by : bool;
+      (** [group_concat_max_len]: the result of [GROUP_CONCAT] is truncated to this length *)
+      ms_group_concat_max_len : N
+    }.
+
 Section Collation.
 
-Variable pad : bool.
+Variable ss : my_session.
+
+Let pad := ms_pad ss.
 
 (** is the collation case insensitive? (false for a binary collation, as TiDB's default [utf8mb4_bin]) *)
-Variable ci : bool.
+Let ci := ms_ci ss.
 
 (** The key of a string for a comparison *)
 Definition coll_key (s : string) : string := (if ci then lower_s else fun x => x) (if pad then string_rtrim s else s).
 
 (** the system variable [div_precision_increment], whose default value is 4 in MySQL and in OceanBase *)
-Definition div_precision_increment : nat := 4%nat.
+Let div_precision_increment : nat := ms_div_incr ss.
 
 Definition my_isnull := is_null.
 
@@ -278,7 +304,7 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
   :: ("case", case_by my_truth)
   (* logic *)
   :: ("and", logic_and) :: ("&&", logic_and)
-  :: ("or", logic_or) :: ("||", logic_or)
+  :: ("or", logic_or) :: ("||", if ms_pipes_as_concat ss then my_concat else logic_or)
   :: ("xor", fun l => my_of_truth (fold_truth my_truth xor3 false3 l))
   :: ("not", fun l => match l with v :: nil => my_of_truth (negb3 (my_truth v)) | _ => Value_Z None end)
   (* strings *)
@@ -334,8 +360,8 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
   :: ("avg", agg_avg_dec div_precision_increment is_null lenient)
   :: ("min", agg_extremum_by is_null my_order is_Lt)
   :: ("max", agg_extremum_by is_null my_order is_Gt)
-  :: ("group_concat", agg_concat_by is_null ",")
-  :: ("group_concat_sep", agg_concat_sep_by is_null ",")
+  :: ("group_concat", fun l => truncate_text (ms_group_concat_max_len ss) (agg_concat_by is_null "," l))
+  :: ("group_concat_sep", fun l => truncate_text (ms_group_concat_max_len ss) (agg_concat_sep_by is_null "," l))
   :: ("bit_and", agg_bit_by is_null Z.land)
   :: ("bit_or", agg_bit_by is_null Z.lor)
   :: ("var_pop", agg_var_by is_null lenient false)
@@ -348,7 +374,7 @@ Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
   (* [ONLY_FULL_GROUP_BY] is in the default [sql_mode]; functional dependencies are not modelled *)
-  | F_Bare_Column | F_Fetch_Ties | F_Fetch_Percent => false
+  | F_Fetch_Ties | F_Fetch_Percent => false
   (* only [WITH ROLLUP] *)
   | F_Grouping_Sets | F_Cube => false
   | _ => true
@@ -373,9 +399,16 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           my_order
           canon_my
           true
-          supports.
+          (fun f => match f with F_Bare_Column => negb (ms_only_full_group_by ss) | _ => supports f end)
+          false
+          (fun _ _ => false).
 
 End Collation.
 
 (** MySQL 8 with its default collation [utf8mb4_0900_ai_ci] (no padding). *)
-Definition MySQL : vsem := mysql_vs false true "MySQL" my_supports.
+(** The default session of MySQL 8.0 and 8.4: [sql_mode] is [ONLY_FULL_GROUP_BY, STRICT_TRANS_TABLES,
+    NO_ZERO_IN_DATE, NO_ZERO_DATE, ERROR_FOR_DIVISION_BY_ZERO, NO_ENGINE_SUBSTITUTION],
+    [group_concat_max_len] is 1024. *)
+Definition my_default_session : my_session := mk_my_session false true 4 false true 1024%N.
+
+Definition MySQL : vsem := mysql_vs my_default_session "MySQL" my_supports.
