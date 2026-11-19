@@ -30,3 +30,30 @@ Example pg_to_oct : val PostgreSQL (fn "to_oct" [int (-1)]) = "37777777777".
 Proof. check. Qed.
 Example pg_char_alias : val PostgreSQL (fn "character_length" [str "abc"]) = "3".
 Proof. check. Qed.
+
+(** ** The MySQL family (4.2-4.6, 4.8): the examples of the MySQL 8.4 manual *)
+Example my_conv1 : val MySQL (fn "conv" [str "a"; int 16; int 2]) = "1010".
+Proof. check. Qed.
+Example my_conv2 : val MySQL (fn "conv" [str "6E"; int 18; int 8]) = "172".
+Proof. check. Qed.
+Example my_conv3 : val MySQL (fn "conv" [int (-17); int 10; int (-18)]) = "-H".
+Proof. check. Qed.
+Example my_bin : (val MySQL (fn "bin" [int 12]), val MySQL (fn "oct" [int 12])) = ("1100", "14").
+Proof. check. Qed.
+Example my_crc32 : val MySQL (fn "crc32" [str "MySQL"]) = "3259397556".
+Proof. check. Qed.
+Example my_inet_aton : (val MySQL (fn "inet_aton" [str "10.0.5.9"]), val MySQL (fn "inet_aton" [str "127.1"]))
+                       = ("167773449", "2130706433").
+Proof. check. Qed.
+Example my_inet_ntoa : val MySQL (fn "inet_ntoa" [int 167773449]) = "10.0.5.9".
+Proof. check. Qed.
+Example my_quote : val MySQL (fn "quote" [str "Don't!"]) = "'Don\'t!'".
+Proof. check. Qed.
+Example my_make_set : val MySQL (fn "make_set" [int 5; str "hello"; str "nice"; str "world"]) = "hello,world".
+Proof. check. Qed.
+Example my_export_set : val MySQL (fn "export_set" [int 5; str "Y"; str "N"; str ","; int 4]) = "Y,N,Y,N".
+Proof. check. Qed.
+Example my_lcase : (val MySQL (fn "lcase" [str "ABC"]), val TiDB (fn "ucase" [str "abc"])) = ("abc", "ABC").
+Proof. check. Qed.
+Example my_weekofyear : val MySQL (fn "weekofyear" [str "2008-02-20"]) = "8".
+Proof. check. Qed.

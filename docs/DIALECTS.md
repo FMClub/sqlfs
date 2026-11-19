@@ -137,6 +137,77 @@ group with what it needs). Constructs (PostgreSQL 17, with `Versions.v` for 12-1
 | `interval` output styles (`IntervalStyle`) | the default `postgres` style only |
 | `INSERT ... RETURNING`, generated columns | outside the query language (no effect on `SELECT`) |
 
+### MySQL (4.2)
+
+Functions: `docs/closeouts/MySQL.md` (369 names; 9 not modelled yet). Constructs (8.0 and 8.4; 5.7 by `Versions.v`):
+
+| Construct | Status |
+|---|---|
+| `sql_mode`: `ONLY_FULL_GROUP_BY`, `PIPES_AS_CONCAT`; `div_precision_increment`, `group_concat_max_len`, default collation | modelled (`my_session`) |
+| `sql_mode`: `ERROR_FOR_DIVISION_BY_ZERO`, `STRICT_*` | no effect on `SELECT` (they turn warnings into errors on writes) |
+| `sql_mode`: `ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, `HIGH_NOT_PRECEDENCE` | lexical: decided by the parser, before the model |
+| `HAVING` and `ORDER BY` on aliases | modelled (translator: `subst_deep`) |
+| `GROUP BY ... WITH ROLLUP`, `GROUPING()` | modelled |
+| `JSON` type and functions, `JSON_TABLE` | modelled (`JsonFuns.v`, `my_table_funs`) |
+| `MATCH ... AGAINST` | excluded: needs a full-text index and its relevance ranking |
+| `REGEXP`, `REGEXP_*` (ICU) | modelled (`Regex.v`, flavor ICU) |
+| `utf8mb4_0900_ai_ci`, `utf8mb4_general_ci`, `utf8mb4_bin` | modelled (`Collation.v`); accent folding beyond the tables is open |
+| `LIMIT n`, `LIMIT o, n`, `LIMIT n OFFSET o` | modelled |
+| `TABLE t`, `VALUES ROW(...)` statements | modelled (`SELECT * FROM t`, `values_`) |
+| `INTERSECT`, `EXCEPT` (8.0.31), `LATERAL` (8.0.14), windows and CTEs (8.0) | modelled, with version flags |
+| User variables `@a := ...` in a query | excluded: the order of evaluation is unspecified (the manual says so) |
+| `SELECT ... INTO`, hints, `FOR UPDATE` | no result semantics (TODO 3.11) |
+| `DIV`, `MOD`, `%`, bit operators (64-bit unsigned) | modelled |
+
+### MariaDB (4.3)
+
+Functions: `docs/closeouts/MariaDB.md` (264 names; 30 not modelled yet). Differences from MySQL are in the table of
+"The MySQL family" above (`uca1400` collations, `FILTER`-free, `INTERSECT ALL` since 10.5, `WITH TIES` since 10.6,
+PCRE regular expressions). Excluded: the Oracle mode (`sql_mode=ORACLE`, its `*_oracle` functions), system-versioned
+tables (`FOR SYSTEM_TIME`: the history of a table is not in the database of the model), sequences (`NEXTVAL`: state),
+dynamic columns (`COLUMN_*`: blobs). `ROWNUM()` is the `rownum_le` derived form; `MEDIAN` and `PERCENTILE_*` are the
+ordered-set aggregates (`Aggregates.v`).
+
+### TiDB (4.4)
+
+Functions: `docs/closeouts/TiDB.md` (467 names of `ast/functions.go`; 19 not modelled yet). Collation `utf8mb4_bin`
+with the new collation framework (modelled), `utf8mb4_general_ci` and `utf8mb4_unicode_ci` (modelled by `Collation.v`),
+`gbk_*` excluded (character set). `tidb_*` variables which change results: none for `SELECT` besides `sql_mode`;
+`tidb_enable_*`, `tidb_opt_*` change plans only. `AS OF TIMESTAMP` (stale read) excluded: the history of the database is
+not in the model. `FULL OUTER JOIN`, `INTERSECT/EXCEPT [ALL]`, recursive CTEs, windows, `ROLLUP` + `GROUPING`, JSON and
+RE2 regular expressions are modelled. `TABLESAMPLE` excluded (random).
+
+### Percona Server (4.5)
+
+Percona Server's SQL layer is MySQL's; its source (`percona/percona-server`) was not available in the development
+environment, so the diff of `sql/` against MySQL could not be made. From the Percona documentation: no additional
+`SELECT` syntax; extra functions are server-administration ones (excluded for the same reason as MySQL's). The dialect
+`Percona` is `MySQL` (`Percona.v`), and its function catalogue is `docs/closeouts/MySQL.md`. Open: the diff from source.
+
+### PolarDB (4.6)
+
+PolarDB for MySQL 8.0.1/8.0.2 follows MySQL 8.0.13/8.0.18 (from the Alibaba documentation, "Engine versions"); the dialect
+`PolarDB` is MySQL without `INTERSECT`/`EXCEPT` (`polar_supports`). Hints and parallel query have no effect on results;
+the `IMCI` columnar engine returns the same results (excluded: plans). PolarDB-X (distributed) and the PostgreSQL/Oracle
+editions are not added as dialects: their engines are not open, and the PostgreSQL edition is covered by PostgreSQL.
+
+### SQLite (4.7)
+
+Functions: `docs/closeouts/SQLite.md` (3.54.0 amalgamation; 19 not modelled yet). Constructs: `group_concat` with
+`ORDER BY`, `NULLS FIRST/LAST`, `FILTER`, windows and `GROUPS` frames, `LIMIT` expressions, `VALUES`, the bare columns of
+`min`/`max` (`F_Bare_Column`), `typeof`, affinity in comparisons (`vs_cmp_coerce`) are modelled. `ROWID`/`_rowid_`
+excluded (physical identifiers: not in the database of the model). `INDEXED BY`, `WITHOUT ROWID`, generated columns,
+`RETURNING`: no effect on `SELECT` results. Pragmas: `case_sensitive_like` changes `LIKE` (modelled: the default,
+insensitive for ASCII); `reverse_unordered_selects` changes only unspecified orders (no effect on the bag);
+`legacy_alter_table` concerns DDL.
+
+### OceanBase MySQL mode (4.8)
+
+Functions: `docs/closeouts/OceanBaseMySQL.md` (527 names registered by `REG_OP`; 72 not modelled yet, mostly the array,
+map and vector functions of 4.3). Constructs: as MySQL, with the differences of the table "Where the dialects differ"
+(`PAD SPACE` collation, `MINUS`, `FULL JOIN`, `GROUPING SETS` in MySQL mode). Hints have no semantic effect. Conformance:
+768/769 of the recorded results (`docs/CONFORMANCE.md`). Functions of the Oracle mode: `docs/closeouts/OceanBaseOracle.md`.
+
 ## Versions (TODO 4.10)
 
 `src/data/dialects/Versions.v` gives the release which introduced each construct (`introduced`), per family
