@@ -144,14 +144,17 @@ class P:
 
     # ---- queries
     def query(self):
-        q = self.select_or_paren()
+        # INTERSECT binds tighter than UNION and EXCEPT in PostgreSQL and MySQL (8.0.31); SQLite and
+        # Oracle give them the same precedence, from left to right
+        tight = ENGINE in ('postgresql', 'mysql')
+        q = self.intersect_term() if tight else self.select_or_paren()
         while self.kw('union', 'intersect', 'except', 'minus'):
             op = self.peek()[1].lower()
             self.i += 1
             allq = self.eat_kw('all')
             if not allq:
                 self.eat_kw('distinct')
-            r = self.select_or_paren()
+            r = self.intersect_term() if tight else self.select_or_paren()
             q = ('setop', op, allq, q, r)
         order = None
         if self.kw('order'):
@@ -161,6 +164,17 @@ class P:
             limit = self.limit()
         if order is not None or limit is not None:
             q = ('orderq', q, order or [], limit)
+        return q
+
+    def intersect_term(self):
+        q = self.select_or_paren()
+        while self.kw('intersect'):
+            self.i += 1
+            allq = self.eat_kw('all')
+            if not allq:
+                self.eat_kw('distinct')
+            r = self.select_or_paren()
+            q = ('setop', 'intersect', allq, q, r)
         return q
 
     def select_or_paren(self):
@@ -257,15 +271,23 @@ class P:
         raise Skip('identifier')
 
     def from_clause(self):
+        # a comma binds less than JOIN: a, b JOIN c ON .. is a, (b JOIN c ON ..)
+        item = self.join_chain()
+        while self.eat_op(','):
+            item = ('join', 'cross', item, self.join_chain(), None)
+        return item
+
+    def join_chain(self):
         item = self.table_ref()
         while True:
-            if self.eat_op(','):
-                item = ('join', 'cross', item, self.table_ref(), None)
-                continue
             jt = None
-            if self.kw('natural'):
-                raise Skip('natural join')
-            if self.eat_kw('cross'):
+            natural = False
+            if self.eat_kw('natural'):
+                natural = True
+            if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'straight_join':
+                self.i += 1
+                jt = 'inner'
+            elif self.eat_kw('cross'):
                 self.need_kw('join')
                 jt = 'cross'
             elif self.eat_kw('inner'):
@@ -279,14 +301,23 @@ class P:
             elif self.eat_kw('join'):
                 jt = 'inner'
             else:
+                if natural:
+                    raise Skip('natural')
                 break
             r = self.table_ref()
             cond = None
-            if self.eat_kw('on'):
+            using = None
+            if natural:
+                using = 'natural'
+            elif self.eat_kw('on'):
                 cond = self.expr()
-            elif self.kw('using'):
-                raise Skip('using')
-            item = ('join', jt, item, r, cond)
+            elif self.eat_kw('using'):
+                self.need_op('(')
+                using = [self.ident()]
+                while self.eat_op(','):
+                    using.append(self.ident())
+                self.need_op(')')
+            item = ('join', jt, item, r, cond, using)
         return item
 
     def table_ref(self):
@@ -315,7 +346,7 @@ class P:
         alias = name
         if self.eat_kw('as'):
             alias = self.ident()
-        elif self.peek()[0] == 'id' and not self.kw('join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'on', 'where', 'group', 'order', 'limit', 'having', 'union', 'intersect', 'except', 'minus', 'using', 'use', 'force', 'ignore', 'partition'):
+        elif self.peek()[0] == 'id' and not self.kw('join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'on', 'where', 'group', 'order', 'limit', 'having', 'union', 'intersect', 'except', 'minus', 'using', 'use', 'force', 'ignore', 'partition', 'straight_join'):
             alias = self.ident()
         if self.kw('use', 'force', 'ignore', 'partition'):
             raise Skip('index hint')
@@ -900,6 +931,13 @@ class Ctx:
         self.tables = tables  # dict name -> Table
         self.scope = []  # list of (alias, Table)
         self.parent = parent
+        # the columns merged by USING / NATURAL: name -> (alias, name, kind) or ('coalesce', l, r)
+        self.merged = {}
+        # the columns of SELECT * in order (alias, name, kind), when a USING join fixed it
+        self.star = None
+
+    def star_of(self, scope):
+        return [(alias, n, kd) for alias, t in scope for n, kd in t.cols]
 
     def resolve(self, q, c):
         try:
@@ -910,6 +948,8 @@ class Ctx:
             raise
 
     def resolve_here(self, q, c):
+        if q is None and c.lower() in self.merged:
+            return self.merged[c.lower()]
         cands = []
         for alias, t in self.scope:
             if q is not None and q.lower() != alias.lower():
@@ -995,7 +1035,12 @@ class Tr:
         if k == 'null':
             return '(cst NullZ)'
         if k == 'col':
-            alias, name, kind = self.ctx.resolve(e[1], e[2])
+            r = self.ctx.resolve(e[1], e[2])
+            if r[0] == 'coalesce':
+                # the merged column of a FULL JOIN ... USING
+                (la, ln, lk), (ra, rn, rk) = r[1], r[2]
+                return '(fn "coalesce" [(col %s); (col %s)])' % (attr(lk, la + '.' + ln), attr(rk, ra + '.' + rn))
+            alias, name, kind = r
             return '(col %s)' % attr(kind, alias + '.' + name)
         if k == 'neg':
             return '(fn "neg" [%s])' % self.ex(e[1])
@@ -1246,11 +1291,57 @@ class QTr:
             return '(from_as %s [%s])' % (cq, ren)
         if k == 'join':
             jt, l, r, c = f[1], f[2], f[3], f[4]
+            using = f[5] if len(f) > 5 else None
+            nl = len(ctx.scope)
             lt = self.frm(l, ctx)
+            lscope = ctx.scope[nl:]
+            # the left operand may itself be a join with USING, whose * is fixed
+            lstar = ctx.star if ctx.star is not None else ctx.star_of(lscope)
+            nr = len(ctx.scope)
             rt = self.frm(r, ctx)
+            rscope = ctx.scope[nr:]
+            rstar = ctx.star_of(rscope)
+            ty = {'cross': 'J_Inner', 'inner': 'J_Inner', 'left': 'J_Left', 'right': 'J_Right', 'full': 'J_Full'}[jt]
+            if using is not None:
+                # USING (c, ...) or NATURAL: the common columns are equal, and merged
+                lnames = [n for (_, n, _) in lstar]
+                rnames = [n for (_, n, _) in rstar]
+                if using == 'natural':
+                    cols = [n for n in lnames if n.lower() in [x.lower() for x in rnames]]
+                else:
+                    cols = using
+                pairs = []
+                for cn in cols:
+                    lc = [x for x in lstar if x[1].lower() == cn.lower()]
+                    rc = [x for x in rstar if x[1].lower() == cn.lower()]
+                    if len(lc) != 1 or len(rc) != 1 or lc[0][0] == 'merged' or rc[0][0] == 'merged':
+                        raise Skip('using column ' + cn)
+                    pairs.append((lc[0], rc[0]))
+                conds = ['(pred "=" [(col %s); (col %s)])' % (attr(a[2], a[0] + '.' + a[1]), attr(b[2], b[0] + '.' + b[1]))
+                         for a, b in pairs]
+                cond = 'c_true'
+                for cc in conds:
+                    cond = cc if cond == 'c_true' else '(c_and %s %s)' % (cond, cc)
+                merged_keys = []
+                for a, b in pairs:
+                    if jt == 'full':
+                        ctx.merged[a[1].lower()] = ('coalesce', a, b)
+                    elif jt == 'right':
+                        ctx.merged[a[1].lower()] = b
+                    else:
+                        ctx.merged[a[1].lower()] = a
+                    merged_keys.append(a[1].lower())
+                # SELECT *: the merged columns, then the others of the left, then of the right; a RIGHT JOIN
+                # is a LEFT JOIN of the operands swapped (MySQL), so its right operand comes first
+                lrest = [x for x in lstar if x[1].lower() not in merged_keys]
+                rrest = [x for x in rstar if x[1].lower() not in merged_keys]
+                ctx.star = ([('merged', a[1], a[2]) for a, b in pairs]
+                            + (rrest + lrest if jt == 'right' else lrest + rrest))
+                return '(join %s %s %s %s)' % (ty, lt, rt, cond)
             tr = Tr(ctx, self)
             cond = tr.cond(c) if c is not None else 'c_true'
-            ty = {'cross': 'J_Inner', 'inner': 'J_Inner', 'left': 'J_Left', 'right': 'J_Right', 'full': 'J_Full'}[jt]
+            if ctx.star is not None:
+                ctx.star = ctx.star + [x for x in rstar]
             return '(join %s %s %s %s)' % (ty, lt, rt, cond)
         raise Skip('from')
 
@@ -1302,6 +1393,10 @@ class QTr:
             if it[0] == 'star':
                 if not ctx.scope:
                     raise Skip('star without from')
+                if ctx.star is not None:
+                    for alias, n, kd in ctx.star:
+                        exprs.append((('col', None if alias == 'merged' else alias, n), n))
+                    continue
                 for alias, t in ctx.scope:
                     for n, kd in t.cols:
                         exprs.append((('col', alias, n), n))

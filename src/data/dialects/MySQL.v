@@ -918,6 +918,19 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
   :: nil.
 
 (** The constructs of MySQL 8.0 (8.0.31 and later for [INTERSECT] and [EXCEPT]). *)
+(** The type of a column of a set operation ([Item_type_holder]): with a [DECIMAL] value and no double or
+    string, the column is a [DECIMAL] with the largest scale of its values, and every value (integers
+    too) is shown with that scale (TODO 3.3) *)
+Definition my_unify_column (l : list value) : list value :=
+  let is_str v := match v with Value_string (Some _) | Value_C (Some _) => true | _ => false end in
+  if existsb is_D l && negb (existsb (fun v => is_F v || is_str v) l) then
+    let sc := fold_left (fun acc v => match v with Value_D (Some (_, _, s)) => Nat.max acc s | _ => acc end) l 0%nat in
+    map (fun v => match v with
+                  | Value_D (Some (q, _, _)) => VDec q sc sc
+                  | Value_Z (Some z) | Value_I (Some (z, _)) => VDec (Qc_of_Z z) sc sc
+                  | _ => v end) l
+  else l.
+
 Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
@@ -969,7 +982,8 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
                                           else VDec (Qc_of_Z z) 0 0
                     | _ => v end)
           (fun _ => false)
-          (fun _ _ l => l).
+          (fun _ _ l => l)
+          my_unify_column.
 
 End Session.
 

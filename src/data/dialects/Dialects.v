@@ -62,7 +62,9 @@ Record vsem : Type :=
       (** the values which cannot be used as a condition *)
       vs_truth_error : value -> bool;
       (** the conversion of the operands of a comparison by their affinities (SQLite) *)
-      vs_cmp_coerce : string -> list nat -> list value -> list value
+      vs_cmp_coerce : string -> list nat -> list value -> list value;
+      (** the values of a column of the result of a set operation, in the type of the column (TODO 3.3) *)
+      vs_unify : list value -> list value
     }.
 
 (** [DISTINCT] aggregates: the name of the aggregate starts with ["distinct "]. *)
@@ -167,7 +169,8 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (vs_const d)
              (vs_truth_error d)
              (fun a => match a with Attr_string _ => 1%nat | Attr_Z _ | Attr_bool _ => 2%nat | _ => 2%nat end)
-             (fun p ks l => match p with Values.Predicate s => vs_cmp_coerce d s ks l end).
+             (fun p ks l => match p with Values.Predicate s => vs_cmp_coerce d s ks l end)
+             (vs_unify d).
 
 (** * Moving a query to a dialect
 

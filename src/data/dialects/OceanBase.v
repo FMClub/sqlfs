@@ -524,4 +524,5 @@ Definition OceanBaseOracle : vsem :=
           (* a [NUMBER] has no display scale: [1.50] is [1.5] *)
           (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end)
           (fun _ => false)
-          (fun _ _ l => l).
+          (fun _ _ l => l)
+          (fun l => l).

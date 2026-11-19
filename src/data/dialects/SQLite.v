@@ -665,4 +665,5 @@ Definition SQLite : vsem :=
           (* a literal with a decimal point is a [REAL] *)
           lite_real
           (fun _ => false)
-          lite_cmp_coerce.
+          lite_cmp_coerce
+          (fun l => l).

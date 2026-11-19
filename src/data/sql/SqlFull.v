@@ -262,7 +262,11 @@ Record dialect : Type :=
           conversion of the operands of a predicate according to the affinities of their expressions
           ("Type Conversions Prior To Comparison", datatype3.html); the identity for the other dialects *)
       attr_affinity : attribute -> nat;
-      cmp_coerce : predicate -> list nat -> list value -> list value
+      cmp_coerce : predicate -> list nat -> list value -> list value;
+      (** the values of a column of the result of a set operation, converted to the type which the dialect
+          gives to that column (TODO 3.3): MySQL gives a [DECIMAL] column the largest scale of its values
+          ([SELECT 1 UNION SELECT 2.5] is [1.0], [2.5]); the identity for PostgreSQL and SQLite *)
+      unify_column : list value -> list value
     }.
 
 Hypothesis O : dialect.
@@ -785,6 +789,18 @@ Definition keep_errors (r all : list tuple) : list tuple :=
   if existsb row_error r then r else r ++ map err_row (filter row_error all).
 
 Definition first_error (l : list value) : option value := find (is_error O) l.
+
+(** the columns [atts] of the rows [rows], each unified by [unify_column] *)
+Definition unify_rows (atts : list attribute) (rows : list tuple) : list tuple :=
+  let cols := map (fun a => (a, unify_column O (map (fun t => dot T t a) rows))) atts in
+  map (fun (it : nat * tuple) =>
+         let (i, t) := it in
+         mk_tuple T (labels T t)
+                  (fun x => match find (fun (c : attribute * list value) => Oset.eq_bool (OAtt T) (fst c) x) cols with
+                            | Some (_, vs) => nth i vs (dot T t x)
+                            | None => dot T t x
+                            end))
+      (combine (seq 0 (List.length rows)) rows).
 
 (** * Columns and aggregates *)
 
@@ -1608,7 +1624,7 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
     if Fset.equal (A T) (squery_sort ce q1) (squery_sort ce q2)
     then let l1 := eval_squery ce env q1 in
          let l2 := eval_squery ce env q2 in
-         keep_errors (eval_set_op o sq l1 l2) (l1 ++ l2)
+         unify_rows ({{{squery_sort ce q1}}}) (keep_errors (eval_set_op o sq l1 l2) (l1 ++ l2))
     else nil
   | SQ_Select sp => map (@fst _ _) (eval_sspec ce env sp nil)
   | SQ_Order q lo off lim =>

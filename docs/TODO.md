@@ -357,7 +357,39 @@ Targets: every function of the table is either modelled or has an explicit exclu
   - Replaying PostgreSQL's `window.sql` needs the PostgreSQL regression harness of Phase 5.2.
 - **3.2 Joins**: `USING` (merged column, order of columns in `SELECT *`, `NATURAL` over several columns with the engine's column ordering), `JOIN ... ON` with outer joins and `WHERE` pushdown independence (semantic equivalence lemmas), comma joins precedence vs `JOIN` (MySQL: `JOIN` binds tighter than comma),
   `STRAIGHT_JOIN`, semi/anti joins (`LEFT SEMI`, not SQL), `CROSS APPLY`/`OUTER APPLY` (Oracle mode: `LATERAL` forms), `(+)` Oracle outer-join operator, full join `ON` with non-equi conditions.
+  **Status: DONE**. Tests are in `src/testing/Test_Joins.v`, and OceanBase's `join_using1` (12 queries) passes.
+
+  The translator handles the join syntax:
+  - `USING` and `NATURAL`: the join is on the equality of the common columns, and an unqualified
+    reference to a merged column is the left column (the right one for `RIGHT JOIN`, their `COALESCE`
+    for `FULL JOIN`).
+  - `SELECT *` lists the merged columns first. The other columns follow, the right operand's first for
+    `RIGHT JOIN`, as MySQL does.
+  - A comma binds less than `JOIN`: `a, b JOIN c ON ...` is `a, (b JOIN c ON ...)`.
+  - `STRAIGHT_JOIN` is read.
+
+  The core and the derived forms:
+  - Pushing a condition down into an inner join's `ON` is proved: `inner_join_where` in `SqlFullFacts.v`.
+  - For an outer join, a test shows that `ON` and `WHERE` differ.
+  - New derived forms: `straight_join` (an inner join), and `cross_apply`/`outer_apply` (lateral inner and
+    left joins). The Oracle `(+)` operator is written as the corresponding outer join, as documented in
+    `SqlFullSyntax.v`.
+  - Full joins with a non-equality `ON` condition are covered by the general join, and tested.
+
+  Not modelled: semi- and anti-joins, which are not SQL syntax.
 - **3.3 Set operations**: precedence (`INTERSECT` before `UNION`/`EXCEPT`; MySQL 8.0.31+ same), parenthesised operands with their own `ORDER BY`/`LIMIT`, column naming and type unification (`UNION` of int and decimal), `MINUS` (Oracle), `EXCEPT ALL`/`INTERSECT ALL` multiplicity laws, `CORRESPONDING` (not in these engines: exclusion note), and NULL-equality in set operations per collation.
+  **Status: DONE**. Tests are in `src/testing/Test_SetOps.v`.
+  - Precedence (translator): `INTERSECT` binds tighter than `UNION`/`EXCEPT` for PostgreSQL and MySQL. SQLite and Oracle give them the same precedence, from left to right.
+  - Parenthesized operands keep their own `ORDER BY`/`LIMIT` (`order_limit` inside `SQ_Set`).
+  - Type unification: the new dialect field `unify_column` (`vs_unify`) converts the values of each
+    column of a set operation to the column's type. MySQL gives a `DECIMAL` column the largest scale
+    (`SELECT 1 UNION SELECT 2.5` gives `1.0`, `2.5`); PostgreSQL and SQLite leave the values.
+    `union_all_spec` now states its hypothesis that the dialect leaves the values.
+  - The column names of a set operation are those of the first operand (translator).
+  - `MINUS` is `EXCEPT` (`Diff`).
+  - The multiplicities of `EXCEPT ALL`/`INTERSECT ALL` are tested (`max(m - n, 0)` and `min(m, n)`).
+  - NULLs are not distinct from each other in set operations, and equality follows the dialect's collation.
+  - `CORRESPONDING` is in none of the engines and is excluded.
 - **3.4 Table functions and sources**: `generate_series`, `unnest ... WITH ORDINALITY`, `json_table`/`JSON_TABLE`, `json_each`/`json_tree`, `jsonb_array_elements`, `string_to_table`, `regexp_split_to_table`, `XMLTABLE` (decide scope), `(VALUES ...) AS t(a, b)`, `TABLE t`, `SELECT` without `FROM`, `DUAL`, SQLite virtual tables and `pragma_*` table-valued functions, `INFORMATION_SCHEMA` as ordinary tables with engine-specific contents.
 - **3.5 `GROUP BY` / `ORDER BY` forms**: ordinals (`GROUP BY 1`), output aliases (MySQL/SQLite allow in `GROUP BY`/`HAVING`/`ORDER BY`; PostgreSQL only in `ORDER BY` and `GROUP BY`), expressions over aliases; `GROUP BY ... WITH ROLLUP` ordering details (MySQL `GROUPING()`, sort of result); `ORDER BY` with `COLLATE`; the ordering of NULLs per type; `ORDER BY` inside views and subqueries (ignored unless `LIMIT`); stable vs unspecified sort of ties (set-valued result: `results : set of lists`).
 - **3.6 Recursion**: multiple CTEs referencing each other, mutual recursion (`WITH RECURSIVE a ..., b ...`), `SEARCH DEPTH/BREADTH FIRST`, `CYCLE` (PostgreSQL, Oracle), recursive CTE restrictions per engine (no aggregates in the recursive term in MySQL, `UNION` vs `UNION ALL`, `LIMIT` in recursive term, data type of the anchor decides column types and truncation in MySQL), per-engine recursion limits (`cte_max_recursion_depth` = 1000 in MySQL/MariaDB/TiDB errors instead of returning the first 1000 steps, which today's `rec_fuel` does: change to an error after 1.1).

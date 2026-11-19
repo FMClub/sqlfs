@@ -193,6 +193,37 @@ apply filter_map_ext_in.
 intros t Ht; destruct (H2 t Ht) as [Ha Hb]; rewrite Hb; split; [apply refl_equal | intros; apply refl_equal].
 Qed.
 
+(** A condition on the rows of an inner join can be moved into its [ON] condition ("predicate
+    pushdown", TODO 3.2), when no row fails and no condition raises an error. This does not hold for an
+    outer join: a row of the left operand without a match is kept (with NULLs) by [ON], but removed by a
+    [WHERE] on the right columns (see [src/testing/Test_Joins.v]). *)
+Theorem inner_join_where :
+  forall ce env f1 f2 c p,
+    let l1 := eval_sfrom ce env f1 in
+    let l2 := eval_sfrom ce env f2 in
+    existsb (row_error O) (l1 ++ l2) = false ->
+    (forall t, In t (cross_product T l1 l2) ->
+               row_error O t = false /\ scond_raises ce (slice_t T relname t :: env) c = false /\
+               scond_raises ce (slice_t T relname t :: env) (C_Conj And_F c p) = false) ->
+    filter (fun t => is_true3 T (eval_scond ce (slice_t T relname t :: env) p))
+           (eval_sfrom ce env (Fr_Join J_Inner false f1 f2 c)) =
+    eval_sfrom ce env (Fr_Join J_Inner false f1 f2 (C_Conj And_F c p)).
+Proof.
+intros ce env f1 f2 c p l1 l2 H1 H2.
+rewrite (inner_join_spec ce env f1 f2 c H1); 
+  [ | intros t Ht; destruct (H2 t Ht) as [Ha [Hb _]]; split; assumption].
+rewrite (inner_join_spec ce env f1 f2 (C_Conj And_F c p) H1); 
+  [ | intros t Ht; destruct (H2 t Ht) as [Ha [_ Hc]]; split; assumption].
+rewrite filter_filter.
+apply filter_ext; intro t.
+replace (eval_scond ce (slice_t T relname t :: env) (C_Conj And_F c p))
+  with (Bool.andb (B T) (eval_scond ce (slice_t T relname t :: env) c) (eval_scond ce (slice_t T relname t :: env) p))
+  by reflexivity.
+unfold is_true3; rewrite Bool.is_true_andb.
+destruct (Bool.is_true (B T) (eval_scond ce (slice_t T relname t :: env) p));
+  destruct (Bool.is_true (B T) (eval_scond ce (slice_t T relname t :: env) c)); apply refl_equal.
+Qed.
+
 (** The rows of a left join which are not padded with NULLs are those of the
     inner join: a left join without unmatched row is an inner join. *)
 Lemma left_join_no_padding :
@@ -322,18 +353,24 @@ Qed.
 
 (** * Set operations *)
 
+(** [UNION ALL] is the concatenation, when the dialect does not convert the values of the columns of a
+    set operation (PostgreSQL, SQLite; MySQL converts decimals to a common scale) and the rows are
+    tuples ([mk_tuple] of the labels and [dot] of a tuple is that tuple) *)
 Lemma union_all_spec :
   forall ce env q1 q2,
+    (forall l, unify_column O l = l) ->
+    (forall atts rows, unify_rows O atts rows = rows) ->
     Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN basesort ce q2) = true ->
     eval_squery ce env (SQ_Set Union Set_All q1 q2) = 
     eval_squery ce env q1 ++ eval_squery ce env q2.
 Proof.
-intros ce env q1 q2 H.
+intros ce env q1 q2 _ Hu H.
 change ((if Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN basesort ce q2)
-         then keep_errors O (eval_set_op O Union Set_All (eval_squery ce env q1) (eval_squery ce env q2))
-                          (eval_squery ce env q1 ++ eval_squery ce env q2)
+         then unify_rows O ({{{squery_sort ORN basesort ce q1}}})
+                (keep_errors O (eval_set_op O Union Set_All (eval_squery ce env q1) (eval_squery ce env q2))
+                          (eval_squery ce env q1 ++ eval_squery ce env q2))
          else nil) = eval_squery ce env q1 ++ eval_squery ce env q2).
-rewrite H; apply keep_errors_self.
+rewrite H, Hu; apply keep_errors_self.
 Qed.
 
 End Sec.
