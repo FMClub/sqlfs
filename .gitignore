@@ -14,3 +14,4 @@ src/CoqMakeFile.conf
 src/.CoqMakeFile.d
 src/testing/spec/
 src/testing/spec_slt/
+__pycache__/

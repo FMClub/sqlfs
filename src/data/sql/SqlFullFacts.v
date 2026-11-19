@@ -175,18 +175,22 @@ Theorem inner_join_spec :
     filter (fun t => is_true3 T (eval_scond ce (slice_t T relname t :: env) c)) (cross_product T l1 l2).
 Proof.
 intros ce env f1 f2 c l1 l2 H1 H2.
-change (keep_errors O 
+change ((if existsb (row_error O) (l1 ++ l2) then keep_errors O 
           (eval_join T J_Inner (sfrom_sort ORN basesort ce f1) (sfrom_sort ORN basesort ce f2) l1 (fun _ => l2) l2
-             (fun t => row_error O t || scond_raises ce (slice_t T relname t :: env) c || 
+             (fun t => (existsb (row_error O) (l1 ++ l2) && row_error O t) || scond_raises ce (slice_t T relname t :: env) c || 
                        is_true3 T (eval_scond ce (slice_t T relname t :: env) c))
              (fun t => if scond_raises ce (slice_t T relname t :: env) c then err_row O t else t))
-          (l1 ++ l2) = 
+          (l1 ++ l2) else
+          eval_join T J_Inner (sfrom_sort ORN basesort ce f1) (sfrom_sort ORN basesort ce f2) l1 (fun _ => l2) l2
+             (fun t => (existsb (row_error O) (l1 ++ l2) && row_error O t) || scond_raises ce (slice_t T relname t :: env) c || 
+                       is_true3 T (eval_scond ce (slice_t T relname t :: env) c))
+             (fun t => if scond_raises ce (slice_t T relname t :: env) c then err_row O t else t)) = 
         filter (fun t => is_true3 T (eval_scond ce (slice_t T relname t :: env) c)) (cross_product T l1 l2)).
-rewrite keep_errors_no_error; [ | assumption].
+rewrite H1; simpl andb; cbv beta.
 unfold eval_join; cbv beta iota zeta.
 rewrite join_flat_map.
 apply filter_map_ext_in.
-intros t Ht; destruct (H2 t Ht) as [Ha Hb]; rewrite Ha, Hb; split; [apply refl_equal | intros; apply refl_equal].
+intros t Ht; destruct (H2 t Ht) as [Ha Hb]; rewrite Hb; split; [apply refl_equal | intros; apply refl_equal].
 Qed.
 
 (** The rows of a left join which are not padded with NULLs are those of the

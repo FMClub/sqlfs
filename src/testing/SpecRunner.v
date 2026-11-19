@@ -64,7 +64,8 @@ Definition cell_ok (v : NullValues.value) (s : string) : bool :=
        | NullValues.Value_F (Some _) => match text_of v with Some t => String.eqb s t | None => false end
        | NullValues.Value_bool (Some b) => String.eqb s (if b then "1" else "0")
        | NullValues.Value_string (Some t) => String.eqb s t
-       | _ => false
+       (* the dates, the intervals, the JSON documents and the collated strings: by their text *)
+       | _ => match text_of v with Some t => String.eqb s t | None => false end
        end.
 
 Fixpoint row_ok (r : list NullValues.value) (e : list string) : bool :=

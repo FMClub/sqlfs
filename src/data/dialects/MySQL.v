@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Values Dialects ValueKit PostgreSQL Collation.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -90,9 +90,30 @@ Definition explicit_coll (v : value) : option (collation * bool) :=
 Definition str_value (v : value) : option string :=
   match v with Value_string (Some s) => Some s | Value_C (Some (s, _)) => Some s | _ => None end.
 
-Definition my_compare (v1 v2 : value) : option comparison :=
+Definition my_compare_base (v1 v2 : value) : option comparison :=
   if (is_null v1 || is_null v2)%bool then None
-  else match str_value v1, str_value v2 with
+  else 
+  (* a date or a time with a string: the string is read as a value of the same type; with a number: the
+     temporal value is a number ([Arg_comparator::set_cmp_func]) *)
+  match v1, v2 with
+  | Value_T (Some _), Value_T (Some _) => temporal_compare v1 v2
+  | Value_T (Some _), Value_string (Some t) => match parse_like v1 t with Some w => temporal_compare v1 w | None => None end
+  | Value_string (Some t), Value_T (Some _) => match parse_like v2 t with Some w => temporal_compare w v2 | None => None end
+  | Value_T (Some _), _ | _, Value_T (Some _) =>
+    (* an integer with a date or a datetime: the integer read as a datetime *)
+    let as_dt (t n : value) := 
+        match to_ts t, n with
+        | Some x, Value_Z (Some z) => match my_number_to_datetime z with Some y => Some (x, y) | None => None end
+        | _, _ => None end in
+    match as_dt v1 v2, as_dt v2 v1 with
+    | Some (x, y), _ => Some (Z.compare x y)
+    | None, Some (x, y) => Some (Z.compare y x)
+    | None, None =>
+    let num v := match my_temporal_number v with Some (q, _) => Some (Num_Q q) | None => lenient v end in
+    match num v1, num v2 with Some a, Some b => Some (num_cmp a b) | _, _ => None end
+    end
+  | _, _ =>
+  match str_value v1, str_value v2 with
        | Some a, Some b => 
          let (c, p) := match explicit_coll v1, explicit_coll v2 with
                        | Some cp, _ | None, Some cp => cp
@@ -103,7 +124,16 @@ Definition my_compare (v1 v2 : value) : option comparison :=
                  | Some a, Some b => Some (num_cmp a b)
                  | _, _ => None
                  end
-       end.
+       end
+  end.
+
+(** two JSON values are compared by their normalized texts; a JSON scalar with a SQL value as a SQL
+    value ([Item_func_json...], [compare_json]) *)
+Definition my_compare (v1 v2 : value) : option comparison :=
+  match v1, v2 with
+  | Value_J (Some (a, _)), Value_J (Some (b, _)) => Some (string_compare a b)
+  | _, _ => my_compare_base (json_scalar v1) (json_scalar v2)
+  end.
 
 Definition my_order (a b : value) : comparison :=
   match my_compare a b with Some c => c | None => value_compare a b end.
@@ -270,8 +300,13 @@ Definition my_locate (l : list value) : value :=
 
 Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
-  let plus := my_arith2 (Some Z.add) my_dplus (num_fun2 conv (fun a b => Some (num_plus a b))) in
-  let minus := my_arith2 (Some Z.sub) my_dminus (num_fun2 conv (fun a b => Some (num_minus a b))) in
+  let with_interval (sign : Z) (f : list value -> value) (l : list value) :=
+      match l with
+      | d :: Value_V iv :: nil => my_date_add sign d (Value_V iv)
+      | Value_V iv :: d :: nil => if Z.eqb sign 1 then my_date_add 1 d (Value_V iv) else f l
+      | _ => f l end in
+  let plus := with_interval 1 (my_arith2 (Some Z.add) my_dplus (num_fun2 conv (fun a b => Some (num_plus a b)))) in
+  let minus := with_interval (-1) (my_arith2 (Some Z.sub) my_dminus (num_fun2 conv (fun a b => Some (num_minus a b)))) in
   let mult := my_arith2 (Some Z.mul) my_dmult (num_fun2 conv (fun a b => Some (num_mult a b))) in
   let opp l := match l with
                | Value_D (Some (q, f, s)) :: nil => VDec (Qcopp q) f s
@@ -380,6 +415,105 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                                        | Some p, Some s => my_cast_decimal p s v
                                                        | _, _ => Value_D None end
                                | _ => Value_D None end)
+  (* JSON *)
+  :: ("json_extract", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
+  :: ("->", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
+  :: ("->>", fun l => match l with d :: p :: nil => my_json_unquote (my_json_extract d p) | _ => Value_string None end)
+  :: ("json_unquote", fun l => match l with v :: nil => my_json_unquote v | _ => Value_string None end)
+  :: ("json_object", fun l => 
+        let fix pairs (l : list value) : option (list (string * json)) :=
+            match l with
+            | nil => Some nil
+            | k :: v :: r => match text_of k, pairs r with
+                             | Some key, Some rest => Some ((key, my_json_of_value v) :: rest)
+                             | _, _ => None end
+            | _ => None end in
+        match pairs l with Some ps => VJ 0 (JObj ps) | None => Value_Err "Incorrect parameter count" end)
+  :: ("json_array", fun l => VJ 0 (JArr (map my_json_of_value l)))
+  :: ("json_quote", fun l => match l with v :: nil => match text_of v with Some t => Value_string (Some (text_compact (JStr t))) | None => Value_string None end | _ => Value_string None end)
+  :: ("json_valid", fun l => match l with 
+                             | v :: nil => if is_null v then Value_Z None 
+                                           else match v with Value_J _ => Value_Z (Some 1) | _ => 
+                                                match text_of v with Some t => Value_Z (Some (match parse_json t with Some _ => 1 | None => 0 end)) | None => Value_Z None end end
+                             | _ => Value_Z None end)
+  :: ("json_type", fun l => match l with 
+                            | v :: nil => match my_json_doc v with Some (Some j) => Value_string (Some (my_json_type_name j)) | Some None => Value_string None | None => Value_Err "Invalid JSON text in argument 1" end
+                            | _ => Value_string None end)
+  :: ("json_length", fun l => match l with 
+                              | v :: nil => match my_json_doc v with Some (Some j) => Value_Z (Some (json_length j)) | Some None => Value_Z None | None => Value_Err "Invalid JSON text in argument 1" end
+                              | v :: p :: nil => match my_json_extract v p with Value_J (Some (t, _)) => match parse_json t with Some j => Value_Z (Some (json_length j)) | None => Value_Z None end | Value_Err e => Value_Err e | _ => Value_Z None end
+                              | _ => Value_Z None end)
+  :: ("json_keys", fun l => match l with 
+                            | v :: nil => match my_json_doc v with Some (Some (JObj ms)) => VJ 0 (JArr (map (fun m => JStr (fst m)) (normalize_members ms))) | Some _ => Value_J None | None => Value_Err "Invalid JSON text in argument 1" end
+                            | _ => Value_J None end)
+  :: ("json_contains", fun l => match l with 
+                                | t :: c :: nil => match my_json_doc t, my_json_doc c with
+                                                   | Some (Some x), Some (Some y) => Value_Z (Some (if json_contains (json_size x + json_size y) (normalize x) (normalize y) then 1 else 0))
+                                                   | Some None, _ | _, Some None => Value_Z None
+                                                   | _, _ => Value_Err "Invalid JSON text in argument" end
+                                | _ => Value_Z None end)
+  (* dates and times *)
+  :: ("interval", fun l => match l with
+                           | n :: Value_string (Some u) :: nil => 
+                             match z_arg n, interval_of_unit 1 (string_map upper_ascii u) with
+                             | Some k, Some (a, b, c) => Value_V (Some (k * a, k * b, k * c))
+                             | _, _ => Value_V None end
+                           | _ => Value_V None end)
+  :: ("date_add", fun l => match l with d :: iv :: nil => my_date_add 1 d iv | _ => Value_T None end)
+  :: ("date_sub", fun l => match l with d :: iv :: nil => my_date_add (-1) d iv | _ => Value_T None end)
+  :: ("adddate", fun l => match l with 
+                          | d :: Value_V iv :: nil => my_date_add 1 d (Value_V iv)
+                          | d :: n :: nil => match z_arg n with Some k => my_date_add 1 d (Value_V (Some (0, k, 0))) | None => Value_T None end
+                          | _ => Value_T None end)
+  :: ("subdate", fun l => match l with 
+                          | d :: Value_V iv :: nil => my_date_add (-1) d (Value_V iv)
+                          | d :: n :: nil => match z_arg n with Some k => my_date_add (-1) d (Value_V (Some (0, k, 0))) | None => Value_T None end
+                          | _ => Value_T None end)
+  :: ("datediff", fun l => match l with
+                           | a :: b :: nil => match my_ts_of a, my_ts_of b with
+                                              | Some (x, _), Some (y, _) => Value_Z (Some (ts_days x - ts_days y))
+                                              | _, _ => Value_Z None end
+                           | _ => Value_Z None end)
+  :: ("timestampdiff", fun l => match l with
+                                | Value_string (Some u) :: a :: b :: nil => 
+                                  match my_ts_of a, my_ts_of b with
+                                  | Some (x, _), Some (y, _) => match my_timestampdiff u x y with Some z => Value_Z (Some z) | None => Value_Z None end
+                                  | _, _ => Value_Z None end
+                                | _ => Value_Z None end)
+  :: ("year", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(y, _, _) := civil_from_days (ts_days t) in Value_Z (Some y) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("month", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(_, m, _) := civil_from_days (ts_days t) in Value_Z (Some m) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("day", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(_, _, d) := civil_from_days (ts_days t) in Value_Z (Some d) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("dayofmonth", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(_, _, d) := civil_from_days (ts_days t) in Value_Z (Some d) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("hour", fun l => match l with v :: nil => match my_ts_of v, temporal_parts v with Some (t, _), _ => Value_Z (Some (ts_usec t / 3600000000)) | None, Some (1%nat, u, _) => Value_Z (Some (u / 3600000000)) | _, _ => Value_Z None end | _ => Value_Z None end)
+  :: ("minute", fun l => match l with v :: nil => match my_ts_of v, temporal_parts v with Some (t, _), _ => Value_Z (Some ((ts_usec t / 60000000) mod 60)) | None, Some (1%nat, u, _) => Value_Z (Some ((u / 60000000) mod 60)) | _, _ => Value_Z None end | _ => Value_Z None end)
+  :: ("second", fun l => match l with v :: nil => match my_ts_of v, temporal_parts v with Some (t, _), _ => Value_Z (Some ((ts_usec t / 1000000) mod 60)) | None, Some (1%nat, u, _) => Value_Z (Some ((u / 1000000) mod 60)) | _, _ => Value_Z None end | _ => Value_Z None end)
+  :: ("microsecond", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (ts_usec t mod 1000000)) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("dayofweek", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (day_of_week (ts_days t) + 1)) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("weekday", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (iso_weekday (ts_days t) - 1)) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("dayofyear", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (day_of_year (ts_days t))) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("quarter", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(_, m, _) := civil_from_days (ts_days t) in Value_Z (Some ((m - 1) / 3 + 1)) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("week", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (my_week0 (ts_days t))) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("last_day", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(y, m, _) := civil_from_days (ts_days t) in VDate (days_from_civil y m (days_in_month y m)) | None => Value_T None end | _ => Value_T None end)
+  :: ("to_days", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (ts_days t + 719528)) | None => Value_Z None end | _ => Value_Z None end)
+  :: ("date", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => VDate (ts_days t) | None => Value_T None end | _ => Value_T None end)
+  :: ("date_format", fun l => match l with
+                              | v :: f :: nil => match my_ts_of v, text_of f with
+                                                 | Some (t, _), Some fmt => Value_string (Some (my_format (S (String.length fmt)) t fmt))
+                                                 | _, _ => Value_string None end
+                              | _ => Value_string None end)
+  :: ("unix_timestamp", fun l => match l with 
+                                 | nil => Value_Z (Some (statement_time / 1000000))
+                                 | v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (t / 1000000)) | None => Value_Z None end
+                                 | _ => Value_Z None end)
+  (* the time of the statement ([Temporal.statement_time]) *)
+  :: ("now", fun _ => VTs statement_time 0) :: ("current_timestamp", fun _ => VTs statement_time 0)
+  :: ("sysdate", fun _ => VTs statement_time 0) :: ("localtimestamp", fun _ => VTs statement_time 0)
+  :: ("curdate", fun _ => VDate (ts_days statement_time)) :: ("current_date", fun _ => VDate (ts_days statement_time))
+  :: ("curtime", fun _ => VTime (ts_usec statement_time) 0) :: ("current_time", fun _ => VTime (ts_usec statement_time) 0)
+  :: ("cast_date", fun l => match l with v :: nil => my_cast_temporal 0 v | _ => Value_T None end)
+  :: ("cast_time", fun l => match l with v :: nil => my_cast_temporal 1 v | _ => Value_T None end)
+  :: ("cast_datetime", fun l => match l with v :: nil => my_cast_temporal 2 v | _ => Value_T None end)
+  :: ("cast_timestamp", fun l => match l with v :: nil => my_cast_temporal 2 v | _ => Value_T None end)
   (* [s COLLATE c]: an unknown collation is an error ([ER_UNKNOWN_COLLATION]) *)
   :: ("collate", fun l => match l with
                           | v :: Value_string (Some n) :: nil =>
@@ -402,12 +536,34 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
     floating-point arguments, the return value has a floating-point type" (MySQL manual, [FLOOR],
     [ROUND], ...) *)
 Definition my_float_funs : list string :=
-  "abs" :: "floor" :: "ceil" :: "ceiling" :: "round" :: "truncate" :: "power" :: "pow" :: "opp" :: "neg" :: "%" :: "mod" :: nil.
+  "abs" :: "floor" :: "ceil" :: "ceiling" :: "round" :: "truncate" :: "power" :: "pow" :: "opp" :: "neg" :: "%" :: "mod"
+  :: "sqrt" :: "exp" :: "ln" :: "log" :: "log2" :: "log10" :: "sin" :: "cos" :: "tan" :: "cot" :: "asin" :: "acos"
+  :: "atan" :: "atan2" :: "degrees" :: "radians" :: nil.
+
+(** the decimals of the result of a function on doubles: [FLOOR] and [CEIL] have none, [ROUND(x, d)] [d],
+    the arithmetic those of [Item_func_additive_op], [Item_func_mul], [Item_func_div] *)
+Definition my_float_dec (f : string) (l : list value) : option nat :=
+  match f, l with
+  | ("floor" | "ceil" | "ceiling"), _ => Some 0%nat
+  | "round", _ :: d :: nil => match z_arg d with Some k => Some (Z.to_nat (Z.max 0 k)) | None => None end
+  | "round", _ :: nil => Some 0%nat
+  | "truncate", _ :: d :: nil => match z_arg d with Some k => Some (Z.to_nat (Z.max 0 k)) | None => None end
+  | ("+" | "-" | "plus" | "minus"), a :: b :: nil => dec_max (my_fdec a) (my_fdec b)
+  | ("*" | "mult"), a :: b :: nil => dec_sum (my_fdec a) (my_fdec b)
+  | ("abs" | "opp" | "neg"), a :: nil => my_fdec a
+  | _, _ => None
+  end%string.
 
 Definition my_symbol_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) my_float_funs
-                then (fst p, fun l => if existsb is_F l then my_double ((snd p) l) else (snd p) l)
-                else p) my_symbol_table_raw.
+                then (fst p, fun l => 
+                        (* a date or a time is a number; with a double, the result is a double *)
+                        let l' := map (fun v => match my_temporal_number v with 
+                                                | Some (q, _) => my_double (Value_Q (Some q)) | None => v end) l in
+                        if existsb is_F l' then with_fdec (my_float_dec (fst p) l') (my_double ((snd p) l')) else (snd p) l')
+                else if existsb (String.eqb (fst p)) ("+" :: "-" :: "*" :: "plus" :: "minus" :: "mult" :: nil)
+                then (fst p, fun l => let r := (snd p) l in if is_F r then with_fdec (my_float_dec (fst p) l) r else r)
+                else p) (c_math_table false lenient ++ bit_table false lenient ++ ("rand", my_rand lenient) :: my_symbol_table_raw).
 
 Definition my_aggregate_table : list (string * (list value -> value)) :=
      ("count", agg_count_by is_null)
@@ -472,7 +628,8 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
                                           else if int_range_ok 1 z then Value_I (Some (z, 1%nat))
                                           else VDec (Qc_of_Z z) 0 0
                     | _ => v end)
-          (fun _ => false).
+          (fun _ => false)
+          (fun _ _ l => l).
 
 End Session.
 

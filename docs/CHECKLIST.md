@@ -45,11 +45,11 @@ updates it.
 - [~] Strings: collations from the engines' tables (`general_ci`, `0900_ai_ci`, `unicode_520_ci`, `unicode_ci`, `bin`, SQLite, `C`), accents and expansions, `COLLATE` and explicit precedence ([x], TODO 1.3); `uca1400` (approximated), PostgreSQL ICU/libc, column collations ([ ]); charsets and encodings, `BINARY` strings, `bytea`, blobs ([ ]);
       `CHAR(n)` vs `VARCHAR(n)` padding and length limits ([ ])
 - [x] Booleans of each dialect (real boolean in PostgreSQL, 0/1 in MySQL/SQLite, none in Oracle mode) (TODO 1.4)
-- [ ] Dates and times: `DATE`, `TIME`, `TIMESTAMP[TZ]`, `DATETIME`, `YEAR`, `INTERVAL`, time zones, calendar arithmetic, `EXTRACT`, `DATE_TRUNC`,
+- [~] Dates and times (TODO 1.5 done: types, arithmetic, `EXTRACT`, `DATE_TRUNC`, formats, SQLite and Oracle; open: time zones, `YEAR` type): `DATE`, `TIME`, `TIMESTAMP[TZ]`, `DATETIME`, `YEAR`, `INTERVAL`, time zones, calendar arithmetic, `EXTRACT`, `DATE_TRUNC`,
       `DATE_ADD`, `STR_TO_DATE`, `TO_CHAR`, SQLite date functions (strings/numbers), Oracle `DATE` with time
-- [ ] JSON: types, operators (`->`, `->>`, `@>`), path languages (`JSONPath`, MySQL path), `JSON_TABLE`, comparison and ordering of JSON values
+- [~] JSON (TODO 1.6 done for the three families; open: wildcards, modification functions, `JSON_TABLE`, SQL/JSON path): types, operators (`->`, `->>`, `@>`), path languages (`JSONPath`, MySQL path), `JSON_TABLE`, comparison and ordering of JSON values
 - [ ] Arrays, composite types, ranges, enums, `UUID`, `INET`, geometric and spatial types, full-text (`MATCH ... AGAINST`, `tsvector`), `BIT`, `SET`/`ENUM` (MySQL)
-- [ ] SQLite dynamic typing: type affinity, storage classes in all operations (comparison done; arithmetic, `CAST`, `typeof` partly)
+- [~] SQLite dynamic typing (TODO 1.8: affinity in comparisons done): type affinity, storage classes in all operations (comparison done; arithmetic, `CAST`, `typeof` partly)
 - [ ] Implicit conversions between all type pairs per dialect (string/number/date/boolean), including MySQL's warnings-versus-errors under `sql_mode`
 - [ ] `CAST` / `CONVERT` / `::` to every type, with each dialect's parsing rules
 - [ ] `sql_mode` as a parameter: `ANSI_QUOTES`, `PIPES_AS_CONCAT`, `ONLY_FULL_GROUP_BY`, `STRICT_*`, `NO_BACKSLASH_ESCAPES`, `PAD_CHAR_TO_FULL_LENGTH`, `ORACLE` (MariaDB)

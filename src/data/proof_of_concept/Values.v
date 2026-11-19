@@ -11,8 +11,8 @@
 (**                                                                                 *)
 (************************************************************************************)
 
-Require Import Arith NArith ZArith String List Ascii QArith Qcanon Qround DecimalString.
-Require Import OrderedSet FiniteSet Bool3 IEEE.
+Require Import Arith NArith ZArith String List Ascii QArith Qcanon Qround Qabs Qminmax DecimalString.
+Require Import OrderedSet FiniteSet Bool3 IEEE Temporal Json.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -148,6 +148,15 @@ Module NullValues.
                        (a [Value_Z] is a [bigint], [BIGINT])
     - [Value_C]      : a string with an explicit collation ([s COLLATE c]): the string and the
                        name of the collation
+    - [Value_T]      : a date or a time [(n, k)]: [k] is 0 for a [DATE] ([n] days from 1970-01-01),
+                       1 for a [TIME] ([n] microseconds), 2 for a [TIMESTAMP] / [DATETIME] without
+                       time zone and 3 for a [TIMESTAMP WITH TIME ZONE] ([n] microseconds from
+                       1970-01-01 00:00:00, UTC for the latter), plus 10 times the number of
+                       fractional digits to display ([Temporal.v])
+    - [Value_V]      : an interval [(months, days, microseconds)] (PostgreSQL)
+    - [Value_J]      : a JSON value [(t, k)]: its compact text [t] ([Json.v]); [k] is 0 for a value
+                       whose objects are normalized (MySQL [JSON], PostgreSQL [jsonb]), 1 for a
+                       PostgreSQL [json], which keeps its text
     - [Value_Err]    : the failure of an evaluation (division by zero in PostgreSQL,
                        an invalid conversion, ...), with the kind of the error. It
                        belongs to no SQL domain: a query whose evaluation produces it
@@ -162,7 +171,10 @@ Inductive value : Set :=
   | Value_D : option (Qc * nat * nat) -> value
   | Value_F : option (Qc * nat) -> value
   | Value_I : option (Z * nat) -> value
-  | Value_C : option (string * string) -> value.
+  | Value_C : option (string * string) -> value
+  | Value_T : option (Z * nat) -> value
+  | Value_V : option (Z * Z * Z) -> value
+  | Value_J : option (string * nat) -> value.
 
 Register value as datacert.value.type.
 Register Value_string as datacert.value.Value_string.
@@ -180,6 +192,9 @@ match v with
   | Value_F _ => type_Q
   | Value_I _ => type_Z
   | Value_C _ => type_string
+  | Value_T _ => type_Z
+  | Value_V _ => type_Z
+  | Value_J _ => type_string
   end.
 
 (** Default values for each type: the NULL of that type. *)
@@ -194,7 +209,7 @@ Definition default_value d :=
 Definition is_null v :=
   match v with
   | Value_string None | Value_Z None | Value_bool None | Value_Q None | Value_D None | Value_F None 
-  | Value_I None | Value_C None => true
+  | Value_I None | Value_C None | Value_T None | Value_V None | Value_J None => true
   | _ => false
   end.
 
@@ -221,6 +236,8 @@ Definition ODec : Oset.Rcd (Qc * nat * nat) := mk_opairs (mk_opairs OQc Onat) On
 Definition OFlt : Oset.Rcd (Qc * nat) := mk_opairs OQc Onat.
 Definition OInt : Oset.Rcd (Z * nat) := mk_opairs OZ Onat.
 Definition OColl : Oset.Rcd (string * string) := mk_opairs Ostring Ostring.
+Definition OIntv : Oset.Rcd (Z * Z * Z) := mk_opairs (mk_opairs OZ OZ) OZ.
+Definition OJson : Oset.Rcd (string * nat) := mk_opairs Ostring Onat.
 
 Definition value_rank v : N :=
   match v with
@@ -233,6 +250,9 @@ Definition value_rank v : N :=
   | Value_F _ => 6%N
   | Value_I _ => 7%N
   | Value_C _ => 8%N
+  | Value_T _ => 9%N
+  | Value_V _ => 10%N
+  | Value_J _ => 11%N
   end.
 
 Definition value_compare x y :=
@@ -246,13 +266,16 @@ Definition value_compare x y :=
     | Value_F d1, Value_F d2 => option_compare _ (Oset.compare OFlt) d1 d2
     | Value_I d1, Value_I d2 => option_compare _ (Oset.compare OInt) d1 d2
     | Value_C d1, Value_C d2 => option_compare _ (Oset.compare OColl) d1 d2
+    | Value_T d1, Value_T d2 => option_compare _ (Oset.compare OInt) d1 d2
+    | Value_V d1, Value_V d2 => option_compare _ (Oset.compare OIntv) d1 d2
+    | Value_J d1, Value_J d2 => option_compare _ (Oset.compare OJson) d1 d2
     | _, _ => N.compare (value_rank x) (value_rank y)
   end.
 
 Definition OVal : Oset.Rcd value.
 split with value_compare.
 - (* 1/3 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ] | [t1 | ] | [v1 | ] | [j1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ] | [t2 | ] | [v2 | ] | [j2 | ]];
     simpl; try discriminate; trivial.
   + generalize (Oset.eq_bool_ok Ostring s1 s2); simpl; case (string_compare s1 s2).
     * apply (f_equal (fun x => Value_string (Some x))).
@@ -294,9 +317,24 @@ split with value_compare.
     * apply (f_equal (fun x => Value_C (Some x))).
     * intros H1 H2; injection H2; apply H1.
     * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok OInt t1 t2); unfold Oset.eq_bool; simpl;
+    destruct (compareAB Z.compare Nat.compare t1 t2).
+    * apply (f_equal (fun x => Value_T (Some x))).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok OIntv v1 v2); unfold Oset.eq_bool; simpl;
+    destruct (compareAB (compareAB Z.compare Z.compare) Z.compare v1 v2).
+    * apply (f_equal (fun x => Value_V (Some x))).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok OJson j1 j2); unfold Oset.eq_bool; simpl;
+    destruct (compareAB string_compare Nat.compare j1 j2).
+    * apply (f_equal (fun x => Value_J (Some x))).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
 - (* 1/2 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ]]
-         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ] | e3 | [d3 | ] | [f3 | ] | [i3 | ] | [k3 | ]]; simpl; trivial; try discriminate.
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ] | [t1 | ] | [v1 | ] | [j1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ] | [t2 | ] | [v2 | ] | [j2 | ]]
+         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ] | e3 | [d3 | ] | [f3 | ] | [i3 | ] | [k3 | ] | [t3 | ] | [v3 | ] | [j3 | ]]; simpl; trivial; try discriminate.
   + apply (Oset.compare_lt_trans Ostring).
   + apply (Oset.compare_lt_trans OZ).
   + apply (Oset.compare_lt_trans Obool).
@@ -306,8 +344,11 @@ split with value_compare.
   + apply (Oset.compare_lt_trans OFlt).
   + apply (Oset.compare_lt_trans OInt).
   + apply (Oset.compare_lt_trans OColl).
+  + apply (Oset.compare_lt_trans OInt).
+  + apply (Oset.compare_lt_trans OIntv).
+  + apply (Oset.compare_lt_trans OJson).
 - (* 1/1 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ] | [t1 | ] | [v1 | ] | [j1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ] | [t2 | ] | [v2 | ] | [j2 | ]];
     simpl; trivial.
   + apply (Oset.compare_lt_gt Ostring).
   + apply (Oset.compare_lt_gt OZ).
@@ -318,6 +359,9 @@ split with value_compare.
   + apply (Oset.compare_lt_gt OFlt).
   + apply (Oset.compare_lt_gt OInt).
   + apply (Oset.compare_lt_gt OColl).
+  + apply (Oset.compare_lt_gt OInt).
+  + apply (Oset.compare_lt_gt OIntv).
+  + apply (Oset.compare_lt_gt OJson).
 Defined.
 
 Definition FVal := Fset.build OVal.
@@ -364,7 +408,7 @@ Definition num_of_value v :=
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
   (* a finite float or a negative zero *)
-  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div (Nat.modulo k 10) 2) 1 then Some (Num_Q q) else None
   | Value_I (Some (z, _)) => Some (Num_Z z)
   | _ => None
   end.
@@ -415,7 +459,7 @@ Definition rat_of_value (v : value) : option Q :=
   | Value_Q (Some q) => Some (this q)
   | Value_D (Some (q, _, _)) => Some (this q)
   | Value_I (Some (z, _)) => Some (inject_Z z)
-  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (this q) else None
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div (Nat.modulo k 10) 2) 1 then Some (this q) else None
   | _ => None
   end.
 
@@ -463,18 +507,83 @@ Definition Qcpower_opt (a b : Qc) : option Qc :=
     [sql_compare v1 v2] is [None] when one of the arguments is NULL, or when the
     two values are not comparable (a typing error in SQL); the comparison
     predicates are then UNKNOWN. *)
+(** * Dates and times: the values *)
+
+Definition VDate (days : Z) : value := Value_T (Some (days, 0%nat)).
+Definition VTime (us : Z) (fsp : nat) : value := Value_T (Some (us, (1 + 10 * fsp)%nat)).
+Definition VTs (ts : Z) (fsp : nat) : value := Value_T (Some (ts, (2 + 10 * fsp)%nat)).
+Definition VTsTz (ts : Z) (fsp : nat) : value := Value_T (Some (ts, (3 + 10 * fsp)%nat)).
+Definition VIntv (mo d us : Z) : value := Value_V (Some (mo, d, us)).
+
+(** the kind (0 date, 1 time, 2 timestamp, 3 timestamp with time zone), the number and the fractional digits *)
+Definition temporal_parts (v : value) : option (nat * Z * nat) :=
+  match v with
+  | Value_T (Some (n, k)) => Some (Nat.modulo k 10, n, Nat.div k 10)
+  | _ => None
+  end.
+
+(** a date or a timestamp, as microseconds from the epoch *)
+Definition to_ts (v : value) : option Z :=
+  match temporal_parts v with
+  | Some (0%nat, d, _) => Some (ts_of d 0)
+  | Some (2%nat, t, _) | Some (3%nat, t, _) => Some t
+  | _ => None
+  end.
+
+(** the length of an interval, a month being 30 days ([interval_cmp_value]) *)
+Definition interval_usec (iv : Z * Z * Z) : Z :=
+  let '(mo, d, us) := iv in (mo * 30 + d) * usec_per_day + us.
+
+(** a string read as a value of the kind of [like] (the literals of unknown type of PostgreSQL, the
+    conversion of strings in the comparisons of MySQL) *)
+Definition parse_like (like : value) (t : string) : option value :=
+  match temporal_parts like with
+  | Some (0%nat, _, _) => match parse_date t with Some d => Some (VDate d) | None => None end
+  | Some (1%nat, _, f) => match parse_time t with Some u => Some (VTime u f) | None => None end
+  | Some (2%nat, _, f) => match parse_timestamp t with Some u => Some (VTs u f) | None => None end
+  | Some (3%nat, _, f) => match parse_timestamp t with Some u => Some (VTsTz u f) | None => None end
+  | _ => None
+  end.
+
+Definition pg_temporal_text (v : value) : option string :=
+  match v, temporal_parts v with
+  | _, Some (0%nat, d, _) => Some (date_text d)
+  | _, Some (1%nat, u, _) => Some (pg_time_text u)
+  | _, Some (2%nat, t, _) => Some (pg_timestamp_text t)
+  | _, Some (_, t, _) => Some (pg_timestamp_text t ++ "+00")
+  | Value_V (Some (mo, d, us)), _ => Some (pg_interval_text mo d us)
+  | _, _ => None
+  end.
+
+Definition temporal_compare (v1 v2 : value) : option comparison :=
+  match v1, v2 with
+  | Value_V (Some a), Value_V (Some b) => Some (Z.compare (interval_usec a) (interval_usec b))
+  | Value_T (Some _), Value_T (Some _) =>
+    match temporal_parts v1, temporal_parts v2 with
+    | Some (1%nat, a, _), Some (1%nat, b, _) => Some (Z.compare a b)
+    | _, _ => match to_ts v1, to_ts v2 with Some a, Some b => Some (Z.compare a b) | _, _ => None end
+    end
+  | _, _ => None
+  end.
+
 (** The order of the floats of PostgreSQL ([float8_cmp_internal]): -Infinity < the numbers < Infinity < NaN,
     and NaN is equal to NaN. *)
 Definition float_rank (v : value) : option nat :=
   match v with
   | Value_F (Some (_, k)) => 
-    match Nat.div k 2 with 2%nat => Some 2%nat | 3%nat => Some 0%nat | 4%nat => Some 3%nat | _ => Some 1%nat end
+    match Nat.div (Nat.modulo k 10) 2 with 2%nat => Some 2%nat | 3%nat => Some 0%nat | 4%nat => Some 3%nat | _ => Some 1%nat end
   | Value_Z (Some _) | Value_Q (Some _) | Value_D (Some _) | Value_I (Some _) => Some 1%nat
   | _ => None
   end.
 
 Definition sql_compare v1 v2 : option comparison :=
   match v1, v2 with
+  | Value_T (Some _), Value_T (Some _) | Value_V (Some _), Value_V (Some _) => temporal_compare v1 v2
+  | Value_J (Some (a, _)), Value_J (Some (b, _)) => Some (string_compare a b)
+  | Value_T (Some _), Value_string (Some t) => 
+    match parse_like v1 t with Some w => temporal_compare v1 w | None => None end
+  | Value_string (Some t), Value_T (Some _) => 
+    match parse_like v2 t with Some w => temporal_compare w v2 | None => None end
   | Value_string (Some s1), Value_string (Some s2) => Some (string_compare s1 s2)
   | Value_bool (Some b1), Value_bool (Some b2) => Some (bool_compare b1 b2)
   | _, _ =>
@@ -770,11 +879,22 @@ Definition to_float (w32 : bool) (q : Qc) : value := VF w32 (round_q (fmt_of w32
 
 Definition float_parts (v : value) : option (fspecial * Qc * bool) :=
   match v with
-  | Value_F (Some (x, k)) => Some (special_of_tag (Nat.div k 2), x, Nat.odd k)
+  | Value_F (Some (x, k)) => Some (special_of_tag (Nat.div (Nat.modulo k 10) 2), x, Nat.odd k)
   | _ => None
   end.
 
 Definition is_F (v : value) : bool := match v with Value_F _ => true | _ => false end.
+
+(** the number of decimals of a double of the MySQL family ([Item::decimals]): [None] when it is not fixed
+    ([NOT_FIXED_DEC]), the text being then the shortest one; it is kept in [k / 10] ([d + 1], or 0) *)
+Definition fdec (v : value) : option nat :=
+  match v with Value_F (Some (_, k)) => match Nat.div k 10 with O => None | S d => Some d end | _ => None end.
+
+Definition with_fdec (d : option nat) (v : value) : value :=
+  match v with
+  | Value_F (Some (x, k)) => Value_F (Some (x, (Nat.modulo k 10 + 10 * match d with Some d => S (Nat.min d 30) | None => O end)%nat))
+  | _ => v
+  end.
 Definition is_F32 (v : value) : bool := match v with Value_F (Some (_, k)) => Nat.odd k | _ => false end.
 Definition is_special (v : value) : bool :=
   match float_parts v with Some (F_Finite, _, _) | Some (F_NegZero, _, _) | None => false | _ => true end.
@@ -974,6 +1094,90 @@ Definition pg_dec_div (a b : Qc * nat) :=
   let r := pg_div_scale (fst a) (snd a) (fst b) (snd b) in
   VDec (dec_round (Qcdiv (fst a) (fst b)) r) r r.
 
+(** * JSON ([Json.v])
+
+    A [Value_J] holds the compact text of a JSON value; a normalized value (MySQL [JSON], PostgreSQL [jsonb])
+    has its objects sorted and without duplicated keys. *)
+Definition VJ (k : nat) (j : json) : value :=
+  Value_J (Some (text_compact (if Nat.eqb k 0 then normalize j else j), k)).
+
+Definition json_of_J (v : value) : option json :=
+  match v with Value_J (Some (t, _)) => parse_json t | _ => None end.
+
+(** PostgreSQL [to_jsonb]: a number, a string, a boolean, [null]; a date is its text *)
+Definition pg_json_of_value (v : value) : json :=
+  if is_null v then JNull else
+  match v with
+  | Value_Z (Some z) | Value_I (Some (z, _)) => JNum (string_of_Z z)
+  | Value_D (Some (q, _, sc)) => JNum (dec_text q sc)
+  | Value_Q (Some q) => JNum (dec_text q (qc_scale q))
+  | Value_F _ => match pg_float_text v with Some t => JNum t | None => JNull end
+  | Value_string (Some t) | Value_C (Some (t, _)) => JStr t
+  | Value_bool (Some b) => JBool b
+  | Value_J _ => match json_of_J v with Some j => j | None => JNull end
+  | _ => match pg_temporal_text v with Some t => JStr t | None => JNull end
+  end.
+
+Definition pg_json_text (v : value) : option string :=
+  match v with
+  | Value_J (Some (t, 1%nat)) => Some t
+  | Value_J (Some (t, _)) => match parse_json t with Some j => Some (text_spaced j) | None => Some t end
+  | _ => None
+  end.
+
+Definition json_kind (v : value) : nat := match v with Value_J (Some (_, k)) => k | _ => 0%nat end.
+
+(** [j -> k]: the member [k] of an object, or the element [k] of an array (from the end if negative) *)
+Definition pg_json_get (as_text : bool) (j k : value) : value :=
+  match json_of_J j with
+  | Some d =>
+    let st := match k with
+              | Value_string (Some key) => Some (SKey key)
+              | Value_Z (Some i) | Value_I (Some (i, _)) => Some (SIdx i)
+              | _ => None end in
+    match st with
+    | Some st => match follow (st :: nil) d with
+                 | Some r => if as_text 
+                             then match r with JStr t => Value_string (Some t) | JNull => Value_string None 
+                                             | _ => Value_string (Some (text_spaced r)) end
+                             else VJ (json_kind j) r
+                 | None => if as_text then Value_string None else Value_J None end
+    | None => if as_text then Value_string None else Value_J None
+    end
+  | None => if as_text then Value_string None else Value_J None
+  end.
+
+(** [j #> '{a,0}']: a path given as a text array *)
+Definition pg_path_of_text (t : string) : list step :=
+  let inner := match t with String "{" r => substring 0 (String.length r - 1) r | _ => t end in
+  map (fun w => match Z_of_string w with Some i => SIdx i | None => SKey w end)
+      (filter (fun w => negb (String.eqb w EmptyString)) (split_at "," inner)).
+
+Definition pg_json_path (as_text : bool) (j p : value) : value :=
+  match json_of_J j, p with
+  | Some d, Value_string (Some t) =>
+    match follow (pg_path_of_text t) d with
+    | Some r => if as_text then match r with JStr x => Value_string (Some x) | JNull => Value_string None 
+                                         | _ => Value_string (Some (text_spaced r)) end
+                else VJ (json_kind j) r
+    | None => if as_text then Value_string None else Value_J None
+    end
+  | _, _ => if as_text then Value_string None else Value_J None
+  end.
+
+Definition pg_json_typeof (j : json) : string :=
+  match j with JNull => "null" | JBool _ => "boolean" | JNum _ => "number" | JStr _ => "string" | JArr _ => "array" | JObj _ => "object" end.
+
+Fixpoint pairs_of (l : list value) : option (list (string * json)) :=
+  match l with
+  | nil => Some nil
+  | k :: v :: r => match k, pairs_of r with
+                   | Value_string (Some key), Some rest => Some ((key, pg_json_of_value v) :: rest)
+                   | Value_Z (Some z), Some rest => Some ((string_of_Z z, pg_json_of_value v) :: rest)
+                   | _, _ => None end
+  | _ => None
+  end.
+
 (** * Casts (PostgreSQL). A string which is not the text of a value of the target type is an
     error ([invalid input syntax for type ...], [src/backend/utils/adt/int.c], [numeric.c],
     [bool.c]). *)
@@ -1010,7 +1214,7 @@ Definition float_to_numeric (v : value) : value :=
 
 Definition cast_float (w32 : bool) (v : value) : value :=
   match v with
-  | Value_F (Some (x, k)) => if w32 then VF true (round_q binary32 x) else Value_F (Some (x, (2 * Nat.div k 2)%nat))
+  | Value_F (Some (x, k)) => if w32 then VF true (round_q binary32 x) else Value_F (Some (x, (2 * Nat.div (Nat.modulo k 10) 2)%nat))
   | Value_Z (Some z) => to_float w32 (Qc_of_Z z)
   | Value_Q (Some q) => to_float w32 q
   | Value_D (Some (q, _, _)) => to_float w32 q
@@ -1059,6 +1263,8 @@ Definition cast_string v :=
     | Value_Q (Some q) => Some (string_of_Qc q)
     | Value_D (Some (q, _, sc)) => Some (dec_text q sc)
     | Value_F _ => pg_float_text v
+    | Value_T _ | Value_V _ => pg_temporal_text v
+    | Value_J _ => pg_json_text v
     | Value_bool (Some b) => Some (if b then "true" else "false")
     | _ => None
     end.
@@ -1088,7 +1294,17 @@ Definition between3 (l : list value) :=
   end.
 
 Definition predicate_table : list (string * (list value -> bool3)) :=
-     ("=", binary3 sql_eq3)
+     (* [jsonb @> jsonb], [<@], [jsonb ? key] *)
+     ("@>", binary3 (fun a b => match json_of_J a, json_of_J b with 
+                                | Some x, Some y => bool3_of_bool (json_contains (json_size x + json_size y) x y) | _, _ => unknown3 end))
+  :: ("<@", binary3 (fun a b => match json_of_J a, json_of_J b with 
+                                | Some x, Some y => bool3_of_bool (json_contains (json_size x + json_size y) y x) | _, _ => unknown3 end))
+  :: ("?", binary3 (fun a k => match json_of_J a, k with
+                               | Some (JObj l), Value_string (Some key) => bool3_of_bool (existsb (fun m => String.eqb (fst m) key) l)
+                               | Some (JArr l), Value_string (Some key) => bool3_of_bool (existsb (fun x => match x with JStr t => String.eqb t key | _ => false end) l)
+                               | Some _, Value_string (Some _) => false3
+                               | _, _ => unknown3 end))
+  :: ("=", binary3 sql_eq3)
   :: ("<>", binary3 (fun a b => negb3 (sql_eq3 a b)))
   :: ("!=", binary3 (fun a b => negb3 (sql_eq3 a b)))
   :: ("<", binary3 sql_lt3)
@@ -1190,15 +1406,409 @@ Definition concat_ws (l : list value) :=
                            | _ => acc
                            end) l EmptyString)).
 
+(** * Dates and times in PostgreSQL ([date.c], [timestamp.c])
+
+    [date + integer] and [date - integer] are dates, [date - date] is an [integer] number of days,
+    [date + interval] and [timestamp +/- interval] are timestamps (months first, the day clamped to the
+    end of the month, then days, then microseconds), [timestamp - timestamp] is an interval of days
+    and microseconds ([interval_justify_hours]), [date + time] is a timestamp. *)
+Definition int_of (v : value) : option Z :=
+  match v with Value_Z (Some z) | Value_I (Some (z, _)) => Some z | _ => None end.
+
+Definition neg_interval (iv : Z * Z * Z) : Z * Z * Z := let '(a, b, c) := iv in (- a, - b, - c).
+
+Definition pg_tm2 (minus : bool) (old : list value -> value) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    match v1, v2 with
+    | Value_T (Some _), _ | _, Value_T (Some _) | Value_V (Some _), _ | _, Value_V (Some _) =>
+      match temporal_parts v1, temporal_parts v2, v1, v2 with
+      (* date +/- integer *)
+      | Some (0%nat, d, _), None, _, _ => 
+        match int_of v2 with Some n => VDate (if minus then d - n else d + n) | None => 
+        match v2 with 
+        | Value_V (Some iv) => VTs (ts_plus_interval (ts_of d 0) (if minus then neg_interval iv else iv)) 6
+        | _ => Value_Err "operator does not exist" end end
+      | None, Some (0%nat, d, _), _, _ => 
+        match int_of v1, minus with Some n, false => VDate (d + n) | _, _ => 
+        match v1, minus with 
+        | Value_V (Some iv), false => VTs (ts_plus_interval (ts_of d 0) iv) 6
+        | _, _ => Value_Err "operator does not exist" end end
+      | Some (0%nat, a, _), Some (0%nat, b, _), _, _ => 
+        if minus then VInt 32 (a - b) else Value_Err "operator does not exist"
+      | Some (0%nat, d, _), Some (1%nat, u, f), _, _ => if minus then Value_Err "operator does not exist" else VTs (ts_of d u) f
+      | Some (k, t, f), None, _, Value_V (Some iv) => 
+        if Nat.eqb k 1 then VTime (Z.modulo (t + (if minus then - snd iv else snd iv)) usec_per_day) f
+        else Value_T (Some (ts_plus_interval t (if minus then neg_interval iv else iv), (k + 10 * f)%nat))
+      | None, Some (k, t, f), Value_V (Some iv), _ => 
+        if minus || Nat.eqb k 1 then Value_Err "operator does not exist"
+        else Value_T (Some (ts_plus_interval t iv, (k + 10 * f)%nat))
+      | Some (_, _, _), Some (_, _, _), _, _ =>
+        if minus 
+        then match to_ts v1, to_ts v2 with
+             | Some a, Some b => let dlt := a - b in VIntv 0 (Z.quot dlt usec_per_day) (Z.rem dlt usec_per_day)
+             | _, _ => match temporal_parts v1, temporal_parts v2 with
+                       | Some (1%nat, a, _), Some (1%nat, b, _) => VIntv 0 0 (a - b)
+                       | _, _ => Value_Err "operator does not exist" end
+             end
+        else Value_Err "operator does not exist"
+      | None, None, Value_V (Some (a1, b1, c1)), Value_V (Some (a2, b2, c2)) =>
+        if minus then VIntv (a1 - a2) (b1 - b2) (c1 - c2) else VIntv (a1 + a2) (b1 + b2) (c1 + c2)
+      | _, _, _, _ => Value_Err "operator does not exist"
+      end
+    | _, _ => old l
+    end
+  | _ => old l
+  end.
+
+(** [EXTRACT(field FROM v)]: a [numeric] (PostgreSQL 14), with 6 decimals for the seconds and the epoch
+    of a timestamp; [date_part] is the same number as a [float8] *)
+Definition pg_extract (field : string) (v : value) : value :=
+  let f := string_map lower_ascii field in
+  let num (z : Z) := VDec (Qc_of_Z z) 0 0 in
+  let micro (us : Z) := VDec (Qcdiv (Qc_of_Z us) (Qc_of_Z 1000000)) 6 6 in
+  match v with
+  | Value_V (Some (mo, d, us)) =>
+    match f with
+    | "year" => num (Z.quot mo 12) | "month" => num (Z.rem mo 12) | "day" => num d
+    | "hour" => num (Z.quot us 3600000000) | "minute" => num (Z.rem (Z.quot us 60000000) 60)
+    | "second" => micro (Z.rem us 60000000)
+    | "epoch" => micro (interval_usec (mo, d, us) + Z.quot mo 12 * 5 * usec_per_day / 4)
+    | _ => Value_Err "unit not supported" end
+  | _ =>
+  match temporal_parts v with
+  | Some (k, n, _) =>
+    let '(days, us) := match k with
+                       | 0%nat => (n, 0)
+                       | 1%nat => (0, n)
+                       | _ => (ts_days n, ts_usec n) end in
+    let '(y, m, d) := civil_from_days days in
+    match f with
+    | "year" => num y | "month" => num m | "day" => num d
+    | "quarter" => num ((m - 1) / 3 + 1)
+    | "decade" => num (Z.div y 10) | "century" => num (if Z.leb y 0 then (y - 100) / 100 else (y + 99) / 100)
+    | "millennium" => num (if Z.leb y 0 then (y - 1000) / 1000 else (y + 999) / 1000)
+    | "dow" => num (day_of_week days) | "isodow" => num (iso_weekday days) | "doy" => num (day_of_year days)
+    | "week" => num (snd (iso_week_year days)) | "isoyear" => num (fst (iso_week_year days))
+    | "hour" => num (us / 3600000000) | "minute" => num ((us / 60000000) mod 60)
+    | "second" => micro (us mod 60000000)
+    | "milliseconds" => VDec (Qcdiv (Qc_of_Z (us mod 60000000)) (Qc_of_Z 1000)) 3 3
+    | "microseconds" => num (us mod 60000000)
+    | "epoch" => match k with 0%nat => num (days * 86400) | 1%nat => micro n | _ => micro n end
+    | _ => Value_Err "unit not recognized"
+    end
+  | None => if is_null v then Value_D None else Value_Err "function does not exist"
+  end
+  end%string.
+
+(** [date_trunc(field, v)]: a timestamp *)
+Definition pg_date_trunc (field : string) (v : value) : value :=
+  let f := string_map lower_ascii field in
+  match to_ts v, temporal_parts v with
+  | Some t, Some (k, _, fsp) =>
+    let days := ts_days t in
+    let us := ts_usec t in
+    let '(y, m, _) := civil_from_days days in
+    let r := match f with
+             | "millennium" => Some (ts_of (days_from_civil ((y - 1) / 1000 * 1000 + 1) 1 1) 0)
+             | "century" => Some (ts_of (days_from_civil ((y - 1) / 100 * 100 + 1) 1 1) 0)
+             | "decade" => Some (ts_of (days_from_civil (y / 10 * 10) 1 1) 0)
+             | "year" => Some (ts_of (days_from_civil y 1 1) 0)
+             | "quarter" => Some (ts_of (days_from_civil y ((m - 1) / 3 * 3 + 1) 1) 0)
+             | "month" => Some (ts_of (days_from_civil y m 1) 0)
+             | "week" => Some (ts_of (days - iso_weekday days + 1) 0)
+             | "day" => Some (ts_of days 0)
+             | "hour" => Some (ts_of days (us / 3600000000 * 3600000000))
+             | "minute" => Some (ts_of days (us / 60000000 * 60000000))
+             | "second" => Some (ts_of days (us / 1000000 * 1000000))
+             | "milliseconds" => Some (ts_of days (us / 1000 * 1000))
+             | "microseconds" => Some t
+             | _ => None
+             end%string in
+    match r with
+    | Some r => Value_T (Some (r, ((if Nat.eqb k 0 then 3 else k) + 10 * fsp)%nat))
+    | None => Value_Err "unit not recognized"
+    end
+  | _, _ => if is_null v then Value_T None else Value_Err "function does not exist"
+  end.
+
+(** [interval] from a text: [n unit [n unit ...]] and an optional [HH:MM:SS] ([interval_in], postgres style) *)
+Fixpoint parse_interval_words (fuel : nat) (ws : list string) : option (Z * Z * Z) :=
+  match fuel with
+  | O => None
+  | S f =>
+    match ws with
+    | nil => Some (0, 0, 0)
+    | w :: nil => match parse_time w with Some u => Some (0, 0, u) | None => None end
+    | n :: u :: r =>
+      match Z_of_string n, interval_of_unit 1 u with
+      | Some n, Some (a, b, c) => 
+        match parse_interval_words f r with Some (a', b', c') => Some (n * a + a', n * b + b', n * c + c') | None => None end
+      | _, _ => match parse_time n with
+                | Some us => match parse_interval_words f (u :: r) with Some (a', b', c') => Some (a', b', us + c') | None => None end
+                | None => None end
+      end
+    end
+  end.
+
+Definition cast_interval (v : value) : value :=
+  match v with
+  | Value_V _ => v
+  | Value_string (Some t) => 
+    match parse_interval_words 20 (filter (fun w => negb (String.eqb w EmptyString)) (split_at " " (string_rtrim (string_ltrim t)))) with
+    | Some (a, b, c) => VIntv a b c
+    | None => Value_Err "invalid input syntax for type interval"
+    end
+  | _ => if is_null v then Value_V None else Value_Err "cannot cast to interval"
+  end.
+
+Definition pg_cast_temporal (kind : nat) (v : value) : value :=
+  match v with
+  | Value_string (Some t) =>
+    let t := string_rtrim (string_ltrim t) in
+    match kind with
+    | 0%nat => match parse_date t with Some d => VDate d | None => 
+               match parse_timestamp t with Some x => VDate (ts_days x) | None => Value_Err "invalid input syntax for type date" end end
+    | 1%nat => match parse_time t with Some u => VTime u 6 | None => Value_Err "invalid input syntax for type time" end
+    | _ => match parse_timestamp t with Some u => Value_T (Some (u, (kind + 60)%nat)) | None => Value_Err "invalid input syntax for type timestamp" end
+    end
+  | Value_T (Some _) =>
+    match kind, to_ts v, temporal_parts v with
+    | 0%nat, Some x, _ => VDate (ts_days x)
+    | 1%nat, Some x, _ => VTime (ts_usec x) 6
+    | 1%nat, None, Some (1%nat, u, f) => VTime u f
+    | _, Some x, _ => Value_T (Some (x, (kind + 60)%nat))
+    | _, _, _ => Value_Err "cannot cast"
+    end
+  | _ => if is_null v then Value_T None else Value_Err "cannot cast"
+  end.
+
+(** * Mathematical functions
+
+    The functions of the C library are correctly rounded ([IEEE.v]). [math_arg] is the argument of a
+    function of doubles: a float with its special value, or a number. *)
+Definition math_arg (conv : value -> option num) (v : value) : option (fspecial * Q) :=
+  match v with
+  | Value_F (Some (x, k)) =>
+    match special_of_tag (Nat.div (Nat.modulo k 10) 2) with
+    | F_NegZero => Some (F_Finite, 0%Q)
+    | sp => Some (sp, this x)
+    end
+  | _ => match conv v with
+         | Some (Num_Z z) => Some (F_Finite, inject_Z z)
+         | Some (Num_Q q) => Some (F_Finite, this q)
+         | None => None
+         end
+  end.
+
+(** a function of one double: [f] on a finite argument ([None] outside its domain, where the value is
+    [dom]), [sp] on an infinite or NaN one; [bad] is the value of an argument which is not a number *)
+Definition dbl_fun1 (conv : value -> option num) (f : Q -> option (fspecial * Qc)) (dom : value)
+           (sp : fspecial -> value) (bad : value) (l : list value) : value :=
+  match l with
+  | v :: nil =>
+    if is_null v then Value_F None
+    else match math_arg conv v with
+         | Some (F_Finite, q) => match f q with Some r => VF false r | None => dom end
+         | Some (s, _) => sp s
+         | None => bad
+         end
+  | _ => Value_Err "function does not exist"
+  end.
+
+Definition dbl_fun2 (conv : value -> option num) (f : Q -> Q -> option (fspecial * Qc)) (dom : value)
+           (bad : value) (l : list value) : value :=
+  match l with
+  | a :: b :: nil =>
+    if is_null a || is_null b then Value_F None
+    else match math_arg conv a, math_arg conv b with
+         | Some (F_Finite, x), Some (F_Finite, y) => match f x y with Some r => VF false r | None => dom end
+         | Some (F_NaN, _), _ | _, Some (F_NaN, _) => VF false (F_NaN, Qc_of_Z 0)
+         | Some _, Some _ => dom
+         | _, _ => bad
+         end
+  | _ => Value_Err "function does not exist"
+  end.
+
+Definition pi_q : Q := this pi_double.
+
+(** [degrees] and [radians] as C computes them: [x * 180.0 / M_PI] and [x * M_PI / 180.0] (two roundings,
+    SQLite), or with the constant [180 / M_PI] rounded first (MySQL), or dividing by the double
+    [RADIANS_PER_DEGREE] (PostgreSQL) *)
+Definition r64 (q : Q) : Q := this (snd (round_q binary64 q)).
+Definition degrees_c (x : Q) : fspecial * Qc := round_q binary64 (Qdiv (r64 (Qmult x 180)) pi_q).
+Definition radians_c (x : Q) : fspecial * Qc := round_q binary64 (Qdiv (r64 (Qmult x pi_q)) 180).
+Definition degrees_my (x : Q) : fspecial * Qc := round_q binary64 (Qmult x (r64 (Qdiv 180 pi_q))).
+Definition radians_my (x : Q) : fspecial * Qc := round_q binary64 (Qmult x (r64 (Qdiv pi_q 180))).
+Definition pg_rad_per_deg : Q := r64 (Qdiv pi_q 180).
+Definition degrees_pg (x : Q) : fspecial * Qc := round_q binary64 (Qdiv x pg_rad_per_deg).
+Definition radians_pg (x : Q) : fspecial * Qc := round_q binary64 (Qmult x pg_rad_per_deg).
+
+(** [x ^ y] of the C library: an integer exponent is exact before the rounding; a negative base with a
+    non-integer exponent, and zero with a negative exponent, are outside the domain *)
+Definition pow_c (x y : Q) : option (fspecial * Qc) :=
+  let yc := Qred y in
+  if Z.eqb (Zpos (Qden yc)) 1 then
+    let n := Qnum yc in
+    if Z.eqb (Qnum x) 0 then (if Z.ltb n 0 then None else Some (round_q binary64 (if Z.eqb n 0 then 1%Q else 0%Q)))
+    else if Z.ltb (Z.abs n) 100000 then Some (round_q binary64 (Qpower x n))
+    else pow_q binary64 x y
+  else if Z.ltb (Qnum x) 0 then None
+  else if Z.eqb (Qnum x) 0 then Some (F_Finite, Qc_of_Z 0)
+  else pow_q binary64 x y.
+
+(** [log (b, x)] of doubles *)
+Definition log2_c (b x : Q) : option (fspecial * Qc) :=
+  if Z.leb (Qnum b) 0 || Z.leb (Qnum x) 0 || Qeq_bool b 1 then None
+  else Some (round_q binary64 (Qdiv (ln_exact x) (ln_exact b))).
+
+(** ** The functions of [numeric] in PostgreSQL ([numeric_sqrt], [numeric_exp], [numeric_ln], [log_var]):
+    the scale gives at least [NUMERIC_MIN_SIG_DIGITS] = 16 significant digits and is not below the
+    scale of the argument; the result is rounded ties away from zero. *)
+Definition Qc_lt_bool (a b : Qc) : bool := match Qccompare a b with Lt => true | _ => false end.
+Definition Qc_le_bool (a b : Qc) : bool := match Qccompare a b with Gt => false | _ => true end.
+Definition Qc_eq_bool (a b : Qc) : bool := match Qccompare a b with Eq => true | _ => false end.
+
+Definition pg_clamp_scale (r : Z) (sc : nat) : nat := Z.to_nat (Z.min (Z.max (Z.max r (Z.of_nat sc)) 0) 1000).
+
+(** [estimate_ln_dweight]: the decimal weight of [ln x] *)
+Definition pg_ln_dweight (x : Q) : Z :=
+  if Qle_bool (9 # 10) x && Qle_bool x (11 # 10) then
+    (if Qeq_bool x 1 then 0 else dexp10 (Qminus x 1))
+  else let l := Qabs.Qabs (ln_exact x) in
+       let e := dexp10 l in
+       (* the truncation of [log10 |ln x|] towards zero *)
+       if Qle_bool 1 l then e else if Qeq_bool l (Qpower 10 e) then e else e + 1.
+
+Definition pg_num_sqrt (q : Qc) (sc : nat) : value :=
+  if Qc_lt_bool q (Qc_of_Z 0) then Value_Err "cannot take square root of a negative number"
+  else let (w, _) := nbase_weight q in
+       let r := pg_clamp_scale (16 - (2 * w + 1)) sc in
+       let n := Qnum q in
+       let d := Zpos (Qden q) in
+       let m := isqrt ((n * pow10 (2 * r + 2)) / d) in
+       VDec (Qcdiv (Qc_of_Z ((m + 5) / 10)) (Qc_pow10 r)) r r.
+
+Definition pg_num_exp (q : Qc) (sc : nat) : value :=
+  let v := Qmult (this q) (434294481903252 # 1000000000000000) in
+  let v := Qmax (-2000) (Qmin 2000 v) in
+  let r := pg_clamp_scale (16 - Z.quot (Qnum v) (Zpos (Qden v))) sc in
+  match exp_exact (this q) with
+  | Some e => VDec (dec_round (Q2Qc e) r) r r
+  | None => Value_Err "value overflows numeric format"
+  end.
+
+Definition pg_num_log (b : Qc * nat) (x : Qc * nat) : value :=
+  let (qb, sb) := b in
+  let (qx, sx) := x in
+  if Qc_le_bool qx (Qc_of_Z 0) || Qc_le_bool qb (Qc_of_Z 0) then
+    (if Qc_is_zero qx || Qc_is_zero qb then Value_Err "cannot take logarithm of zero"
+     else Value_Err "cannot take logarithm of a negative number")
+  else if Qc_eq_bool qb (Qc_of_Z 1) then Value_Err "division by zero"
+  else let rd := pg_ln_dweight (this qx) - pg_ln_dweight (this qb) in
+       let r := pg_clamp_scale (16 - rd) (Nat.max sb sx) in
+       VDec (dec_round (Q2Qc (Qdiv (ln_exact (this qx)) (ln_exact (this qb)))) r) r r.
+
+Definition pg_num_ln (q : Qc) (sc : nat) : value :=
+  if Qc_le_bool q (Qc_of_Z 0) then
+    (if Qc_is_zero q then Value_Err "cannot take logarithm of zero" else Value_Err "cannot take logarithm of a negative number")
+  else let r := pg_clamp_scale (16 - pg_ln_dweight (this q)) sc in
+       VDec (dec_round (Q2Qc (ln_exact (this q))) r) r r.
+
+(** a function with a [numeric] and a [double precision] version: an integer argument takes the
+    double one, the preferred type of the numeric category *)
+Definition pg_num_or_dbl (fnum : Qc -> nat -> value) (fdbl : list value -> value) (l : list value) : value :=
+  match l with
+  | Value_D (Some (q, _, sc)) :: nil => fnum q sc
+  | Value_D None :: nil => Value_D None
+  | _ => fdbl l
+  end.
+
+Definition pg_dom (msg : string) : value := Value_Err msg.
+
+(** the special values of the doubles in PostgreSQL ([float.c]) *)
+Definition pg_sp_same (s : fspecial) : value := VF false (s, Qc_of_Z 0).
+Definition pg_sp_range (s : fspecial) : value :=
+  match s with F_NaN => VF false (F_NaN, Qc_of_Z 0) | _ => Value_Err "input is out of range" end.
+
+(** [dexp]: an overflow and an underflow are errors *)
+Definition pg_exp_dbl (q : Q) : option (fspecial * Qc) := Some (exp_q binary64 q).
+Definition pg_exp_check (v : value) : value :=
+  match v with
+  | Value_F (Some (x, k)) =>
+    match special_of_tag (Nat.div (Nat.modulo k 10) 2) with
+    | F_PosInf => Value_Err "value out of range: overflow"
+    | F_Finite => if Qc_is_zero x then Value_Err "value out of range: underflow" else v
+    | _ => v
+    end
+  | _ => v
+  end.
+
+Definition pg_math_table (num_power : list value -> value) : list (string * (list value -> value)) :=
+  let c := num_of_value in
+  let bad := Value_Err "function does not exist" in
+  let ln_dom := fun q => if Z.leb (Qnum q) 0 then None else Some (round_q binary64 (ln_exact q)) in
+  let ln_err (l : list value) (v : value) :=
+      match v, l with
+      | Value_Err _, a :: nil => match math_arg c a with
+                                 | Some (_, q) => if Z.eqb (Qnum q) 0 then Value_Err "cannot take logarithm of zero"
+                                                  else Value_Err "cannot take logarithm of a negative number"
+                                 | None => v end
+      | _, _ => v
+      end in
+  let dln l := ln_err l (dbl_fun1 c ln_dom (Value_Err "log") (fun s => match s with F_NegInf => Value_Err "log" | _ => pg_sp_same s end) bad l) in
+  let dlog10 l := ln_err l (dbl_fun1 c (fun q => log2_c 10 q) (Value_Err "log") (fun s => match s with F_NegInf => Value_Err "log" | _ => pg_sp_same s end) bad l) in
+  let dsqrt := dbl_fun1 c (fun q => if Z.ltb (Qnum q) 0 then None else Some (sqrt_q binary64 q))
+                        (pg_dom "cannot take square root of a negative number")
+                        (fun s => match s with F_NegInf => pg_dom "cannot take square root of a negative number" | _ => pg_sp_same s end) bad in
+  let dexp l := pg_exp_check (dbl_fun1 c pg_exp_dbl bad (fun s => match s with F_NegInf => VF false (F_Finite, Qc_of_Z 0) | _ => pg_sp_same s end) bad l) in
+  let trig f := dbl_fun1 c (fun q => Some (f binary64 q)) bad pg_sp_range bad in
+  let atrig (f : format -> Q -> option (fspecial * Qc)) := dbl_fun1 c (f binary64) (pg_dom "input is out of range") pg_sp_range bad in
+  let dpow := dbl_fun2 c pow_c (pg_dom "a negative number raised to a non-integer power yields a complex result") bad in
+  let numeric_log l := match l with
+                       | b :: x :: nil =>
+                         if is_null b || is_null x then Value_D None
+                         else match dec_of_value b, dec_of_value x with
+                              | Some (qb, _, sb), Some (qx, _, sx) => pg_num_log (qb, sb) (qx, sx)
+                              | _, _ => bad end
+                       | _ => bad end in
+     ("sqrt", pg_num_or_dbl pg_num_sqrt dsqrt)
+  :: ("cbrt", dbl_fun1 c (fun q => Some (cbrt_q binary64 q)) bad pg_sp_same bad)
+  :: ("exp", pg_num_or_dbl pg_num_exp dexp)
+  :: ("ln", pg_num_or_dbl pg_num_ln dln)
+  :: ("log10", pg_num_or_dbl (fun q sc => pg_num_log (Qc_of_Z 10, 0%nat) (q, sc)) dlog10)
+  :: ("log", fun l => match l with
+                      | _ :: nil => pg_num_or_dbl (fun q sc => pg_num_log (Qc_of_Z 10, 0%nat) (q, sc)) dlog10 l
+                      (* [log (b, x)] has only the [numeric] version *)
+                      | _ => numeric_log l end)
+  :: ("sin", trig sin_q) :: ("cos", trig cos_q) :: ("tan", trig tan_q)
+  :: ("cot", dbl_fun1 c (fun q => let (s, c') := fp_sin_cos (fp_of_q q) in Some (round_q binary64 (Qdiv (q_of_fp c') (q_of_fp s)))) bad pg_sp_range bad)
+  :: ("asin", atrig asin_q) :: ("acos", atrig acos_q)
+  :: ("atan", dbl_fun1 c (fun q => Some (atan_q binary64 q)) bad
+                (fun s => match s with F_PosInf => VF false (round_q binary64 (Qdiv pi_q 2))
+                                  | F_NegInf => VF false (round_q binary64 (Qopp (Qdiv pi_q 2))) | _ => pg_sp_same s end) bad)
+  :: ("atan2", dbl_fun2 c (fun y x => Some (atan2_q binary64 y x)) bad bad)
+  :: ("sinh", dbl_fun1 c (fun q => Some (hyp_q binary64 0 q)) bad pg_sp_same bad)
+  :: ("cosh", dbl_fun1 c (fun q => Some (hyp_q binary64 1 q)) bad (fun s => match s with F_NegInf => pg_sp_same F_PosInf | _ => pg_sp_same s end) bad)
+  :: ("tanh", dbl_fun1 c (fun q => Some (hyp_q binary64 2 q)) bad
+                (fun s => match s with F_PosInf => VF false (F_Finite, Qc_of_Z 1) | F_NegInf => VF false (F_Finite, Qc_of_Z (-1)) | _ => pg_sp_same s end) bad)
+  :: ("degrees", dbl_fun1 c (fun q => Some (degrees_pg q)) bad pg_sp_same bad)
+  :: ("radians", dbl_fun1 c (fun q => Some (radians_pg q)) bad pg_sp_same bad)
+  :: ("pi", fun l => match l with nil => VF false (F_Finite, pi_double) | _ => bad end)
+  (* [power] of two non-[numeric] arguments is the one of [double precision] *)
+  :: ("power", fun l => if existsb is_D l then num_power l
+                        else dpow l)
+  :: nil.
+
 Definition symbol_table_raw : list (string * (list value -> value)) :=
-  let plus := pg_int2 Z.add (pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b))))) in
-  let minus := pg_int2 Z.sub (pg_flt2 "-" Qcminus (pg_dec2 pg_dec_minus (arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b))))) in
+  let plus := pg_tm2 false (pg_int2 Z.add (pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)))))) in
+  let minus := pg_tm2 true (pg_int2 Z.sub (pg_flt2 "-" Qcminus (pg_dec2 pg_dec_minus (arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b)))))) in
   let mult := pg_int2 Z.mul (pg_flt2 "*" Qcmult (pg_dec2 pg_dec_mult (arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b))))) in
   let opp l := match l with
                | Value_D (Some (q, f, sc)) :: nil => VDec (Qcopp q) f sc
                | Value_F (Some (x, k)) :: nil => 
                  let w := Nat.odd k in
-                 match special_of_tag (Nat.div k 2) with
+                 match special_of_tag (Nat.div (Nat.modulo k 10) 2) with
                  | F_Finite => if match Qccompare x (Q2Qc 0) with Eq => true | _ => false end 
                                then VF w (F_NegZero, x) else VF w (F_Finite, Qcopp x)
                  | F_NegZero => VF w (F_Finite, x)
@@ -1233,7 +1843,7 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
  :: ("abs", fun l => match l with
                       | Value_F (Some (x, k)) :: nil => 
                         let w := Nat.odd k in
-                        match special_of_tag (Nat.div k 2) with
+                        match special_of_tag (Nat.div (Nat.modulo k 10) 2) with
                         | F_Finite => VF w (F_Finite, match Qccompare x (Q2Qc 0) with Lt => Qcopp x | _ => x end)
                         | F_NegZero => VF w (F_Finite, x)
                         | F_NegInf => VF w (F_PosInf, x)
@@ -1249,14 +1859,14 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
   :: ("power", arith2 Zpower_opt Qcpower_opt)
   :: ("floor", fun l => match l with
                         | Value_F (Some (x, k)) :: nil => 
-                          if Nat.eqb (Nat.div k 2) 0 then VF (Nat.odd k) (F_Finite, Qc_of_Z (Qc_floor x)) else Value_F (Some (x, k))
+                          if Nat.eqb (Nat.div (Nat.modulo k 10) 2) 0 then VF (Nat.odd k) (F_Finite, Qc_of_Z (Qc_floor x)) else Value_F (Some (x, k))
                         | Value_D (Some (q, _, _)) :: nil => VDec (Qc_of_Z (Qc_floor q)) 0 0
                         | Value_Q (Some q) :: nil => Value_Z (Some (Qc_floor q))
                         | Value_Z z :: nil => Value_Z z
                         | _ => Value_Z None end)
   :: ("ceil", fun l => match l with
                        | Value_F (Some (x, k)) :: nil => 
-                         if Nat.eqb (Nat.div k 2) 0 then VF (Nat.odd k) (F_Finite, Qc_of_Z (Qc_ceiling x)) else Value_F (Some (x, k))
+                         if Nat.eqb (Nat.div (Nat.modulo k 10) 2) 0 then VF (Nat.odd k) (F_Finite, Qc_of_Z (Qc_ceiling x)) else Value_F (Some (x, k))
                        | Value_D (Some (q, _, _)) :: nil => VDec (Qc_of_Z (Qc_ceiling q)) 0 0
                        | Value_Q (Some q) :: nil => Value_Z (Some (Qc_ceiling q))
                        | Value_Z z :: nil => Value_Z z
@@ -1264,7 +1874,7 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
   :: ("round", fun l => match l with
                         (* [round(float8)] is [rint]: ties to even *)
                         | Value_F (Some (x, k)) :: nil => 
-                          if Nat.eqb (Nat.div k 2) 0 
+                          if Nat.eqb (Nat.div (Nat.modulo k 10) 2) 0 
                           then VF (Nat.odd k) (F_Finite, Qc_of_Z (if Z.ltb (Qnum x) 0 
                                                                   then Z.opp (round_half_even (Z.opp (Qnum x)) (Zpos (Qden x)))
                                                                   else round_half_even (Qnum x) (Zpos (Qden x))))
@@ -1404,6 +2014,54 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
                             if (String.eqb n "C" || String.eqb n "POSIX" || String.eqb n "default")%bool 
                             then Value_string s else Value_Err "collation not modelled"
                           | _ => Value_string None end)
+  (* JSON *)
+  :: ("cast_jsonb", fun l => match l with 
+                             | Value_string (Some t) :: nil => match parse_json t with Some j => VJ 0 j | None => Value_Err "invalid input syntax for type json" end
+                             | Value_J (Some (t, _)) :: nil => match parse_json t with Some j => VJ 0 j | None => Value_J None end
+                             | _ => Value_J None end)
+  :: ("cast_json", fun l => match l with 
+                            | Value_string (Some t) :: nil => match parse_json t with Some _ => Value_J (Some (t, 1%nat)) | None => Value_Err "invalid input syntax for type json" end
+                            | Value_J (Some (t, _)) :: nil => Value_J (Some (t, 1%nat))
+                            | _ => Value_J None end)
+  :: ("->", fun l => match l with j :: k :: nil => pg_json_get false j (widen k) | _ => Value_J None end)
+  :: ("->>", fun l => match l with j :: k :: nil => pg_json_get true j (widen k) | _ => Value_string None end)
+  :: ("#>", fun l => match l with j :: p :: nil => pg_json_path false j p | _ => Value_J None end)
+  :: ("#>>", fun l => match l with j :: p :: nil => pg_json_path true j p | _ => Value_string None end)
+  :: ("jsonb_typeof", fun l => match l with j :: nil => match json_of_J j with Some d => Value_string (Some (pg_json_typeof d)) | None => Value_string None end | _ => Value_string None end)
+  :: ("json_typeof", fun l => match l with j :: nil => match json_of_J j with Some d => Value_string (Some (pg_json_typeof d)) | None => Value_string None end | _ => Value_string None end)
+  :: ("jsonb_array_length", fun l => match l with j :: nil => match json_of_J j with Some (JArr a) => Value_Z (Some (Z.of_nat (List.length a))) | Some _ => Value_Err "cannot get array length of a non-array" | None => Value_Z None end | _ => Value_Z None end)
+  :: ("json_array_length", fun l => match l with j :: nil => match json_of_J j with Some (JArr a) => Value_Z (Some (Z.of_nat (List.length a))) | Some _ => Value_Err "cannot get array length of a non-array" | None => Value_Z None end | _ => Value_Z None end)
+  :: ("jsonb_build_object", fun l => match pairs_of (map widen l) with Some ps => VJ 0 (JObj ps) | None => Value_Err "argument list must have even number of elements" end)
+  :: ("json_build_object", fun l => match pairs_of (map widen l) with Some ps => VJ 1 (JObj ps) | None => Value_Err "argument list must have even number of elements" end)
+  :: ("jsonb_build_array", fun l => VJ 0 (JArr (map pg_json_of_value l)))
+  :: ("json_build_array", fun l => VJ 1 (JArr (map pg_json_of_value l)))
+  :: ("to_jsonb", fun l => match l with v :: nil => VJ 0 (pg_json_of_value v) | _ => Value_J None end)
+  :: ("to_json", fun l => match l with v :: nil => VJ 1 (pg_json_of_value v) | _ => Value_J None end)
+  (* dates and times *)
+  :: ("cast_date", fun l => match l with v :: nil => pg_cast_temporal 0 v | _ => Value_T None end)
+  :: ("cast_time", fun l => match l with v :: nil => pg_cast_temporal 1 v | _ => Value_T None end)
+  :: ("cast_timestamp", fun l => match l with v :: nil => pg_cast_temporal 2 v | _ => Value_T None end)
+  :: ("cast_timestamptz", fun l => match l with v :: nil => pg_cast_temporal 3 v | _ => Value_T None end)
+  :: ("cast_interval", fun l => match l with v :: nil => cast_interval v | _ => Value_V None end)
+  :: ("extract", fun l => match l with Value_string (Some f) :: v :: nil => pg_extract f v | _ => Value_D None end)
+  :: ("date_part", fun l => match l with 
+                            | Value_string (Some f) :: v :: nil => 
+                              match pg_extract f v with Value_D (Some (q, _, _)) => to_float false q | r => r end 
+                            | _ => Value_F None end)
+  :: ("date_trunc", fun l => match l with Value_string (Some f) :: v :: nil => pg_date_trunc f v | _ => Value_T None end)
+  :: ("to_char", fun l => match l with 
+                          | v :: Value_string (Some fmt) :: nil => 
+                            match to_ts v with Some t => Value_string (Some (pg_format (S (String.length fmt)) t fmt)) 
+                                          | None => if is_null v then Value_string None else Value_Err "function does not exist" end
+                          | _ => Value_string None end)
+  :: ("make_date", fun l => match map int_of l with
+                            | Some y :: Some m :: Some d :: nil => 
+                              if valid_date y m d then VDate (days_from_civil y m d) else Value_Err "date field value out of range"
+                            | _ => Value_T None end)
+  (* the time of the statement ([Temporal.statement_time]) *)
+  :: ("now", fun _ => VTsTz statement_time 6) :: ("current_timestamp", fun _ => VTsTz statement_time 6)
+  :: ("current_date", fun _ => VDate (ts_days statement_time))
+  :: ("localtimestamp", fun _ => VTs statement_time 6)
   :: ("cast_float8", fun l => match l with v :: nil => cast_float false v | _ => Value_F None end)
   :: ("cast_float4", fun l => match l with v :: nil => cast_float true v | _ => Value_F None end)
   :: nil.
@@ -1414,13 +2072,129 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
     the guards of a CASE. Any other symbol yields NULL. *)
 (** the functions whose result depends on the width of their integer arguments: the arithmetic, the
     casts, and the functions which return one of their arguments *)
+(** ** Integers and bits in PostgreSQL ([int.c], [int8.c], [numeric.c])
+
+    [&], [|], [#] (exclusive or) and [~] keep the (wider) integer type; [<<] and [>>] shift in the type of
+    the left operand as C does (the bits shifted out are lost, the count is taken modulo the width).
+    [gcd] and [lcm] of integers are integers (an [lcm] out of range is an error), of [numeric] values
+    [numeric] with the larger scale; [factorial] is a [numeric]; [width_bucket] an [integer]. *)
+Definition wrap_width (w : nat) (z : Z) : Z :=
+  let b := Z.of_nat (if Nat.eqb w 1 then 64 else w) in
+  let u := Z.modulo z (2 ^ b) in
+  if Nat.eqb w 1 then u else if Z.leb (2 ^ (b - 1)) u then u - 2 ^ b else u.
+
+Definition pg_bit2 (f : Z -> Z -> Z) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    match int_parts v1, int_parts v2 with
+    | Some (a, w1), Some (b, w2) => VInt (Nat.max w1 w2) (f a b)
+    | _, _ => if is_null v1 || is_null v2 then Value_Z None else Value_Err "operator does not exist"
+    end
+  | _ => Value_Err "operator does not exist"
+  end.
+
+Definition pg_shift (left : bool) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    match int_parts v1, int_parts v2 with
+    | Some (a, w), Some (n, _) =>
+      let wd := Z.of_nat w in
+      let n := Z.modulo n wd in
+      VInt w (wrap_width w (if left then Z.shiftl a n else Z.shiftr a n))
+    | _, _ => if is_null v1 || is_null v2 then Value_Z None else Value_Err "operator does not exist"
+    end
+  | _ => Value_Err "operator does not exist"
+  end.
+
+Definition pg_gcd_lcm (lcm : bool) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    if is_null v1 || is_null v2 then (if is_D v1 || is_D v2 then Value_D None else Value_Z None)
+    else match int_parts v1, int_parts v2 with
+         | Some (a, w1), Some (b, w2) =>
+           let w := Nat.max w1 w2 in
+           let g := Z.gcd a b in
+           let r := if lcm then (if Z.eqb g 0 then 0 else Z.abs (Z.quot a g * b)) else g in
+           if int_range_ok w r then VInt w r else pg_int_error w
+         | _, _ =>
+           match dec_of_value v1, dec_of_value v2 with
+           | Some (a, _, s1), Some (b, _, s2) =>
+             let sc := Nat.max s1 s2 in
+             let ia := Qc_round (Qcmult a (Qc_pow10 sc)) in
+             let ib := Qc_round (Qcmult b (Qc_pow10 sc)) in
+             let g := Z.gcd ia ib in
+             let r := if lcm then (if Z.eqb g 0 then 0 else Z.abs (Z.quot ia g * ib)) else g in
+             (* the [lcm] of the scaled integers is scaled once more *)
+             let q := if lcm then Qcdiv (Qc_of_Z r) (Qcmult (Qc_pow10 sc) (Qc_pow10 sc)) else Qcdiv (Qc_of_Z r) (Qc_pow10 sc) in
+             let q := if lcm then Qcmult q (Qc_pow10 sc) else q in
+             VDec q sc sc
+           | _, _ => Value_Err "function does not exist"
+           end
+         end
+  | _ => Value_Err "function does not exist"
+  end.
+
+Fixpoint fact_nat (n : nat) : Z := match n with O => 1 | S k => Z.of_nat n * fact_nat k end.
+
+Definition pg_factorial (l : list value) : value :=
+  match l with
+  | v :: nil =>
+    match int_parts v with
+    | Some (n, _) => if Z.ltb n 0 then Value_Err "factorial of a negative number is undefined"
+                     else if Z.ltb 32177 n then Value_Err "value overflows numeric format"
+                     else VDec (Qc_of_Z (fact_nat (Z.to_nat n))) 0 0
+    | None => if is_null v then Value_D None else Value_Err "function does not exist"
+    end
+  | _ => Value_Err "function does not exist"
+  end.
+
+(** [width_bucket (operand, low, high, count)] ([width_bucket_numeric], [width_bucket_float8]) *)
+Definition pg_width_bucket (l : list value) : value :=
+  match l with
+  | op :: b1 :: b2 :: cnt :: nil =>
+    if existsb is_null l then Value_I None
+    else match num_of_value op, num_of_value b1, num_of_value b2, int_parts cnt with
+         | Some o, Some lo, Some hi, Some (c, _) =>
+           let q n := match n with Num_Z z => inject_Z z | Num_Q q => this q end in
+           let o := q o in let lo := q lo in let hi := q hi in
+           if Z.leb c 0 then Value_Err "count must be greater than zero"
+           else if Qeq_bool lo hi then Value_Err "lower bound cannot equal upper bound"
+           else let fl x := Qfloor x in
+                let r := if negb (Qle_bool hi lo) then
+                           (if negb (Qle_bool lo o) then 0 else if Qle_bool hi o then c + 1
+                            else fl (Qdiv (Qmult (Qminus o lo) (inject_Z c)) (Qminus hi lo)) + 1)
+                         else
+                           (if negb (Qle_bool o lo) then 0 else if Qle_bool o hi then c + 1
+                            else fl (Qdiv (Qmult (Qminus lo o) (inject_Z c)) (Qminus lo hi)) + 1) in
+                if int_range_ok 32 r then VInt 32 r else Value_Err "integer out of range"
+         | _, _, _, _ => Value_Err "function does not exist"
+         end
+  | _ => Value_Err "function does not exist"
+  end.
+
+Definition pg_int_table : list (string * (list value -> value)) :=
+     ("&", pg_bit2 Z.land) :: ("|", pg_bit2 Z.lor) :: ("#", pg_bit2 Z.lxor)
+  :: ("~", fun l => match l with
+                    | v :: nil => match int_parts v with Some (a, w) => VInt w (Z.lnot a) | None => Value_Z None end
+                    | _ => Value_Err "operator does not exist" end)
+  :: ("<<", pg_shift true) :: (">>", pg_shift false)
+  :: ("gcd", pg_gcd_lcm false) :: ("lcm", pg_gcd_lcm true)
+  :: ("factorial", pg_factorial)
+  :: ("width_bucket", pg_width_bucket)
+  :: nil.
+
 Definition width_names : list string :=
   "+" :: "-" :: "*" :: "/" :: "%" :: "plus" :: "minus" :: "mult" :: "div" :: "mod" :: "opp" :: "neg"
-      :: "cast_int" :: "cast_smallint" :: "cast_bigint" :: "coalesce" :: "nullif" :: "greatest" :: "least" :: "case" :: nil.
+      :: "cast_int" :: "cast_smallint" :: "cast_bigint" :: "coalesce" :: "nullif" :: "greatest" :: "least" :: "case"
+      :: "&" :: "|" :: "#" :: "~" :: "<<" :: ">>" :: "gcd" :: "lcm" :: "factorial" :: "width_bucket" :: nil.
 
 Definition symbol_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) width_names then p else (fst p, fun l => (snd p) (map widen l)))
-      symbol_table_raw.
+      (pg_int_table ++ pg_math_table (match string_assoc _ "power" symbol_table_raw with Some g => g | None => fun _ => Value_Z None end)
+       (* [ceiling] is [ceil]; [random ()] is not deterministic and is not modelled *)
+       ++ ("ceiling", match string_assoc _ "ceil" symbol_table_raw with Some g => g | None => fun _ => Value_Z None end)
+       :: ("random", fun _ => Value_Err "nondeterministic function")
+       :: symbol_table_raw).
 
 Definition interp_symbol f : list value -> value :=
   match f with
@@ -1481,7 +2255,7 @@ Definition agg_avg (l : list value) :=
     match agg_sum nn with
     (* [avg] of floats is a [float8] ([float8_avg], [float4_accum]) *)
     | Value_F (Some (x, k)) => 
-      pg_flt2 "/" Qcdiv (fun _ => Value_F None) (Value_F (Some (x, (2 * Nat.div k 2)%nat)) :: Value_Z (Some (Z.of_nat (List.length nn))) :: nil)
+      pg_flt2 "/" Qcdiv (fun _ => Value_F None) (Value_F (Some (x, (2 * Nat.div (Nat.modulo k 10) 2)%nat)) :: Value_Z (Some (Z.of_nat (List.length nn))) :: nil)
     | sm => 
     match dec_of_value sm with
     | Some (q, _, sc) => pg_dec_div (q, sc) (Qc_of_Z (Z.of_nat (List.length nn)), 0%nat)

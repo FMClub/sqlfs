@@ -80,7 +80,10 @@ Definition implicit_weights (c : Z) : list Z := [64448 + c / 32768; (c mod 32768
 Definition weights_of (coll : collation) (c : Z) : list Z :=
   match coll with
   | Coll_Binary => [c]
-  | Coll_General_CI => if c <? 768 then [nth (Z.to_nat c) general_ci_weights c] else if c <? 65536 then [c] else [65533]
+  | Coll_General_CI => 
+    (* ASCII: the upper case (the same as the table, computed directly) *)
+    if c <? 128 then [if (97 <=? c) && (c <=? 122) then c - 32 else c]
+    else if c <? 768 then [nth (Z.to_nat c) general_ci_weights c] else if c <? 65536 then [c] else [65533]
   | Coll_UCA900_AI_CI => if c <? 768 then nth (Z.to_nat c) uca900_primary [] else implicit_weights c
   | Coll_UCA520_CI => if c <? 768 then nth (Z.to_nat c) uca520_primary [] else implicit_weights c
   | Coll_UCA400_CI => if c <? 768 then nth (Z.to_nat c) uca400_primary [] else implicit_weights c
@@ -91,7 +94,9 @@ Definition weights_of (coll : collation) (c : Z) : list Z :=
 Definition rep_of (coll : collation) (c : Z) : Z :=
   match coll with
   | Coll_Binary => c
-  | Coll_General_CI => if c <? 768 then nth (Z.to_nat c) general_ci_weights c else if c <? 65536 then c else 65533
+  | Coll_General_CI => 
+    if c <? 128 then (if (97 <=? c) && (c <=? 122) then c - 32 else c)
+    else if c <? 768 then nth (Z.to_nat c) general_ci_weights c else if c <? 65536 then c else 65533
   | Coll_UCA900_AI_CI => if c <? 768 then nth (Z.to_nat c) uca900_rep c else c
   | Coll_UCA520_CI => if c <? 768 then nth (Z.to_nat c) uca520_rep c else c
   | Coll_UCA400_CI => if c <? 768 then nth (Z.to_nat c) uca400_rep c else c

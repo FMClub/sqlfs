@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Collation Bool3 OrderedSet SqlFull Values Dialects ValueKit PostgreSQL MySQL.
+Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -193,10 +193,99 @@ Definition ora_substr (l : list value) : value :=
 Definition ora_mod (a b : num) : option num :=
   if num_is_zero b then Some a else num_rem a b.
 
+(** * Dates in Oracle mode
+
+    A [DATE] has a date and a time, to the second ([Value_T] of kind 2 without fractional digits); a
+    [TIMESTAMP] has fractional seconds. [date + n] and [date - n] add [n] days, a number which may have a
+    fraction; [date - date] is the number of days between them, with a fraction. Converted to a text, a date
+    follows [NLS_DATE_FORMAT], ['DD-MON-RR'] by default ([ob_system_variable_init.json]). [TO_DATE] reads the
+    patterns [YYYY YY MM MON DD HH24 HH MI SS] and copies the other characters. *)
+Definition ora_date_text (t : Z) : string := pg_format 20 t "DD-MON-YY".
+
+Fixpoint ora_parse_date (fuel : nat) (fmt s : string) (acc : Z * Z * Z * Z * Z * Z) : option (Z * Z * Z * Z * Z * Z) :=
+  match fuel with
+  | O => None
+  | S f =>
+    let '(y, mo, d, h, mi, se) := acc in
+    let num (k : nat) (p : string) (set : Z -> Z * Z * Z * Z * Z * Z) :=
+        let len := String.length p in
+        (* a field of at most [k] digits *)
+        let digits := (fix take (n : nat) (x : string) : string :=
+                         match n, x with
+                         | S n', String c r => if (Nat.leb 48 (nat_of_ascii c) && Nat.leb (nat_of_ascii c) 57)%bool then String c (take n' r) else EmptyString
+                         | _, _ => EmptyString end) k s in
+        match Temporal.digits_of digits with
+        | Some v => ora_parse_date f (substring len (String.length fmt - len) fmt) (substring (String.length digits) (String.length s - String.length digits) s) (set v)
+        | None => None
+        end in
+    if String.prefix "YYYY" fmt then num 4%nat "YYYY" (fun v => (v, mo, d, h, mi, se))
+    else if String.prefix "HH24" fmt then num 2%nat "HH24" (fun v => (y, mo, d, v, mi, se))
+    else if String.prefix "MON" fmt then
+      let m3 := Temporal.upper_string (substring 0 3 s) in
+      match find (fun i => String.eqb (Temporal.upper_string (substring 0 3 (month_name (Z.of_nat i)))) m3) (seq 1 12) with
+      | Some i => ora_parse_date f (substring 3 (String.length fmt - 3) fmt) (substring 3 (String.length s - 3) s) (y, Z.of_nat i, d, h, mi, se)
+      | None => None end
+    else if String.prefix "YY" fmt then num 2%nat "YY" (fun v => (2000 + v, mo, d, h, mi, se))
+    else if String.prefix "MM" fmt then num 2%nat "MM" (fun v => (y, v, d, h, mi, se))
+    else if String.prefix "DD" fmt then num 2%nat "DD" (fun v => (y, mo, v, h, mi, se))
+    else if String.prefix "HH" fmt then num 2%nat "HH" (fun v => (y, mo, d, v, mi, se))
+    else if String.prefix "MI" fmt then num 2%nat "MI" (fun v => (y, mo, d, h, v, se))
+    else if String.prefix "SS" fmt then num 2%nat "SS" (fun v => (y, mo, d, h, mi, v))
+    else match fmt, s with
+         | EmptyString, EmptyString => Some acc
+         | String _ fr, String _ sr => ora_parse_date f fr sr acc
+         | _, _ => None
+         end
+  end.
+
+Definition ora_to_date (s fmt : string) : value :=
+  match ora_parse_date (S (String.length fmt + String.length s)) (Temporal.upper_string fmt) s (1, 1, 1, 0, 0, 0) with
+  | Some (y, mo, d, h, mi, se) =>
+    if valid_date y mo d && (h <? 24) && (mi <? 60) && (se <? 60)
+    then VTs (ts_of (days_from_civil y mo d) (((h * 60 + mi) * 60 + se) * 1000000)) 0
+    else Value_Err "ORA-01847: day of month must be between 1 and last day of month"
+  | None => Value_Err "ORA-01861: literal does not match format string"
+  end%Z.
+
+(** [ADD_MONTHS(d, n)]: the last day of a month gives the last day of the result month *)
+Definition ora_add_months (t n : Z) : Z :=
+  let days := ts_days t in
+  let '(y, m, d) := civil_from_days days in
+  let r := add_months days n in
+  let r := if Z.eqb d (days_in_month y m) 
+           then let '(y', m', _) := civil_from_days r in days_from_civil y' m' (days_in_month y' m') else r in
+  ts_of r (ts_usec t).
+
+(** [MONTHS_BETWEEN(a, b)]: whole months when the days are equal or both the last of their month,
+    otherwise the difference of the days counts as a fraction of 31 *)
+Definition ora_months_between (a b : Z) : Qc :=
+  let '(ya, ma, da) := civil_from_days (ts_days a) in
+  let '(yb, mb, db) := civil_from_days (ts_days b) in
+  let m := (ya * 12 + ma) - (yb * 12 + mb) in
+  if Z.eqb da db || (Z.eqb da (days_in_month ya ma) && Z.eqb db (days_in_month yb mb))
+  then Qc_of_Z m
+  else Qcplus (Qc_of_Z m) (Qcdiv (Qcplus (Qc_of_Z (da - db)) (Qcdiv (Qc_of_Z (ts_usec a - ts_usec b)) (Qc_of_Z usec_per_day))) (Qc_of_Z 31)).
+
+Definition ora_date_arith (minus : bool) (old : list value -> value) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    match to_ts v1, to_ts v2 with
+    | Some a, Some b => if minus then value_of_num (Num_Q (Qcdiv (Qc_of_Z (a - b)) (Qc_of_Z usec_per_day))) else Value_Err "ORA-00975: date + date not allowed"
+    | Some a, None => match strict_conv v2 with
+                      | Some n => VTs (a + (if minus then - 1 else 1) * Qc_round (Qcmult (Qc_of_num n) (Qc_of_Z usec_per_day))) 0
+                      | None => if is_null v2 then Value_T None else Value_Err "ORA-00932: inconsistent datatypes" end
+    | None, Some b => match strict_conv v1, minus with
+                      | Some n, false => VTs (b + Qc_round (Qcmult (Qc_of_num n) (Qc_of_Z usec_per_day))) 0
+                      | _, _ => if is_null v1 then Value_T None else Value_Err "ORA-00932: inconsistent datatypes" end
+    | None, None => old l
+    end
+  | _ => old l
+  end.
+
 Definition ora_symbol_table : list (string * (list value -> value)) :=
   let conv := strict_conv in
-  let plus := ora_fun2 (fun a b => value_of_num (num_plus a b)) in
-  let minus := ora_fun2 (fun a b => value_of_num (num_minus a b)) in
+  let plus := ora_date_arith false (ora_fun2 (fun a b => value_of_num (num_plus a b))) in
+  let minus := ora_date_arith true (ora_fun2 (fun a b => value_of_num (num_minus a b))) in
   let mult := ora_fun2 (fun a b => value_of_num (num_mult a b)) in
   let opp := num_fun1 conv num_opp in
   let div := ora_fun2 (fun a b => match num_div_exact a b with 
@@ -244,7 +333,53 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
                          | _ => Value_Z None end)
   :: ("case", case_by ora_truth)
   (* strings *)
-  :: ("||", ora_concat) :: ("concat", ora_concat)
+  :: ("||", fun l => ora_concat (map (fun v => match to_ts v with Some t => Value_string (Some (ora_date_text t)) | None => v end) l))
+  :: ("concat", fun l => ora_concat (map (fun v => match to_ts v with Some t => Value_string (Some (ora_date_text t)) | None => v end) l))
+  (* dates *)
+  :: ("to_date", fun l => match l with
+                          | v :: f :: nil => match text_of v, text_of f with Some s, Some fmt => ora_to_date s fmt | _, _ => Value_T None end
+                          | v :: nil => match text_of v with Some s => ora_to_date s "DD-MON-RR" | None => Value_T None end
+                          | _ => Value_T None end)
+  :: ("cast_date", fun l => match l with 
+                            | Value_string (Some s) :: nil => match parse_timestamp s with Some t => VTs t 0 | None => Value_Err "ORA-01861: literal does not match format string" end
+                            | v :: nil => match to_ts v with Some t => VTs t 0 | None => Value_T None end
+                            | _ => Value_T None end)
+  :: ("to_char", fun l => match l with
+                          | v :: f :: nil => match to_ts v, text_of f with 
+                                             | Some t, Some fmt => Value_string (Some (pg_format (S (String.length fmt)) t fmt))
+                                             | None, _ => Value_string (text_of v)
+                                             | _, _ => Value_string None end
+                          | v :: nil => match to_ts v with Some t => Value_string (Some (ora_date_text t)) | None => Value_string (text_of v) end
+                          | _ => Value_string None end)
+  :: ("sysdate", fun _ => VTs statement_time 0)
+  :: ("systimestamp", fun _ => VTsTz statement_time 6)
+  :: ("add_months", fun l => match l with
+                             | v :: n :: nil => match to_ts v, strict_conv n with
+                                                | Some t, Some k => VTs (ora_add_months t (Qc_trunc (Qc_of_num k))) 0
+                                                | _, _ => Value_T None end
+                             | _ => Value_T None end)
+  :: ("last_day", fun l => match l with
+                           | v :: nil => match to_ts v with
+                                         | Some t => let '(y, m, _) := civil_from_days (ts_days t) in VTs (ts_of (days_from_civil y m (days_in_month y m)) (ts_usec t)) 0
+                                         | None => Value_T None end
+                           | _ => Value_T None end)
+  :: ("months_between", fun l => match l with
+                                 | a :: b :: nil => match to_ts a, to_ts b with
+                                                    | Some x, Some y => Value_Q (Some (ora_months_between x y))
+                                                    | _, _ => Value_Q None end
+                                 | _ => Value_Q None end)
+  :: ("extract", fun l => match l with
+                          | Value_string (Some fld) :: v :: nil => 
+                            match to_ts v with
+                            | Some t => let '(y, m, d) := civil_from_days (ts_days t) in
+                                        match string_map upper_ascii fld with
+                                        | "YEAR" => Value_Z (Some y) | "MONTH" => Value_Z (Some m) | "DAY" => Value_Z (Some d)
+                                        | "HOUR" => Value_Z (Some (ts_usec t / 3600000000)) 
+                                        | "MINUTE" => Value_Z (Some ((ts_usec t / 60000000) mod 60))
+                                        | "SECOND" => Value_Z (Some ((ts_usec t / 1000000) mod 60))
+                                        | _ => Value_Err "ORA-30076: invalid extract field for extract source" end
+                            | None => Value_Z None end
+                          | _ => Value_Z None end)
   :: ("length", ora_str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
   :: ("upper", ora_str_fun1 upper_s) :: ("lower", ora_str_fun1 lower_s)
   :: ("trim", ora_str_fun1 (fun s => string_rtrim (string_ltrim s)))
@@ -325,4 +460,5 @@ Definition OceanBaseOracle : vsem :=
           ora_pred_error
           (* a [NUMBER] has no display scale: [1.50] is [1.5] *)
           (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end)
-          (fun _ => false).
+          (fun _ => false)
+          (fun _ _ l => l).

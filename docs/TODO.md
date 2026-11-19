@@ -106,7 +106,19 @@ prefix; Oracle mode has no condition values (`F_Cond_Value`); tests `Test_Truth.
   SQLite numeric prefix rules); `F_Cond_Value` per dialect.
 - **Done when**: a table of `WHERE <non-boolean>` behaviours matches each engine.
 
-### 1.5 Dates, times, intervals
+### 1.5 Dates, times, intervals — DONE (see the status below)
+
+Status: `Temporal.v` (proleptic Gregorian calendar, ISO weeks, texts, parsing, `DATE_FORMAT`/`to_char`
+patterns, the time of the statement as a parameter), `Value_T`/`Value_V`; PostgreSQL date/timestamp/interval
+arithmetic, `EXTRACT`/`date_part`/`date_trunc`/`to_char`/`make_date`/casts with errors; MySQL family dates as numbers
+(`YYYYMMDD`), `+ INTERVAL`, `DATE_ADD`/`DATEDIFF`/`TIMESTAMPDIFF`/`YEAR`..`MICROSECOND`/`WEEK` (mode 0)/`DATE_FORMAT`/
+`LAST_DAY`/`TO_DAYS`/`UNIX_TIMESTAMP`/casts (NULL on invalid); SQLite `date`/`time`/`datetime`/`julianday`/`unixepoch`/
+`strftime` with modifiers (no clamping of months); Oracle mode `DATE` with time, `date +/- n`, `date - date`, `TO_DATE`
+(any separator), `TO_CHAR`, `NLS_DATE_FORMAT` `DD-MON-RR`, `ADD_MONTHS`, `LAST_DAY`, `MONTHS_BETWEEN`, `EXTRACT`; the
+translator reads temporal literals, `INTERVAL n unit` and temporal columns; tests `Test_Date.v`. Open: time zones
+other than UTC and `AT TIME ZONE`, `WEEK` modes other than 0, `STR_TO_DATE`, PostgreSQL `age` and `justify_*`, zero
+dates of MySQL (`NO_ZERO_DATE` concerns insertion), leap seconds, years outside 1..9999 for MySQL, the `RR` year rule.
+
 - **What**: types `DATE`, `TIME`, `DATETIME`/`TIMESTAMP` (with and without time zone), `YEAR`, `INTERVAL`; calendar (proleptic Gregorian), leap years, ranges per dialect
   (MySQL `1000-01-01`..`9999-12-31` for `DATETIME`, `1970`..`2038` for `TIMESTAMP`; PostgreSQL 4713 BC..294276 AD), fractional seconds precision (0..6), zero dates and `NO_ZERO_DATE`.
 - **How**: `Value_Date`, `Value_Time`, `Value_Timestamp` over `Z` (days or microseconds); parsing of literals and implicit string conversion; arithmetic (`date + interval`, month-end rules: `Jan 31 + 1 month`);
@@ -116,7 +128,18 @@ prefix; Oracle mode has no condition values (`F_Cond_Value`); tests `Test_Truth.
 - **Done when**: the `date`/`time` families of sqllogictest `test/evidence` and the OceanBase `mysql_test` date files run; every date function of Phase 2.7 has a value-level spec.
 - **Depends on**: 1.1, 1.2.
 
-### 1.6 JSON
+### 1.6 JSON — DONE (see the status below)
+
+Status: `Json.v` (values, RFC 8259 parsing, normalization of objects as MySQL and `jsonb` do it, texts, the
+path language of MySQL and SQLite with negative indices, containment); `Value_J`; PostgreSQL `json` (text kept) and
+`jsonb`, `->`, `->>`, `#>`, `#>>`, `@>`, `<@`, `?`, `jsonb_typeof`, `jsonb_array_length`, `jsonb_build_object/array`,
+`to_jsonb`; MySQL `JSON_EXTRACT`, `->`, `->>`, `JSON_UNQUOTE`, `JSON_OBJECT`, `JSON_ARRAY`, `JSON_QUOTE`, `JSON_VALID`,
+`JSON_TYPE`, `JSON_LENGTH`, `JSON_KEYS`, `JSON_CONTAINS`, comparison of JSON scalars with SQL values; SQLite `json`,
+`json_extract`, `->`, `->>`, `json_array`, `json_object`, `json_type`, `json_valid`, `json_array_length`; tests
+`Test_Json.v`. Open: wildcards in paths, `JSON_SET`/`INSERT`/`REPLACE`/`REMOVE`, the JSON aggregates, `JSON_TABLE` and
+`json_each` (Phase 3.4), SQL/JSON path of PostgreSQL (`jsonb_path_query`), SQLite's JSON subtype, the JSON functions
+of Oracle mode (`JSON_VALUE`, `JSON_QUERY`), the order of JSON values of different types.
+
 - **What**: a JSON value type (`Value_Json`), with the three semantics: MySQL/MariaDB/TiDB/OceanBase (binary JSON, ordering across types, `JSON_*` functions, paths `$.a[1]`), PostgreSQL (`json` text and `jsonb`, operators `->`, `->>`, `#>`, `@>`, `?`, SQL/JSON path
   `jsonb_path_query`), SQLite (`json1`: JSON as text, `json_extract`, `->`, `->>`, `json_each`, `json_tree`).
 - **How**: an abstract syntax of JSON, parsing and printing per dialect (key order, duplicate keys, number formatting), path language interpreters (MySQL path, SQL/JSON path, SQLite path), comparison and ordering rules,
@@ -124,19 +147,45 @@ prefix; Oracle mode has no condition values (`F_Cond_Value`); tests `Test_Truth.
 - **Sources**: MySQL `sql/json_dom.cc`, `json_path.cc`; PostgreSQL `src/backend/utils/adt/json*.c`, `jsonpath*.c`; SQLite `ext/misc/json1`/`src/json.c`; MariaDB `sql/item_jsonfunc.cc`; TiDB `pkg/types/json_binary.go`.
 - **Depends on**: 1.2, 1.3.
 
-### 1.7 Other types
+### 1.7 Other types — DECIDED (decision record below; the exclusions are proposals for the user to accept)
+
+| Type | Decision | Reason |
+|---|---|---|
+| PostgreSQL arrays (`ARRAY[...]`, `unnest`, `ANY(array)`, `array_agg`) | to model with Phase 3.4 (table functions) and 2.5 (aggregates) | used by queries (`ANY`, `unnest`) |
+| Composite / row types | modelled as row values (Phase 3.7) | |
+| MySQL `ENUM` and `SET` | to model with Phase 4.2: an `ENUM` sorts by its index, compares as its text | changes `ORDER BY` results |
+| `BINARY`/`VARBINARY`/`BLOB`, `bytea`, `BIT` | to model with the charsets (1.3 follow-up): byte strings, `binary` collation | changes comparisons |
+| PostgreSQL ranges and multiranges | proposed out of scope | PostgreSQL only, no counterpart in the other engines |
+| `uuid`, `inet`/`cidr`, `macaddr` | proposed out of scope | PostgreSQL only; text-like semantics |
+| Geometric and spatial types (OGC functions) | proposed out of scope | a separate standard (SQL/MM); large |
+| Full-text search (`MATCH ... AGAINST`, `tsvector`) | proposed out of scope | relevance ranking is implementation defined |
+| XML | proposed out of scope | rarely used in the target engines |
+
+Original plan:
 - **Arrays** (PostgreSQL: any type, 1-based, `ARRAY[..]`, `unnest`, `array_agg`, `ANY(array)`, slicing), composite/row types, **ranges and multiranges**, `enum`, `uuid`, `inet/cidr`, `bit`, `bytea`, MySQL `ENUM`/`SET`/`BIT`/`BINARY`/`BLOB`,
   geometric and spatial types (OGC functions: decide scope), full-text (`MATCH .. AGAINST`, `tsvector`/`tsquery`): decide per type whether a full model or an explicit exclusion note in `docs/DIALECTS.md` (with the reason) is right;
   exclusions must be listed in the checklist as "out of scope", not left implicit.
 - **Depends on**: 1.2, 1.3.
 
-### 1.8 SQLite dynamic typing
+### 1.8 SQLite dynamic typing — DONE for comparisons (core hook `cmp_coerce` with the affinity of the column
+expressions (`attr_affinity`): NUMERIC affinity applied to a TEXT or untyped operand, TEXT affinity to an untyped one;
+REAL results and integer overflow with 1.2; `typeof`). Open: affinity of `CAST` expressions and of subquery columns in
+`IN`, `BLOB`.
 - **What**: five storage classes, column affinity (`INTEGER`, `TEXT`, `BLOB`, `REAL`, `NUMERIC`) applied on comparison and on `CAST`, `typeof`, `||` and arithmetic on all classes, integer overflow to real, `GROUP BY` and
   `DISTINCT` identity of `1` and `1.0`, expression affinity (a column's affinity propagates through `+`? no: only through the column reference and `CAST`).
 - **Sources**: `https://www.sqlite.org/datatype3.html`, `src/expr.c` (`sqlite3ExprAffinity`, `sqlite3CompareAffinity`), `src/vdbe.c`.
 - **Done when**: the type-affinity tables of the SQLite documentation reproduce, and the `evidence` sqllogictest files for SQLite pass for all queries (today 128).
 
-### 1.9 Implicit conversion matrix and `CAST`
+### 1.9 Implicit conversion matrix and `CAST` — PARTLY DONE
+
+Done (value level): casts per dialect to integer of each width, unsigned, numeric/decimal(p,s), float4/float8/double,
+string, boolean, date/time/timestamp/interval, JSON; the conversions of comparisons (MySQL strings to numbers, dates
+from strings and numbers, SQLite affinity, PostgreSQL literals read as booleans/dates, Oracle `ORA-01722`). Still to
+do, with the static typing of TODO 6.2 on which it depends: the result type of `UNION`, `CASE`, `COALESCE`,
+`GREATEST` (PostgreSQL `UNION types ... cannot be matched`, MySQL aggregation of types), and the typing of `NULL` and
+of unknown-type literals of PostgreSQL.
+
+Original plan:
 - **What**: for each ordered pair of types and each dialect: implicit conversion allowed? result type? error or warning? (e.g. MySQL string to number prefix parse; PostgreSQL no implicit text-to-number but `unknown` literals resolved from context;
   Oracle mode string/number conversion with `NLS` settings; SQLite affinity). `CAST` to each type: parsing rules and failure behaviour. Type resolution for `UNION`, `CASE`, `COALESCE`, `GREATEST`.
 - **How**: a type lattice per dialect `common_type : type -> type -> option type`; literal typing; resolved types used by `SELECT`, `UNION`, `VALUES`. Introduce `typeof_sexpr` (static type inference) since conversions depend on static types (ties to 6.2).
@@ -171,6 +220,11 @@ Targets: every function of the table is either modelled or has an explicit exclu
 
 - **2.1 Arithmetic and mathematics**: `mod`/`%`/`div`, `sqrt`, `cbrt`, `exp`, `ln`, `log`/`log2`/`log10`, trigonometry, `pi`, `degrees`/`radians`, `ceiling`, `sign`, `width_bucket`, `gcd`/`lcm`, `factorial`, `rand`/`random` (as a nondeterministic function: the set of results),
   bit operators `& | ^ ~ << >>` (MySQL 64-bit unsigned semantics), `bit_count`. Needs 1.2.
+  **Status: DONE** — table and sources in `docs/functions/math.md`, tests in `src/testing/Test_Math.v`. The
+  transcendental functions are computed exactly in fixed point and rounded once (`IEEE.v`), the `numeric`
+  versions of PostgreSQL have the scales of `numeric.c`, the C compositions of each engine are kept
+  (MySQL `LOG2`, `COT`, `DEGREES`). Exclusions: `rand()`/`random()` without seed (nondeterministic), `setseed`;
+  `RAND(N)` gives the first number of its sequence on every row; OceanBase Oracle mode `NUMBER` math in Phase 4.
 - **2.2 Strings**: `lower`, `lpad`/`rpad`, `substring_index`, `translate`, `initcap`, `ascii`/`chr`/`ord`/`char`, `split_part`, `format`, `overlay`, `position`/`strpos`/`locate`/`instr`, `repeat`, `reverse`, `trim` variants (`LEADING`/`TRAILING`/`BOTH`, character sets),
   `concat_ws`, `quote_ident`/`quote_literal`, `md5`/`sha1`/`sha2`, `hex`/`unhex`/`to_base64`, `soundex`, `space`, `insert`, `elt`/`field`/`find_in_set`, `like ... escape`, `ilike`, `similar to`, `regexp_*`. Needs 1.3.
 - **2.3 Comparison and conditional**: `in (list)` and `not in` NULL cases per dialect, `between symmetric`, `<=>`, `is distinct from`, `greatest`/`least` type rules, `decode` (Oracle), `nvl2`, `if`/`iif`/`ifnull`, `coalesce` type resolution, `nullif`.

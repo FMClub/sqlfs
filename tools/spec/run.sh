@@ -18,4 +18,6 @@ rm -rf "$ROOT/src/testing/spec"
 python3 "$ROOT/tools/spec/sql2coq.py" --dialect "$D" --outdir "$ROOT/src/testing/spec" "$@"
 cd "$ROOT/src"
 coqc -R . SQLFS testing/SpecRunner.v
-ls testing/spec/Spec_*.v | xargs -P "${JOBS:-4}" -I{} sh -c 'echo "== {}"; coqc -R . SQLFS {} 2>&1 | grep -v "^ *: " | head -${LINES_MAX:-30}'
+# a file which takes more than FILE_TIMEOUT seconds (a join of dozens of tables: the tuples of the
+# model are lists, and a row of 200 columns is slow to build) is reported as TIMEOUT
+ls testing/spec/Spec_*.v | xargs -P "${JOBS:-4}" -I{} sh -c 'echo "== {}"; timeout ${FILE_TIMEOUT:-600} coqc -R . SQLFS {} > /tmp/spec_$$.out 2>&1; [ $? -eq 124 ] && echo "TIMEOUT {}"; grep -v "^ *: " /tmp/spec_$$.out | head -${LINES_MAX:-30}; rm -f /tmp/spec_$$.out'
