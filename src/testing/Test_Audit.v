@@ -105,7 +105,8 @@ Example upper_1 : veq (F "upper" [VS "Sql 92"]) (VS "SQL 92") = true. Proof. che
 Example cast_1 : veq (F "cast_int" [VS " -42 "]) (VZ (-42)) = true. Proof. check. Qed.
 (** PostgreSQL: [CAST('4x' AS INT)] is an error *)
 Example cast_2 : veq (F "cast_int" [VS "4x"]) (NullValues.Value_Err "invalid input syntax for type integer") = true. Proof. check. Qed.
-Example cast_3 : veq (F "cast_numeric" [VS "-12.50"]) (VQ (-25) 2) = true. Proof. check. Qed.
+(** a numeric keeps the scale of its text *)
+Example cast_3 : veq (F "cast_numeric" [VS "-12.50"]) (VD (-1250) 2) = true. Proof. check. Qed.
 Example cast_4 : veq (F "cast_string" [VZ (-42)]) (VS "-42") = true. Proof. check. Qed.
 Example cast_5 : veq (F "cast_int" [VQ 7 2]) (VZ 4) = true. Proof. check. Qed.
 
@@ -121,8 +122,9 @@ Example sum_1 : veq (G "sum" vals) (VZ 40) = true. Proof. check. Qed.
 Example sum_2 : veq (G "sum" [NullZ; NullZ]) NullZ = true. Proof. check. Qed.
 Example sum_3 : veq (G "sum" []) NullZ = true. Proof. check. Qed.
 Example sum_4 : veq (G "distinct sum" vals) (VZ 30) = true. Proof. check. Qed.
-Example avg_1 : veq (G "avg" vals) (VQ 40 3) = true. Proof. check. Qed.
-Example avg_2 : veq (G "avg" [NullZ]) NullQ = true. Proof. check. Qed.
+(** [avg] is a numeric with the scale of [select_div_scale]: 13.3333333333333333 *)
+Example avg_1 : veq (G "avg" vals) (NullValues.VDec (NullValues.dec_round (Qcanon.Q2Qc (QArith_base.Qmake 40 3)) 16) 16 16) = true. Proof. check. Qed.
+Example avg_2 : veq (G "avg" [NullZ]) (NullValues.Value_D None) = true. Proof. check. Qed.
 Example min_1 : veq (G "min" vals) (VZ 10) = true. Proof. check. Qed.
 Example max_1 : veq (G "max" vals) (VZ 20) = true. Proof. check. Qed.
 Example max_2 : veq (G "max" [VZ (-5); NullZ]) (VZ (-5)) = true. Proof. check. Qed.
@@ -183,7 +185,7 @@ Example old_aggregates :
     (_Sql_Select (sel [(agg_ "count" b, cnt); (agg_ "sum" b, sm); (agg_ "max" b, mx); 
                        (agg_ "avg" b, av)])
                  [tbl "t"] _Sql_True (_Group_By nil) _Sql_True)
-    [cnt; sm; mx; av] [ [VZ 1; VZ 10; VZ 10; VQ 10 1] ] = true.
+    [cnt; sm; mx; av] [ [VZ 1; VZ 10; VZ 10; VDi 10 16] ] = true.
 Proof. check. Qed.
 
 (** [SELECT a, sum(b), max(b) FROM t GROUP BY a] *)

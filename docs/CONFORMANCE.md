@@ -42,14 +42,18 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 570 queries are translated and replayed, 561 give
-the recorded result. The 9 which do not:
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 570 queries are translated and replayed, 566 give
+the recorded result. The 4 which do not are on `FLOAT` and `DOUBLE` columns, which are not yet
+floating-point numbers (TODO 1.2.2):
 
 | Case | Reason | Status |
 |---|---|---|
-| `func_length:14,18,19,20,21` | `length(0.00)` is 4: a decimal keeps the scale of its literal; a rational forgets its trailing zeros | TODO 1.2.1 (decimal scale) |
-| `datatype_java:8` | `4/3 = 1.333333333` is true although `4/3` is displayed `1.3333`: OceanBase computes decimal quotients with more internal digits than MySQL | TODO 1.2.1 |
-| `func_group_1:57,58` | `sum` of a `FLOAT` column: the engine sums single-precision values (`147.57999897003174`) | TODO 1.2.2 (floating point) |
+| `func_group_1:57,58` | `sum` of a `FLOAT` column: the engine sums single-precision values (`147.57999897003174`) | TODO 1.2.2 |
+| `func_group_5:4`, `func_group_7:48` | `avg` of a `DOUBLE` column is a double (`-5.00000000003`, `15`), not a decimal | TODO 1.2.2 |
+
+Since TODO 1.2.1, a decimal of the model has a scale, and is compared with the recorded text exactly
+(`1.3333`, `0.00`): the former deviations `length(0.00)` and `4/3 = 1.333333333` are gone. The latter was
+not a deviation of OceanBase: MySQL's decimal library holds quotients by units of 9 digits.
 
 Since TODO 1.1, a query on which the model fails is printed `ERROR`, so a failure of the model can never
 pass for a NULL; no query of the suite fails in the model.

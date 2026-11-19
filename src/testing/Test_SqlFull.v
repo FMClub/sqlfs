@@ -77,14 +77,15 @@ Example agg_empty :
 Proof. check. Qed.
 
 (** [SELECT count( * ), count(sal), sum(sal), avg(sal), min(sal), max(sal) FROM emp]:
-    aggregates ignore NULLs. *)
+    aggregates ignore NULLs; [avg] of integers is a [numeric] with the scale of [select_div_scale]
+    (PostgreSQL prints [4000.0000000000000000]). *)
 Example agg_nulls :
   returns_bag db
     (select_where [as_ count_star c; as_ (agg "count" (col sal)) c2;
                    as_ (agg "sum" (col sal)) s; as_ (agg "avg" (col sal)) a;
                    as_ (agg "min" (col sal)) mn; as_ (agg "max" (col sal)) mx]
                   [from_table "emp"] c_true)
-    [c; c2; s; a; mn; mx] [ [VZ 5; VZ 4; VZ 16000; VQ 4000 1; VZ 3000; VZ 5000] ] = true.
+    [c; c2; s; a; mn; mx] [ [VZ 5; VZ 4; VZ 16000; VDi 4000 16; VZ 3000; VZ 5000] ] = true.
 Proof. check. Qed.
 
 (** [SELECT dept, count( * ) c, sum(sal) s FROM emp GROUP BY dept]: the NULLs

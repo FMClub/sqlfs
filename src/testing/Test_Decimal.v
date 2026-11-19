@@ -1,0 +1,110 @@
+(************************************************************************************)
+(**                                                                                 *)
+(**                 The Extension of SQLFormalSemantics Library                     *)
+(**                                                                                 *)
+(**   Tests of the scale of decimal numbers (TODO 1.2.1).                           *)
+(**                                                                                 *)
+(************************************************************************************)
+
+Require Import List String ZArith NArith.
+
+Require Import Bool3 FlatData ListFacts OrderedSet
+        FiniteSet FiniteBag FiniteCollection Tree Formula SqlFull.
+
+Require Import Values TuplesImpl GenericInstance SqlSyntax SqlFullSyntax
+        Dialects ValueKit PostgreSQL MySQL SQLite OceanBase MariaDB SpecRunner.
+
+Import Tuple.
+Import ListNotations.
+Open Scope string_scope.
+
+Ltac check := vm_compute; reflexivity.
+
+Notation c0 := (Attr_Z "c0").
+
+Definition run (d : vsem) (q : squery) :=
+  eval_query_list ORN (dialect_of d) (_basesort _ init_db) (_instance _ init_db) (to_dialect d q).
+
+(** the text of the value of [e] *)
+Definition text (d : vsem) (e : sexpr) : string :=
+  match run d (select_where [as_ e c0] [] c_true) with
+  | t :: nil => show_value (dot (TD d) t (out_attr 0))
+  | _ => "?"
+  end.
+
+Definition holds (d : vsem) (c : scond) : bool :=
+  Nat.eqb (List.length (run d (select_where [as_ (int 1) c0] [] c))) 1.
+
+Definition d150 := cst (VD 150 2).
+
+(** * PostgreSQL ([numeric.c]) *)
+
+Example pg_literal : text PostgreSQL d150 = "1.50".
+Proof. check. Qed.
+
+(** the scale is not part of the value *)
+Example pg_equal_scales : holds PostgreSQL (pred "=" [cst (VD 10 1); cst (VD 100 2)]) = true.
+Proof. check. Qed.
+
+Example pg_plus : text PostgreSQL (fn "+" [d150; int 1]) = "2.50".
+Proof. check. Qed.
+
+Example pg_mult : text PostgreSQL (fn "*" [d150; cst (VD 15 1)]) = "2.250".
+Proof. check. Qed.
+
+(** [select_div_scale]: at least 16 significant digits: [1 / 3.0] has 20 decimals *)
+Example pg_div : text PostgreSQL (fn "/" [int 1; cst (VD 30 1)]) = "0.33333333333333333333".
+Proof. check. Qed.
+
+Example pg_div_large : text PostgreSQL (fn "/" [cst (VD 100000 1); int 3]) = "3333.3333333333333333".
+Proof. check. Qed.
+
+Example pg_round : text PostgreSQL (fn "round" [cst (VD 12345 3); int 2]) = "12.35".
+Proof. check. Qed.
+
+(** * The MySQL family ([strings/decimal.c]) *)
+
+Example my_literal : text MySQL d150 = "1.50".
+Proof. check. Qed.
+
+Example my_length : text MySQL (fn "length" [cst (VD 0 2)]) = "4".
+Proof. check. Qed.
+
+Example my_div : text MySQL (fn "/" [int 4; int 3]) = "1.3333".
+Proof. check. Qed.
+
+(** the quotient holds 9 digits: [4/3 = 1.333333333] is true, [4/3 = 1.3333] is false *)
+Example my_div_digits : 
+  map (holds MySQL) [pred "=" [fn "/" [int 4; int 3]; cst (VD 1333333333 9)]; 
+                     pred "=" [fn "/" [int 4; int 3]; cst (VD 13333 4)]] = [true; false].
+Proof. check. Qed.
+
+Example my_div_then_mult : text MySQL (fn "+" [fn "*" [fn "/" [int 4; int 3]; int 1000000]; int 1]) = "1333334.3330".
+Proof. check. Qed.
+
+(** a dividend with 6 decimals holds 2 units of 9 digits *)
+Example my_div_two_units : 
+  text MySQL (fn "+" [fn "*" [fn "/" [cst (VD 4000000 6); int 3]; int 1000000000]; int 1]) = "1333333334.3333333330".
+Proof. check. Qed.
+
+Example my_div_one_unit : 
+  text MySQL (fn "+" [fn "*" [fn "/" [cst (VD 400000 5); int 3]; int 1000000000]; int 1]) = "1333333334.000000000".
+Proof. check. Qed.
+
+Definition one_two_five := values_ [c0] [[int 1]; [int 2]; [int 5]].
+
+Example my_avg : 
+  map (fun t => show_value (dot (TD MySQL) t (out_attr 0)))
+      (run MySQL (select_where [as_ (agg "avg" (col c0)) c0] [from_as one_two_five [(c0, c0)]] c_true)) = ["2.6667"].
+Proof. check. Qed.
+
+Example maria_div : text MariaDB (fn "/" [cst (VD 10 1); int 3]) = "0.33333".
+Proof. check. Qed.
+
+(** * SQLite and Oracle: no display scale *)
+
+Example lite_literal : text SQLite d150 = "1.5".
+Proof. check. Qed.
+
+Example ora_literal : text OceanBaseOracle d150 = "1.5".
+Proof. check. Qed.

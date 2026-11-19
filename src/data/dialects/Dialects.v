@@ -56,7 +56,9 @@ Record vsem : Type :=
       vs_scalar_first : bool;
       (** the predicates which fail on some arguments (Oracle: [ORA-01722] when a string which is not a
           number is compared with a number) *)
-      vs_pred_error : string -> list value -> bool
+      vs_pred_error : string -> list value -> bool;
+      (** the value of a literal *)
+      vs_const : value -> value
     }.
 
 (** [DISTINCT] aggregates: the name of the aggregate starts with ["distinct "]. *)
@@ -152,7 +154,8 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
              NullValues.is_lazy_symbol 
              (fun p l => match p with Values.Predicate s => vs_pred_error d s l end)
-             (vs_scalar_first d).
+             (vs_scalar_first d)
+             (vs_const d).
 
 (** * Moving a query to a dialect
 

@@ -21,6 +21,8 @@ Import NullValues.
 Definition canon_numeric (v : value) : value :=
   match v with
   | Value_Z (Some z) => Value_Q (Some (Qc_of_Z z))
+  (* [1.50] and [1.5] are not distinct: the scale is not part of the identity of a decimal *)
+  | Value_D (Some (q, _, _)) => Value_Q (Some q)
   | _ => if is_null v then Value_Z None else v
   end.
 
@@ -59,4 +61,5 @@ Definition PostgreSQL : vsem :=
           false
           (fun f => match f with F_Bare_Column | F_Fetch_Percent => false | _ => true end)
           false
-          (fun _ _ => false).
+          (fun _ _ => false)
+          (fun v => v).

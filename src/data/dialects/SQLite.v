@@ -271,4 +271,6 @@ Definition SQLite : vsem :=
           true
           lite_supports
           true
-          (fun _ _ => false).
+          (fun _ _ => false)
+          (* a literal with a decimal point is a [REAL] *)
+          (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end).

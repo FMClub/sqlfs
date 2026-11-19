@@ -589,6 +589,31 @@ def attr(kind, name):
     return '(Attr_%s %s)' % ({'Z': 'Z', 'S': 'string', 'Q': 'Q'}[kind], coq_str(name))
 
 
+def scaled_lit(txt):
+    """The unscaled integer and the scale of a decimal literal: 1.50 is (150, 2)."""
+    if 'e' in txt.lower():
+        raise Skip('float literal')
+    neg = txt.startswith('-')
+    if neg:
+        txt = txt[1:]
+    a, b = txt.split('.') if '.' in txt else (txt, '')
+    n = int((a or '0') + b)
+    return ('-' if neg else '') + str(n), len(b)
+
+
+def round_to_scale(txt, scale):
+    """The unscaled integer of a decimal literal stored in a DECIMAL(p, scale) column: MySQL rounds
+    half away from zero."""
+    n, s = scaled_lit(txt)
+    n = int(n)
+    if s <= scale:
+        return n * 10 ** (scale - s)
+    q, r = divmod(abs(n), 10 ** (s - scale))
+    if 2 * r >= 10 ** (s - scale):
+        q += 1
+    return q if n >= 0 else -q
+
+
 def dec_lit(txt):
     neg = txt.startswith('-')
     if neg:
@@ -671,9 +696,9 @@ class Tr:
         k = e[0]
         if k == 'num':
             txt = e[1]
-            if '.' in txt:
-                n, d = dec_lit(txt)
-                return '(cst (VQ (%s) %d))' % (n, d)
+            if '.' in txt or 'e' in txt.lower():
+                n, sc = scaled_lit(txt)
+                return '(cst (VD (%s) %d))' % (n, sc)
             return '(int (%s))' % txt
         if k == 'str':
             return '(str %s)' % coq_str(e[1])
@@ -1112,6 +1137,12 @@ def parse_create(toks):
             width = None
             if ty in STR_TYPES and p.op('(') and p.peek(1)[0] == 'num':
                 width = int(p.peek(1)[1])
+            if ty in ('decimal', 'numeric'):
+                # DECIMAL(p, s); DECIMAL(p) and DECIMAL have the scale 0
+                width = ('dec', 0)
+                if p.op('(') and p.peek(1)[0] == 'num':
+                    if p.peek(2) == ('op', ',') and p.peek(3)[0] == 'num':
+                        width = ('dec', int(p.peek(3)[1]))
             if p.op('('):
                 depth = 0
                 while True:
@@ -1177,7 +1208,7 @@ def conv_value(lit, kind, limit=None):
     """The Coq value which is stored, with the conversion of the column type."""
     if lit[0] == 'str' and isinstance(limit, int) and len(lit[1]) > limit:
         raise Skip('truncation')
-    if lit[0] == 'num' and isinstance(limit, tuple) and '.' not in lit[1] and not (limit[0] <= int(lit[1]) <= limit[1]):
+    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] != 'dec' and '.' not in lit[1] and not (limit[0] <= int(lit[1]) <= limit[1]):
         raise Skip('out of range')
     if lit[0] == 'null':
         return {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[kind]
@@ -1192,6 +1223,8 @@ def conv_value(lit, kind, limit=None):
         if '.' in txt:
             raise Skip('decimal into int column')
         return 'VZ (%s)' % txt
+    if isinstance(limit, tuple) and limit[0] == 'dec':
+        return 'VD (%s) %d' % (round_to_scale(txt, limit[1]), limit[1])
     n, d = dec_lit(txt)
     return 'VQ (%s) %d' % (n, d)
 
