@@ -79,6 +79,38 @@ not a deviation of OceanBase: MySQL's decimal library holds quotients by units o
 Since TODO 1.1, a query on which the model fails is printed `ERROR`, so a failure of the model can never
 pass for a NULL; no query of the suite fails in the model.
 
+**PostgreSQL regression tests** (`PostgreSQL`, TODO 5.3): `tools/spec/pg_run.sh POSTGRES_CHECKOUT` converts the
+expected output of `src/test/regress` (`expected/*.out`, the psql tables) with `tools/spec/pg2result.py`, translates it
+with `sql2coq.py --dialect PostgreSQL --lenient`, and checks it. The tables of `test_setup.sql` are loaded first (their
+`COPY` files become `INSERT`s; `tenk1` and `tenk2`, of 10,000 rows, are left out). A result is not checked when it cannot
+be read without ambiguity: an empty cell (NULL and `''` print the same), a cell on several lines, a date printed after the
+test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres` style. In `--lenient` mode a transaction
+block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
+skipping the file.
+
+Run 1 (`postgres/postgres` at `b443bc7`; `select`, `aggregates`, `window`, `with`, `join`, `subselect`, `union`,
+`numeric`, `text`, `float8`, `date`, `timestamp`, `json`, `arrays`, `groupingsets`; `strings` and `jsonb` change the psql
+display and are skipped): **320** queries translated, **232** pass. The 88 failures:
+
+| Count | Reason | Status |
+|---|---|---|
+| 30 | `NaN`, `Infinity` of `float8` and `numeric`; `infinity` dates and timestamps | not representable: `Value_F` and `Value_D` are finite, dates are days (open) |
+| 17 | `format` with a width (`%10s`, `%-10s`, `%*s`, `%1$10s`) | not modelled yet (`pg_format` has the conversions without widths) |
+| 14 | `json_strip_nulls` | not modelled yet |
+| 12 | BC and AD dates (`DATE '0001-12-31 BC'`) | the date parser reads only years of the common era (open) |
+| 8 | `x = ANY ('{1,2,3}')`: a string literal read as an array of the type of `x` | not modelled yet (an array value is modelled; the literal of type `unknown` is not converted) |
+| 2 | `concat` of a date: the date in `DateStyle` `Postgres, MDY` | the model prints ISO dates (the regression database's `DateStyle` is not modelled) |
+| 1 | `rank('3') WITHIN GROUP (ORDER BY x)`: `'3'` takes the type of `x` | same as the arrays: the type of an `unknown` literal |
+| 1 | `EXTRACT(JULIAN FROM ...)` | not modelled yet |
+| 1 | `0 ^ 0.5` on `numeric` | `power` of `numeric` is exact for integer exponents only |
+| 1 | `' true '::json` | the runner reads psql's cells without their padding: not a deviation |
+| 1 | `json_array_elements` with nested objects | the cells of nested JSON (psql pads them) |
+
+Fixed by this run (they were deviations of the model): `text || integer` converts the integer (`'four: ' || 2+2`), a
+boolean is `t`/`f` in `concat`, a date compared with a string literal reads the literal as a date, a timestamp prints the
+fewest fractional digits (`date_trunc` gave `.000000`), and `json` keeps its input text. In the translator: `::` casts,
+`FILTER (WHERE ...)`, the precedence of `||` below `+`, `TRUE`/`FALSE` as booleans.
+
 **sqllogictest** (queries are selected for an engine by the directives):
 
 | Scripts | SQLite | PostgreSQL | MySQL | OceanBase (MySQL mode) |

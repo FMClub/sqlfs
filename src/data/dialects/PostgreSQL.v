@@ -651,8 +651,47 @@ Definition pg_symbol_table_base : list (string * (list value -> value)) :=
   | Some f => ("substr", f) :: symbol_table
   | None => symbol_table
   end.
+(** PostgreSQL prints a time or a timestamp with the fewest fractional digits ([EncodeDateTime]: the
+    trailing zeros of the microseconds are dropped); the precision of the value does not change its text *)
+Definition pg_frac_digits (us : Z) : nat :=
+  let f := Z.modulo us 1000000 in
+  if Z.eqb f 0 then 0%nat
+  else if Z.eqb (Z.modulo f 100000) 0 then 1%nat else if Z.eqb (Z.modulo f 10000) 0 then 2%nat
+  else if Z.eqb (Z.modulo f 1000) 0 then 3%nat else if Z.eqb (Z.modulo f 100) 0 then 4%nat
+  else if Z.eqb (Z.modulo f 10) 0 then 5%nat else 6%nat.
+Definition pg_norm_t (v : value) : value :=
+  match v with
+  | Value_T (Some (t, k)) => let kind := Nat.modulo k 10 in
+                             if (Nat.eqb kind 1 || Nat.eqb kind 2 || Nat.eqb kind 3)%bool
+                             then Value_T (Some (t, (kind + 10 * pg_frac_digits t)%nat)) else v
+  | _ => v
+  end.
+
+(** the text of a value in [||], [concat], [concat_ws]: its output function, so a boolean is [t] or [f]
+    (where [CAST (true AS text)] is ['true']) *)
+Definition pg_out_text (v : value) : value :=
+  match v with Value_bool (Some b) => Value_string (Some (if b then "t" else "f")) | _ => v end.
+
+Definition pg_with_overrides (t : list (string * (list value -> value))) : list (string * (list value -> value)) :=
+  let over (n : string) (f : (list value -> value) -> list value -> value) :=
+      match string_assoc _ n t with Some g => (n, f g) :: nil | None => nil end in
+  over "concat" (fun g l => g (map pg_out_text l))
+  ++ over "concat_ws" (fun g l => g (map pg_out_text l))
+  (* [text || anynonarray]: the other operand is converted to text *)
+  ++ over "||" (fun g l => match l with
+                          | (Value_string _ as a) :: b :: nil =>
+                            if is_A b || is_J b then g l
+                            else if is_null b then Value_string None
+                            else g (a :: (match pg_out_text b with Value_string _ as x => x | x => cast_string x end) :: nil)
+                          | a :: (Value_string _ as b) :: nil =>
+                            if is_A a || is_J a then g l
+                            else if is_null a then Value_string None
+                            else g ((match pg_out_text a with Value_string _ as x => x | x => cast_string x end) :: b :: nil)
+                          | _ => g l end)
+  ++ map (fun p => (fst p, fun l => pg_norm_t (snd p l))) t.
+
 Definition pg_symbol_table : list (string * (list value -> value)) :=
-  with_aliases (pg_closeout_funs ++ pg_symbol_table_base).
+  pg_with_overrides (with_aliases (pg_closeout_funs ++ pg_symbol_table_base)).
 
 Definition PostgreSQL : vsem :=
   mk_vsem "PostgreSQL"
@@ -686,6 +725,19 @@ Definition PostgreSQL : vsem :=
                          | Value_bool _ => false
                          | Value_string (Some s) => match bool_of_string s with Some _ => false | None => true end
                          | _ => true end)
-          (fun _ _ l => l)
+          (* a string compared with a date, a time or a timestamp is read as one: the literal of type
+             [unknown] takes the type of the other operand ([select_common_type]); a string which is not a
+             date is an error, as in PostgreSQL *)
+          (fun p _ l =>
+             if existsb (String.eqb p) ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: nil)%string
+             then let conv (other v : value) :=
+                      match other, v with
+                      | Value_T (Some (_, k)), Value_string (Some _) =>
+                        let kind := Nat.modulo k 10 in
+                        pg_old (if Nat.eqb kind 0 then "cast_date" else if Nat.eqb kind 1 then "cast_time"
+                                else if Nat.eqb kind 3 then "cast_timestamptz" else "cast_timestamp") (v :: nil)
+                      | _, _ => v end in
+                  match l with a :: b :: nil => conv b a :: conv a b :: nil | _ => l end
+             else l)
           (fun l => l)
           pg_table_funs.
