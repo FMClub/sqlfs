@@ -42,8 +42,14 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 638 queries are translated and replayed (dates, times and
-`datetime(6)` columns are translated since TODO 1.5), and **635** give the recorded result:
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 738 queries are translated and replayed. Dates, times
+and `datetime(6)` columns are translated since TODO 1.5. String functions, bit operators, `LIKE ... ESCAPE`
+and the standard syntaxes `TRIM(... FROM ...)`, `POSITION`, `SUBSTRING ... FROM` are translated since TODO
+2.1–2.3.
+
+In the last run, **735** gave the recorded result. A fourth case, `select_basic:92`, was fixed after
+that run (MySQL reads `ESCAPE NULL` as the default escape `\`); it is checked by `Test_String.v`, and the
+next run will confirm it. The remaining cases are:
 
 - `expr_floor:56` and `expr_floor:57` (`ORDER BY floor(i4)`) list the rows with equal keys in another order:
   the order of rows with equal sort keys is not specified by SQL, and the model keeps the order of the

@@ -57,6 +57,8 @@ data/dialects/Dialects.v
 data/dialects/CollationData.v
 data/dialects/Collation.v
 data/dialects/ValueKit.v
+data/proof_of_concept/Hash.v
+data/dialects/StringFuns.v
 data/dialects/PostgreSQL.v
 data/dialects/MySQL.v
 data/dialects/SQLite.v
@@ -114,6 +116,8 @@ testing/Test_Session.v
 testing/Test_Decimal.v
 testing/Test_Float.v
 testing/Test_Math.v
+testing/Test_String.v
+testing/Test_Cond.v
 testing/Test_Integer.v
 testing/Test_Collation.v
 testing/Test_Truth.v

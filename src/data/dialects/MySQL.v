@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -241,6 +241,8 @@ Definition my_concat (l : list value) : value :=
   else Value_string (Some (fold_left (fun acc v => match text_of v with Some s => acc ++ s | None => acc end) 
                                      l EmptyString)).
 
+Definition my_skit : skit := mk_skit text_of z_arg (fun s => Value_string (Some s)) (Value_string None).
+
 Definition my_concat_ws (l : list value) : value :=
   match l with
   | sep :: rest => 
@@ -347,6 +349,16 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                               | _, _ => Value_Z None end
                            | _ => Value_Z None end)
   :: ("power", num_fun2 conv num_power) :: ("pow", num_fun2 conv num_power)
+  (* [ISNULL (x)] is 1 or 0; [INTERVAL (n, n1, n2, ...)] is the number of [ni <= n] for the increasing
+     [ni] (the index of the last one), -1 if [n] is NULL ([Item_func_interval]) *)
+  :: ("isnull", fun l => match l with v :: nil => Value_Z (Some (if is_null v then 1 else 0)) | _ => Value_Z None end)
+  :: ("interval_index", fun l => match l with
+                                 | n :: rest => if is_null n then Value_Z (Some (-1))
+                                                else Value_Z (Some (Z.of_nat (List.length
+                                                       (filter (fun v => negb (is_null v) &&
+                                                                         match my_compare_base n v with Some Lt => false | Some _ => true | None => false end)
+                                                               rest))))
+                                 | nil => Value_Z None end)
   :: ("greatest", extremum_strict is_null my_order is_Gt)
   :: ("least", extremum_strict is_null my_order is_Lt)
   (* conditional expressions *)
@@ -366,7 +378,63 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("or", logic_or) :: ("||", if ms_pipes_as_concat ss then my_concat else logic_or)
   :: ("xor", fun l => my_of_truth (fold_truth my_truth xor3 false3 l))
   :: ("not", fun l => match l with v :: nil => my_of_truth (negb3 (my_truth v)) | _ => Value_Z None end)
-  (* strings *)
+  (* strings ([sql/item_strfunc.cc]; TODO 2.2): positions and lengths in characters, [LENGTH] in bytes *)
+  :: ("lpad", f_pad my_skit true true) :: ("rpad", f_pad my_skit false true)
+  :: ("substring_index", f_substring_index my_skit)
+  :: ("insert", f_insert my_skit)
+  :: ("space", f_space my_skit)
+  :: ("elt", f_elt my_skit)
+  :: ("field", f_field my_skit (fun a b => String.eqb (coll_key a) (coll_key b)))
+  :: ("find_in_set", f_find_in_set my_skit (fun a b => String.eqb (coll_key a) (coll_key b)))
+  :: ("soundex", f_text1 my_skit soundex_cp)
+  :: ("trim_both", f_trim_str my_skit 0) :: ("trim_leading", f_trim_str my_skit 1) :: ("trim_trailing", f_trim_str my_skit 2)
+  :: ("position", my_locate)
+  :: ("md5", f_digest my_skit md5) :: ("sha1", f_digest my_skit sha1) :: ("sha", f_digest my_skit sha1)
+  :: ("sha2", f_sha2 my_skit)
+  :: ("to_base64", fun l => match texts my_skit l with
+                            | Some (s :: nil) => Value_string (Some (to_base64 (bytes_of_string s)))
+                            | _ => Value_string None end)
+  :: ("from_base64", fun l => match texts my_skit l with
+                              | Some (s :: nil) => match from_base64 s with
+                                                   | Some b => Value_string (Some (string_of_bytes b))
+                                                   | None => Value_string None end
+                              | _ => Value_string None end)
+  (* [HEX] of a number: the hexadecimal digits of the integer (rounded, as an unsigned 64-bit number) *)
+  :: ("hex", fun l => match l with
+                      | (Value_string (Some s) | Value_C (Some (s, _))) :: nil => Value_string (Some (hex_of_bytes true (bytes_of_string s)))
+                      | v :: nil => match z_arg v with
+                                    | Some z => let u := Z.modulo z (2 ^ 64) in
+                                                Value_string (Some (match u with 0 => "0"%string | _ =>
+                                                  let h := hex_of_bytes true (min_bytes 8 u) in
+                                                  match h with String "0"%char r => r | _ => h end end))
+                                    | None => Value_string None end
+                      | _ => Value_string None end)
+  :: ("unhex", fun l => match texts my_skit l with
+                        | Some (s :: nil) => match bytes_of_hex s with
+                                             | Some b => Value_string (Some (string_of_bytes b))
+                                             | None => Value_string None end
+                        | _ => Value_string None end)
+  :: ("ascii", fun l => match texts my_skit l with
+                        | Some (s :: nil) => Value_Z (Some (match bytes_of_string s with b :: _ => b | nil => 0 end))
+                        | _ => Value_Z None end)
+  :: ("ord", fun l => match texts my_skit l with
+                      | Some (s :: nil) => Value_Z (Some (ord_of s))
+                      | _ => Value_Z None end)
+  :: ("char", fun l => Value_string (Some (string_of_bytes
+                         (flat_map (fun v => match z_arg v with Some n => my_char_bytes n | None => nil end) l))))
+  :: ("format", fun l => match l with
+                         | x :: d :: _ => match lenient x, z_arg d with
+                                          | Some n, Some d => Value_string (Some (format_number (match n with Num_Z z => Qc_of_Z z | Num_Q q => q end) d))
+                                          | _, _ => Value_string None end
+                         | _ => Value_Err "wrong number of arguments" end)
+  :: ("octet_length", str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  :: ("bit_length", str1 (fun s => Value_Z (Some (8 * Z.of_nat (String.length s)))))
+  :: ("strcmp", fun l => match l with
+                         | a :: b :: nil => match text_of a, text_of b with
+                                            | Some a, Some b => Value_Z (Some (match String.compare (coll_key a) (coll_key b) with
+                                                                               | Lt => -1 | Eq => 0 | Gt => 1 end))
+                                            | _, _ => Value_Z None end
+                         | _ => Value_Z None end)
   :: ("concat", my_concat)
   :: ("concat_ws", my_concat_ws)
   :: ("length", str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
@@ -605,7 +673,7 @@ Definition canon_my (v : value) : value :=
 
 Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
   mk_vsem name
-          (table_of_list my_pred_table)
+          (table_of_list (like_table my_skit true (rep_of (ms_coll ss)) (rep_of (ms_coll ss)) (Some 92) ++ my_pred_table))
           (table_of_list my_symbol_table)
           (table_of_list my_aggregate_table)
           is_null
@@ -621,7 +689,7 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           (fun p l => match l with
                       | Value_C (Some (_, n1)) :: Value_C (Some (_, n2)) :: _ => 
                         negb (String.eqb n1 n2) && existsb (String.eqb p) ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: "<=>" :: nil)
-                      | _ => false end)
+                      | _ => bad_escape my_skit p l end)
           (* an integer literal is a [BIGINT], a [BIGINT UNSIGNED] above 2^63 - 1, a [DECIMAL] above 2^64 - 1 *)
           (fun v => match v with
                     | Value_Z (Some z) => if int_range_ok 64 z then v 

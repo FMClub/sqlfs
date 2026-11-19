@@ -227,7 +227,26 @@ Targets: every function of the table is either modelled or has an explicit exclu
   `RAND(N)` gives the first number of its sequence on every row; OceanBase Oracle mode `NUMBER` math in Phase 4.
 - **2.2 Strings**: `lower`, `lpad`/`rpad`, `substring_index`, `translate`, `initcap`, `ascii`/`chr`/`ord`/`char`, `split_part`, `format`, `overlay`, `position`/`strpos`/`locate`/`instr`, `repeat`, `reverse`, `trim` variants (`LEADING`/`TRAILING`/`BOTH`, character sets),
   `concat_ws`, `quote_ident`/`quote_literal`, `md5`/`sha1`/`sha2`, `hex`/`unhex`/`to_base64`, `soundex`, `space`, `insert`, `elt`/`field`/`find_in_set`, `like ... escape`, `ilike`, `similar to`, `regexp_*`. Needs 1.3.
+  **Status: DONE** (except `similar to` and `regexp_*`, which are TODO 2.4). The table and the sources are in
+  `docs/functions/strings.md`, and the tests in `src/testing/Test_String.v`. Algorithms on code points are in
+  `StringFuns.v`, and the digests are in `Hash.v` (MD5, SHA-1, SHA-2, checked on the FIPS/RFC vectors).
+  The translator reads `TRIM(... FROM ...)`, `POSITION(a IN b)`, `SUBSTRING(s FROM n FOR m)`,
+  `OVERLAY(... PLACING ...)`, `LIKE ... ESCAPE` and `ILIKE`. Exclusions:
+  - Unicode case folding: only ASCII is folded (open issue I9, row 24).
+  - SQLite `printf`/`format`.
+  - PostgreSQL `sha*` of `bytea`.
 - **2.3 Comparison and conditional**: `in (list)` and `not in` NULL cases per dialect, `between symmetric`, `<=>`, `is distinct from`, `greatest`/`least` type rules, `decode` (Oracle), `nvl2`, `if`/`iif`/`ifnull`, `coalesce` type resolution, `nullif`.
+  **Status: DONE**: the table is in `docs/functions/conditional.md`, the tests in `src/testing/Test_Cond.v`.
+  Added in this item:
+  - `BETWEEN SYMMETRIC`
+  - Oracle `DECODE`
+  - SQLite scalar `max`/`min` (the translator tells them from the aggregates by their arity)
+  - MySQL `ISNULL()` and `INTERVAL()`
+  - PostgreSQL `num_nulls`/`num_nonnulls`
+  - SQLite `likely`/`unlikely`
+
+  The result type of `COALESCE`/`CASE`/`GREATEST` is left to static typing (1.9 / 6.2): the value is
+  printed the same either way.
 - **2.4 Regular expressions**: three engines: PostgreSQL ARE (`~`, `~*`, `regexp_match`, `regexp_replace`, `regexp_split_to_table`), MySQL/MariaDB (ICU in MySQL 8, PCRE in MariaDB 10.0.5+, `REGEXP`, `REGEXP_LIKE/INSTR/REPLACE/SUBSTR`, flags `c i m n u`),
   TiDB (Go RE2 syntax), OceanBase (MySQL mode ICU; Oracle mode POSIX with Oracle flags), SQLite (extension, not built in: `REGEXP` operator calls a user function: record as "absent"). Model: a regex AST, parse per syntax, a matching semantics
   (leftmost-first for Perl-style, leftmost-longest for POSIX), flags, `NULL` handling. Verify the matcher with the engines' regex test files. Needs 1.3.

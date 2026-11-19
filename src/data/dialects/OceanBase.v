@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL.
+Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -150,6 +150,13 @@ Definition ora_str1 (f : string -> value) (l : list value) : value :=
                 else match text_of v with Some s => f s | None => Value_string None end
   | _ => Value_string None
   end.
+
+(** the string functions: [''] is NULL, and a result [''] is NULL *)
+Definition ora_skit : skit :=
+  mk_skit (fun v => if ora_isnull v then None else text_of v)
+          (fun v => match lenient v with Some (Num_Z z) => Some z | Some (Num_Q q) => Some (Qc_trunc q) | None => None end)
+          (fun s => match s with EmptyString => Value_string None | _ => Value_string (Some s) end)
+          (Value_string None).
 
 Definition ora_str_fun1 (f : string -> string) := ora_str1 (fun s => Value_string (Some (f s))).
 
@@ -314,6 +321,20 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
                                            | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   :: ("power", num_fun2 conv num_power)
+  (* [DECODE (e, s1, r1, ..., [default])]: the first [ri] whose [si] equals [e], two NULLs being equal *)
+  :: ("decode", fun l => match l with
+                         | e :: rest =>
+                           let fix go (r : list value) :=
+                               match r with
+                               | s1 :: r1 :: r' => if (ora_isnull e && ora_isnull s1) ||
+                                                      (negb (ora_isnull e) && negb (ora_isnull s1) &&
+                                                       match ora_compare e s1 with Some Eq => true | _ => false end)
+                                                   then r1 else go r'
+                               | d :: nil => d
+                               | nil => Value_string None
+                               end in
+                           go rest
+                         | nil => Value_Err "ORA-00938: not enough arguments for function" end)
   :: ("greatest", extremum_strict ora_isnull ora_order is_Gt)
   :: ("least", extremum_strict ora_isnull ora_order is_Lt)
   (* conditional expressions *)
@@ -383,7 +404,21 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
   :: ("length", ora_str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
   :: ("upper", ora_str_fun1 upper_s) :: ("lower", ora_str_fun1 lower_s)
   :: ("trim", ora_str_fun1 (fun s => string_rtrim (string_ltrim s)))
-  :: ("ltrim", ora_str_fun1 string_ltrim) :: ("rtrim", ora_str_fun1 string_rtrim)
+  (* [LTRIM (s, set)], [RTRIM (s, set)]: a set of characters; [TRIM (c FROM s)] *)
+  :: ("ltrim", f_trim_set ora_skit 1) :: ("rtrim", f_trim_set ora_skit 2)
+  :: ("trim_both", f_trim_set ora_skit 0) :: ("trim_leading", f_trim_set ora_skit 1) :: ("trim_trailing", f_trim_set ora_skit 2)
+  (* [LPAD], [RPAD] (a space by default), [TRANSLATE], [INITCAP], [ASCII], [CHR]; [''] is NULL *)
+  :: ("lpad", f_pad ora_skit true false) :: ("rpad", f_pad ora_skit false false)
+  :: ("translate", f_translate ora_skit)
+  :: ("initcap", f_text1 ora_skit initcap_cp)
+  :: ("ascii", fun l => match texts ora_skit l with
+                        | Some (s :: nil) => Value_Z (Some (ord_of s))
+                        | _ => Value_Z None end)
+  :: ("chr", fun l => match l with
+                      | v :: nil => match sk_int ora_skit v with
+                                    | Some n => Value_string (Some (string_of_bytes (my_char_bytes n)))
+                                    | None => Value_string None end
+                      | _ => Value_Err "ORA-00909: invalid number of arguments" end)
   :: ("substr", ora_substr)
   :: ("replace", fun l => match l with
                           | s :: f :: nil => match text_of s, text_of f with
@@ -445,7 +480,7 @@ Definition canon_ora (v : value) : value :=
 
 Definition OceanBaseOracle : vsem :=
   mk_vsem "OceanBase (Oracle mode)"
-          (table_of_list ora_pred_table)
+          (table_of_list (like_table ora_skit false (fun c => c) (fun c => c) None ++ ora_pred_table))
           (table_of_list ora_symbol_table)
           (table_of_list ora_aggregate_table)
           ora_isnull
@@ -457,7 +492,7 @@ Definition OceanBaseOracle : vsem :=
           false
           ora_supports
           false
-          ora_pred_error
+          (fun p l => ora_pred_error p l || bad_escape ora_skit p l)
           (* a [NUMBER] has no display scale: [1.50] is [1.5] *)
           (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end)
           (fun _ => false)
