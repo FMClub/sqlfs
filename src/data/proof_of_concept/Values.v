@@ -576,9 +576,54 @@ Definition float_rank (v : value) : option nat :=
   | _ => None
   end.
 
+(** ** Arrays (PostgreSQL, TODO 2.8): a [Value_J] of kind 2 holds the JSON array of the elements. Two
+    arrays compare element by element, a NULL element being greater than the others, a shorter array
+    which is a prefix being smaller ([array_cmp]). *)
+Fixpoint dec_digits (l : list ascii) (acc : Z) (scale : nat) (dot : bool) : option (Z * nat) :=
+  match l with
+  | nil => Some (acc, scale)
+  | c :: r => if Ascii.eqb c "."%char then (if dot then None else dec_digits r acc scale true)
+              else let n := Z.of_nat (nat_of_ascii c) in
+                   if (Z.leb 48 n && Z.leb n 57)%bool
+                   then dec_digits r (acc * 10 + (n - 48))%Z (if dot then S scale else scale) dot
+                   else None
+  end.
+
+Definition json_num_qc (t : string) : option Qc :=
+  let (neg, l) := match list_ascii_of_string t with "-"%char :: r => (true, r) | l => (false, l) end in
+  match dec_digits l 0%Z 0%nat false with
+  | Some (m, sc) => let q := Qcdiv (Qc_of_Z m) (Qc_of_Z (Z.pow 10 (Z.of_nat sc))) in
+                    Some (if neg then Qcopp q else q)
+  | None => None
+  end.
+
+Definition jelem_compare (a b : json) : comparison :=
+  match a, b with
+  | JNull, JNull => Eq
+  | JNull, _ => Gt
+  | _, JNull => Lt
+  | JNum x, JNum y => match json_num_qc x, json_num_qc y with Some p, Some q => Qccompare p q | _, _ => string_compare x y end
+  | JStr x, JStr y => string_compare x y
+  | JBool x, JBool y => bool_compare x y
+  | _, _ => string_compare (text_compact a) (text_compact b)
+  end.
+
+Fixpoint jlist_compare (a b : list json) : comparison :=
+  match a, b with
+  | nil, nil => Eq
+  | nil, _ => Lt
+  | _, nil => Gt
+  | x :: a', y :: b' => match jelem_compare x y with Eq => jlist_compare a' b' | c => c end
+  end.
+
 Definition sql_compare v1 v2 : option comparison :=
   match v1, v2 with
   | Value_T (Some _), Value_T (Some _) | Value_V (Some _), Value_V (Some _) => temporal_compare v1 v2
+  | Value_J (Some (a, 2%nat)), Value_J (Some (b, 2%nat)) =>
+    match parse_json a, parse_json b with
+    | Some (JArr x), Some (JArr y) => Some (jlist_compare x y)
+    | _, _ => Some (string_compare a b)
+    end
   | Value_J (Some (a, _)), Value_J (Some (b, _)) => Some (string_compare a b)
   | Value_T (Some _), Value_string (Some t) => 
     match parse_like v1 t with Some w => temporal_compare v1 w | None => None end
@@ -1118,8 +1163,38 @@ Definition pg_json_of_value (v : value) : json :=
   | _ => match pg_temporal_text v with Some t => JStr t | None => JNull end
   end.
 
+(** the text of an array: [{1,2,NULL}], an element being quoted when it is empty, [NULL], or holds a space,
+    a brace, a comma, a double quote or a backslash ([array_out]) *)
+Definition backslash : ascii := ascii_of_nat 92.
+Definition dquote : ascii := ascii_of_nat 34.
+
+Definition array_elem_text (j : json) : string :=
+  match j with
+  | JNull => "NULL"
+  | JNum t => t
+  | JBool b => if b then "t" else "f"
+  | JStr t =>
+    let special := existsb (fun c => Ascii.eqb c " "%char || Ascii.eqb c "{"%char || Ascii.eqb c "}"%char
+                                     || Ascii.eqb c ","%char || Ascii.eqb c dquote || Ascii.eqb c backslash)
+                           (list_ascii_of_string t)
+                   || String.eqb t "" || String.eqb (string_map upper_ascii t) "NULL" in
+    if special
+    then String dquote (string_of_list_ascii (flat_map (fun c => if Ascii.eqb c dquote || Ascii.eqb c backslash
+                                                                then backslash :: c :: nil else c :: nil)
+                                                      (list_ascii_of_string t)) ++ String dquote EmptyString)
+    else t
+  | _ => text_compact j
+  end.
+
+Definition array_text (t : string) : string :=
+  match parse_json t with
+  | Some (JArr l) => "{" ++ String.concat "," (map array_elem_text l) ++ "}"
+  | _ => t
+  end.
+
 Definition pg_json_text (v : value) : option string :=
   match v with
+  | Value_J (Some (t, 2%nat)) => Some (array_text t)
   | Value_J (Some (t, 1%nat)) => Some t
   | Value_J (Some (t, _)) => match parse_json t with Some j => Some (text_spaced j) | None => Some t end
   | _ => None

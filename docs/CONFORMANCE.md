@@ -42,14 +42,13 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 738 queries are translated and replayed. Dates, times
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 740 queries are translated and replayed. Dates, times
 and `datetime(6)` columns are translated since TODO 1.5. String functions, bit operators, `LIKE ... ESCAPE`
 and the standard syntaxes `TRIM(... FROM ...)`, `POSITION`, `SUBSTRING ... FROM` are translated since TODO
 2.1–2.3.
 
-Run 11 is the latest. In it, **735** queries gave the recorded result: every query except the two
-tie orders and the time-limit case below. The `ESCAPE NULL` case `select_basic:92` was fixed after run 10.
-(An earlier note counted 735 for run 10; the correct count was 734.) The remaining cases are:
+Run 12 is the latest, made after TODO 2.7. In it, **737** queries gave the recorded result: every query except the two
+tie orders and the time-limit case below. The remaining cases are:
 
 - `expr_floor:56` and `expr_floor:57` (`ORDER BY floor(i4)`) list the rows with equal keys in another order:
   the order of rows with equal sort keys is not specified by SQL, and the model keeps the order of the

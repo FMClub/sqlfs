@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -165,9 +165,291 @@ Definition pg_aggregates : list (string * (list value -> value)) :=
   :: ("jsonb_object_agg", json_object_agg 0 is_null text_of pg_json_of_value)
   :: ordered_set_table false is_null num_of_value sql_order.
 
+(** ** Date and time functions (TODO 2.7) *)
+Definition pg_time_funs : list (string * (list value -> value)) :=
+     ("age", fun l => match l with
+                      | a :: b :: nil => match to_ts a, to_ts b with Some x, Some y => pg_age x y | _, _ => Value_V None end
+                      (* [age (t)]: from midnight of the current date *)
+                      | a :: nil => match to_ts a with Some y => pg_age (ts_of (ts_days statement_time) 0) y | None => Value_V None end
+                      | _ => Value_Err "function does not exist" end)
+  :: ("to_date", fun l => match l with
+                          | s :: f :: nil => match text_of s, text_of f with
+                                             | Some s, Some f => match pg_to_timestamp s f with
+                                                                 | Some t => VDate (ts_days t)
+                                                                 | None => Value_Err "invalid value for to_date" end
+                                             | _, _ => Value_T None end
+                          | _ => Value_Err "function does not exist" end)
+  :: ("to_timestamp", fun l => match l with
+                               | s :: f :: nil => match text_of s, text_of f with
+                                                  | Some s, Some f => match pg_to_timestamp s f with
+                                                                      | Some t => VTsTz t 6
+                                                                      | None => Value_Err "invalid value for to_timestamp" end
+                                                  | _, _ => Value_T None end
+                               (* [to_timestamp (epoch)] *)
+                               | v :: nil => match num_of_value v with
+                                             | Some n => VTsTz (ts_of (days_from_civil 1970 1 1) 0 + Qc_round (Qcmult (Qc_of_num n) (Qc_of_Z 1000000))) 6
+                                             | None => Value_T None end
+                               | _ => Value_Err "function does not exist" end)
+  :: ("make_time", fun l => match l with
+                            | h :: m :: sec :: nil => match int_parts h, int_parts m, num_of_value sec with
+                                                      | Some (h, _), Some (m, _), Some se =>
+                                                        let us := Qc_round (Qcmult (Qc_of_num se) (Qc_of_Z 1000000)) in
+                                                        if (Z.ltb h 0) || (Z.ltb 23 h) || (Z.ltb m 0) || (Z.ltb 59 m) || (Z.ltb us 0) || (Z.leb 60000000 us)
+                                                        then Value_Err "time field value out of range"
+                                                        else VTime ((h * 60 + m) * 60000000 + us) 6
+                                                      | _, _, _ => Value_T None end
+                            | _ => Value_Err "function does not exist" end)
+  :: ("make_timestamp", fun l => match l with
+                                 | y :: mo :: d :: h :: mi :: sec :: nil =>
+                                   match int_parts y, int_parts mo, int_parts d, int_parts h, int_parts mi, num_of_value sec with
+                                   | Some (y, _), Some (mo, _), Some (d, _), Some (h, _), Some (mi, _), Some se =>
+                                     let us := Qc_round (Qcmult (Qc_of_num se) (Qc_of_Z 1000000)) in
+                                     if negb (valid_date y mo d) then Value_Err "date field value out of range"
+                                     else if (Z.ltb h 0) || (Z.ltb 23 h) || (Z.ltb mi 0) || (Z.ltb 59 mi) || (Z.ltb us 0) || (Z.leb 60000000 us)
+                                     then Value_Err "time field value out of range"
+                                     else VTs (ts_of (days_from_civil y mo d) ((h * 60 + mi) * 60000000 + us)) 6
+                                   | _, _, _, _, _, _ => Value_T None end
+                                 | _ => Value_Err "function does not exist" end)
+  (* [make_interval (years, months, weeks, days, hours, mins, secs)], missing arguments being 0 *)
+  :: ("make_interval", fun l =>
+        let z i := match nth_error l i with Some v => match int_parts v with Some (z, _) => z | None => 0 end | None => 0 end in
+        let secs := match nth_error l 6 with Some v => match num_of_value v with Some n => Qc_round (Qcmult (Qc_of_num n) (Qc_of_Z 1000000)) | None => 0 end | None => 0 end in
+        VIntv (z 0%nat * 12 + z 1%nat) (z 2%nat * 7 + z 3%nat) ((z 4%nat * 60 + z 5%nat) * 60000000 + secs))
+  :: ("justify_days", fun l => match l with Value_V (Some (mo, d, us)) :: nil => let '(a, b, c) := justify_days mo d us in VIntv a b c | _ => Value_V None end)
+  :: ("justify_hours", fun l => match l with Value_V (Some (mo, d, us)) :: nil => let '(a, b, c) := justify_hours mo d us in VIntv a b c | _ => Value_V None end)
+  :: ("justify_interval", fun l => match l with
+                                   | Value_V (Some (mo, d, us)) :: nil =>
+                                     let '(mo, d, us) := justify_hours mo d us in let '(a, b, c) := justify_days mo d us in VIntv a b c
+                                   | _ => Value_V None end)
+  :: ("date_bin", fun l => match l with
+                           | Value_V (Some (mo, d, us)) :: src :: org :: nil =>
+                             if negb (Z.eqb mo 0) then Value_Err "timestamps cannot be binned into intervals containing months or years"
+                             else match to_ts src, to_ts org with
+                                  | Some x, Some o => match date_bin (d * 86400000000 + us) x o with
+                                                      | Some r => VTs r 6 | None => Value_Err "stride must be greater than zero" end
+                                  | _, _ => Value_T None end
+                           | _ => Value_T None end)
+  :: ("isfinite", fun l => match l with v :: nil => if is_null v then Value_bool None else Value_bool (Some true) | _ => Value_bool None end)
+  :: ("clock_timestamp", fun _ => VTsTz statement_time 6) :: ("statement_timestamp", fun _ => VTsTz statement_time 6)
+  :: ("transaction_timestamp", fun _ => VTsTz statement_time 6)
+  :: nil.
+
+(** ** Arrays (TODO 2.8): one-dimensional arrays, a [Value_J] of kind 2 (the JSON array of the elements);
+    the indexes start at 1 *)
+Definition is_J (v : value) : bool := match v with Value_J (Some (_, 2%nat)) => false | Value_J _ => true | _ => false end.
+Definition is_A (v : value) : bool := match v with Value_J (Some (_, 2%nat)) => true | _ => false end.
+
+Definition VArr (l : list value) : value := Value_J (Some (text_compact (JArr (map pg_json_of_value l)), 2%nat)).
+
+Definition value_of_jelem (j : json) : value :=
+  match j with
+  | JNull => Value_Z None
+  | JNum t => match json_num_qc t with
+              | Some q => if existsb (Ascii.eqb "."%char) (list_ascii_of_string t)
+                          then VDec q (qc_scale q) (qc_scale q)
+                          else let z := Qc_round q in if int_range_ok 32 z then VInt 32 z else Value_Z (Some z)
+              | None => Value_string (Some t) end
+  | JStr t => Value_string (Some t)
+  | JBool b => Value_bool (Some b)
+  | _ => VJ 0 j
+  end.
+
+Definition arr_elems (v : value) : option (list value) :=
+  match v with
+  | Value_J (Some (t, 2%nat)) => match parse_json t with Some (JArr l) => Some (map value_of_jelem l) | _ => None end
+  | _ => None
+  end.
+
+(** two elements are not distinct ([IS NOT DISTINCT FROM]) *)
+Definition not_distinct (a b : value) : bool :=
+  if is_null a then is_null b else if is_null b then false else match sql_compare a b with Some Eq => true | _ => false end.
+
+Definition with_arr (null : value) (v : value) (f : list value -> value) : value :=
+  match arr_elems v with Some l => f l | None => null end.
+
+Definition pg_array_funs : list (string * (list value -> value)) :=
+     ("array", fun l => VArr l)
+  :: ("array_length", fun l => match l with
+                               | a :: d :: nil => with_arr (Value_I None) a (fun xs => match int_parts d, xs with
+                                                                                       | Some (1, _), _ :: _ => VInt 32 (Z.of_nat (List.length xs))
+                                                                                       | _, _ => Value_I None end)
+                               | _ => Value_Err "function does not exist" end)
+  :: ("cardinality", fun l => match l with a :: nil => with_arr (Value_I None) a (fun xs => VInt 32 (Z.of_nat (List.length xs))) | _ => Value_Err "function does not exist" end)
+  :: ("array_lower", fun l => match l with a :: _ :: nil => with_arr (Value_I None) a (fun xs => match xs with nil => Value_I None | _ => VInt 32 1 end) | _ => Value_I None end)
+  :: ("array_upper", fun l => match l with a :: _ :: nil => with_arr (Value_I None) a (fun xs => match xs with nil => Value_I None | _ => VInt 32 (Z.of_nat (List.length xs)) end) | _ => Value_I None end)
+  :: ("array_ndims", fun l => match l with a :: nil => with_arr (Value_I None) a (fun xs => match xs with nil => Value_I None | _ => VInt 32 1 end) | _ => Value_I None end)
+  :: ("array_dims", fun l => match l with a :: nil => with_arr (Value_string None) a (fun xs => match xs with nil => Value_string None | _ => Value_string (Some ("[1:" ++ string_of_Z (Z.of_nat (List.length xs)) ++ "]")) end) | _ => Value_string None end)
+  :: ("array_append", fun l => match l with a :: e :: nil => with_arr (Value_J None) a (fun xs => VArr (xs ++ e :: nil)) | _ => Value_Err "function does not exist" end)
+  :: ("array_prepend", fun l => match l with e :: a :: nil => with_arr (Value_J None) a (fun xs => VArr (e :: xs)) | _ => Value_Err "function does not exist" end)
+  :: ("array_cat", fun l => match l with a :: b :: nil => match arr_elems a, arr_elems b with
+                                                           | Some x, Some y => VArr (x ++ y) | Some _, None => a | None, Some _ => b
+                                                           | None, None => Value_J None end
+                                         | _ => Value_Err "function does not exist" end)
+  :: ("array_position", fun l => match l with
+                                 | a :: e :: rest =>
+                                   let start := match rest with s :: _ => match int_parts s with Some (z, _) => z | None => 1 end | nil => 1 end in
+                                   with_arr (Value_I None) a (fun xs =>
+                                     match find (fun p => Z.leb start (fst p) && not_distinct (snd p) e) (combine (map Z.of_nat (seq 1 (List.length xs))) xs) with
+                                     | Some (i, _) => VInt 32 i | None => Value_I None end)
+                                 | _ => Value_Err "function does not exist" end)
+  :: ("array_positions", fun l => match l with
+                                  | a :: e :: nil => with_arr (Value_J None) a (fun xs =>
+                                      VArr (map (fun p => VInt 32 (fst p)) (filter (fun p => not_distinct (snd p) e) (combine (map Z.of_nat (seq 1 (List.length xs))) xs))))
+                                  | _ => Value_Err "function does not exist" end)
+  :: ("array_remove", fun l => match l with a :: e :: nil => with_arr (Value_J None) a (fun xs => VArr (filter (fun x => negb (not_distinct x e)) xs)) | _ => Value_Err "function does not exist" end)
+  :: ("array_replace", fun l => match l with a :: e :: r :: nil => with_arr (Value_J None) a (fun xs => VArr (map (fun x => if not_distinct x e then r else x) xs)) | _ => Value_Err "function does not exist" end)
+  :: ("array_to_string", fun l => match l with
+                                  | a :: sep :: rest =>
+                                    match text_of sep with
+                                    | Some sp =>
+                                      let nulls := match rest with n :: _ => text_of n | nil => None end in
+                                      with_arr (Value_string None) a (fun xs =>
+                                        Value_string (Some (String.concat sp (flat_map (fun x => if is_null x then match nulls with Some n => n :: nil | None => nil end
+                                                                                                    else match text_of x with Some t => t :: nil | None => nil end) xs))))
+                                    | None => Value_string None end
+                                  | _ => Value_Err "function does not exist" end)
+  :: ("string_to_array", fun l => match l with
+                                  | s :: sep :: rest =>
+                                    match text_of s with
+                                    | Some t =>
+                                      let nulls := match rest with n :: _ => text_of n | nil => None end in
+                                      let parts := match sep with
+                                                   | Value_string (Some EmptyString) => match t with EmptyString => nil | _ => t :: nil end
+                                                   | _ => match text_of sep with
+                                                          | Some d => match t with EmptyString => nil | _ => map txt (split_cp (cps d) (cps t)) end
+                                                          | None => map (fun c => txt (c :: nil)) (cps t) end
+                                                   end in
+                                      VArr (map (fun p => match nulls with
+                                                          | Some n => if String.eqb p n then Value_string None else Value_string (Some p)
+                                                          | None => Value_string (Some p) end) parts)
+                                    | None => Value_J None end
+                                  | _ => Value_Err "function does not exist" end)
+  :: ("subscript", fun l => match l with
+                            | a :: i :: nil => with_arr (Value_Z None) a (fun xs => match int_parts i with
+                                                                                   | Some (k, _) => if Z.leb 1 k then nth (Z.to_nat (k - 1)) xs (Value_Z None) else Value_Z None
+                                                                                   | None => Value_Z None end)
+                            | _ => Value_Err "function does not exist" end)
+  :: ("slice", fun l => match l with
+                        | a :: lo :: hi :: nil => with_arr (Value_J None) a (fun xs => match int_parts lo, int_parts hi with
+                                                                                       | Some (x, _), Some (y, _) => let x := Z.max 1 x in
+                                                                                         VArr (firstn (Z.to_nat (y - x + 1)) (skipn (Z.to_nat (x - 1)) xs))
+                                                                                       | _, _ => Value_J None end)
+                        | _ => Value_Err "function does not exist" end)
+  :: nil.
+
+(** [x op ANY (array)], [x op ALL (array)]; [@>], [<@], [&&] of arrays *)
+Definition pg_quant_array (all : bool) (op : string) (l : list value) : bool3 :=
+  match l with
+  | x :: a :: nil =>
+    match arr_elems a, string_assoc _ op predicate_table with
+    | Some xs, Some p => let rs := map (fun e => p (x :: e :: nil)) xs in
+                         if all then fold_left andb3 rs true3 else fold_left orb3 rs false3
+    | _, _ => unknown3
+    end
+  | _ => unknown3
+  end.
+
+Definition pg_array_preds : list (string * (list value -> bool3)) :=
+  flat_map (fun op => ((op ++ "any")%string, pg_quant_array false op) :: ((op ++ "all")%string, pg_quant_array true op) :: nil)
+           ("=" :: "<>" :: "<" :: "<=" :: ">" :: ">=" :: nil)%string
+  ++ ("&&", fun l => match l with
+                     | a :: b :: nil => match arr_elems a, arr_elems b with
+                                        | Some x, Some y => bool3_of_bool (existsb (fun e => negb (is_null e) && existsb (fun f => negb (is_null f) && not_distinct e f) y) x)
+                                        | _, _ => unknown3 end
+                     | _ => unknown3 end)
+  :: ("@>", fun l => match l with
+                     | a :: b :: nil => if is_A a then match arr_elems a, arr_elems b with
+                                                       | Some x, Some y => bool3_of_bool (forallb (fun f => negb (is_null f) && existsb (fun e => negb (is_null e) && not_distinct e f) x) y)
+                                                       | _, _ => unknown3 end
+                                        else match string_assoc _ "@>" predicate_table with Some p => p l | None => unknown3 end
+                     | _ => unknown3 end)
+  :: ("<@", fun l => match l with
+                     | a :: b :: nil => if is_A a then match arr_elems a, arr_elems b with
+                                                       | Some x, Some y => bool3_of_bool (forallb (fun f => negb (is_null f) && existsb (fun e => negb (is_null e) && not_distinct e f) y) x)
+                                                       | _, _ => unknown3 end
+                                        else match string_assoc _ "<@" predicate_table with Some p => p l | None => unknown3 end
+                     | _ => unknown3 end)
+  :: nil.
+
+(** ** [jsonb] functions and operators (TODO 2.8): [jsonb_set], [jsonb_insert], [jsonb_strip_nulls],
+    [jsonb_pretty], [#-], [||] and [-] on [jsonb]; the paths are text arrays ['{a,0}'] *)
+Definition pg_old (name : string) : list value -> value :=
+  match string_assoc _ name symbol_table with Some g => g | None => fun _ => Value_Z None end.
+
+
+Definition pg_json_funs : list (string * (list value -> value)) :=
+     ("jsonb_set", fun l => match l with
+                            | t :: p :: v :: rest =>
+                              let create := match rest with Value_bool (Some false) :: _ => false | _ => true end in
+                              match json_of_J t, text_of p, json_of_J v with
+                              | Some j, Some ps, Some nv => match pg_text_array ps with
+                                                            | Some path => VJ 0 (pg_set create path j nv)
+                                                            | None => Value_Err "malformed array literal" end
+                              | _, _, _ => Value_J None end
+                            | _ => Value_Err "function does not exist" end)
+  :: ("jsonb_insert", fun l => match l with
+                               | t :: p :: v :: rest =>
+                                 let after := match rest with Value_bool (Some true) :: _ => true | _ => false end in
+                                 match json_of_J t, text_of p, json_of_J v with
+                                 | Some j, Some ps, Some nv => match pg_text_array ps with
+                                                               | Some path => VJ 0 (pg_insert after path j nv)
+                                                               | None => Value_Err "malformed array literal" end
+                                 | _, _, _ => Value_J None end
+                               | _ => Value_Err "function does not exist" end)
+  :: ("jsonb_strip_nulls", fun l => match l with v :: nil => match json_of_J v with Some j => VJ 0 (strip_nulls j) | None => Value_J None end | _ => Value_J None end)
+  :: ("json_strip_nulls", fun l => match l with v :: nil => match json_of_J v with Some j => VJ 1 (strip_nulls j) | None => Value_J None end | _ => Value_J None end)
+  :: ("jsonb_pretty", fun l => match l with v :: nil => match json_of_J v with Some j => Value_string (Some (pretty 4 j)) | None => Value_string None end | _ => Value_string None end)
+  :: ("#-", fun l => match l with
+                     | t :: p :: nil => match json_of_J t, text_of p with
+                                        | Some j, Some ps => match pg_text_array ps with
+                                                             | Some path => VJ 0 (pg_remove path j)
+                                                             | None => Value_Err "malformed array literal" end
+                                        | _, _ => Value_J None end
+                     | _ => Value_Err "operator does not exist" end)
+  :: ("||", fun l => match l with
+                     | a :: b :: nil => if is_A a || is_A b
+                                        then match arr_elems a, arr_elems b with
+                                             | Some x, Some y => VArr (x ++ y)
+                                             | Some x, None => VArr (x ++ b :: nil)
+                                             | None, Some y => VArr (a :: y)
+                                             | None, None => Value_J None end
+                                        else if is_J a && is_J b
+                                        then match json_of_J a, json_of_J b with Some x, Some y => VJ 0 (pg_concat x y) | _, _ => Value_J None end
+                                        else pg_old "||" l
+                     | _ => pg_old "||" l end)
+  :: ("-", fun l => match l with
+                    | a :: b :: nil => if is_J a
+                                       then match json_of_J a, b with
+                                            | Some x, (Value_string (Some k) | Value_C (Some (k, _))) => VJ 0 (pg_minus_key x k)
+                                            | Some x, _ => match int_parts b with Some (i, _) => VJ 0 (pg_minus_idx x i) | None => Value_J None end
+                                            | None, _ => Value_J None end
+                                       else pg_old "-" l
+                    | _ => pg_old "-" l end)
+  :: nil.
+
+(** [?|] and [?&]: any or all of the keys of a text array *)
+Definition pg_json_preds : list (string * (list value -> bool3)) :=
+     ("?|", fun l => match l with
+                     | a :: k :: nil => match json_of_J a, text_of k with
+                                        | Some (JObj ms), Some ks => match pg_text_array ks with
+                                                                     | Some keys => bool3_of_bool (existsb (fun x => existsb (fun m => String.eqb (fst m) x) ms) keys)
+                                                                     | None => unknown3 end
+                                        | Some _, Some _ => false3
+                                        | _, _ => unknown3 end
+                     | _ => unknown3 end)
+  :: ("?&", fun l => match l with
+                     | a :: k :: nil => match json_of_J a, text_of k with
+                                        | Some (JObj ms), Some ks => match pg_text_array ks with
+                                                                     | Some keys => bool3_of_bool (forallb (fun x => existsb (fun m => String.eqb (fst m) x) ms) keys)
+                                                                     | None => unknown3 end
+                                        | Some _, Some _ => false3
+                                        | _, _ => unknown3 end
+                     | _ => unknown3 end)
+  :: nil.
+
 (** [substr] is a synonym of [substring] *)
 Definition pg_symbol_table : list (string * (list value -> value)) :=
-  pg_regex_funs ++ pg_string_table ++
+  pg_array_funs ++ pg_json_funs ++ pg_time_funs ++ pg_regex_funs ++ pg_string_table ++
   match string_assoc _ "substring" symbol_table with
   | Some f => ("substr", f) :: symbol_table
   | None => symbol_table
@@ -175,9 +457,9 @@ Definition pg_symbol_table : list (string * (list value -> value)) :=
 
 Definition PostgreSQL : vsem :=
   mk_vsem "PostgreSQL"
-          (table_of_list (like_table pg_skit false (fun c => c) low_cp (Some 92) ++ pg_regex_preds ++ pg_extra_preds ++ predicate_table))
+          (table_of_list (like_table pg_skit false (fun c => c) low_cp (Some 92) ++ pg_regex_preds ++ pg_array_preds ++ pg_json_preds ++ pg_extra_preds ++ predicate_table))
           (table_of_list pg_symbol_table)
-          (table_of_list (pg_aggregates ++ filter (fun p => negb (String.eqb (fst p) "group_concat")) aggregate_table
+          (table_of_list (("array_agg", fun l => VArr l) :: pg_aggregates ++ filter (fun p => negb (String.eqb (fst p) "group_concat")) aggregate_table
                           ++ ("string_agg_sep", agg_concat_sep_by is_null "") :: nil))
           is_null
           (fun v => match v with

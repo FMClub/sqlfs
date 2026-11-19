@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -256,6 +256,80 @@ Definition my_rx : rx_env :=
             false
             (negb (Nat.eqb (ms_regex ss) 1))
             "Illegal argument to a regular expression".
+
+(** the JSON functions of TODO 2.8: a document, then paths (and values); NULL if one is NULL *)
+Definition my_json_update (create replace : bool) (l : list value) : value :=
+  match l with
+  | d :: rest =>
+    if existsb is_null l then Value_J None
+    else match my_json_doc d with
+         | Some (Some j) =>
+           let fix go (r : list value) (acc : json) : option json :=
+               match r with
+               | nil => Some acc
+               | p :: v :: r' => match text_of p with
+                                 | Some t => match parse_path t with
+                                             | Some st => go r' (set_path create replace st acc (my_json_of_value v))
+                                             | None => None end
+                                 | None => None end
+               | _ => None
+               end in
+           match go rest j with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
+         | Some None => Value_J None
+         | None => Value_Err "Invalid JSON text in argument 1"
+         end
+  | nil => Value_Err "Incorrect parameter count"
+  end.
+
+Definition my_json_paths (f : list step -> json -> option json) (l : list value) : value :=
+  match l with
+  | d :: paths =>
+    if existsb is_null l then Value_J None
+    else match my_json_doc d with
+         | Some (Some j) =>
+           let r := fold_left (fun acc p => match acc, text_of p with
+                                            | Some a, Some t => match parse_path t with Some st => f st a | None => None end
+                                            | _, _ => None end) paths (Some j) in
+           match r with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
+         | Some None => Value_J None
+         | None => Value_Err "Invalid JSON text in argument 1"
+         end
+  | nil => Value_Err "Incorrect parameter count"
+  end.
+
+Definition my_json_pathvals (f : list step -> json -> json -> option json) (l : list value) : value :=
+  match l with
+  | d :: rest =>
+    if existsb is_null l then Value_J None
+    else match my_json_doc d with
+         | Some (Some j) =>
+           let fix go (r : list value) (acc : json) : option json :=
+               match r with
+               | nil => Some acc
+               | p :: v :: r' => match text_of p with
+                                 | Some t => match parse_path t with
+                                             | Some st => match f st acc (my_json_of_value v) with Some a => go r' a | None => None end
+                                             | None => None end
+                                 | None => None end
+               | _ => None
+               end in
+           match go rest j with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
+         | Some None => Value_J None
+         | None => Value_Err "Invalid JSON text in argument 1"
+         end
+  | nil => Value_Err "Incorrect parameter count"
+  end.
+
+Definition my_json_docs (f : json -> json -> json) (l : list value) : value :=
+  if existsb is_null l then Value_J None
+  else match map my_json_doc l with
+       | Some (Some j) :: rest =>
+         match fold_left (fun acc d => match acc, d with Some a, Some (Some b) => Some (f a b) | _, _ => None end) rest (Some j) with
+         | Some r => VJ 0 r
+         | None => Value_Err "Invalid JSON text"
+         end
+       | _ => Value_Err "Invalid JSON text"
+       end.
 
 Definition my_concat_ws (l : list value) : value :=
   match l with
@@ -508,6 +582,63 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                | _ => Value_D None end)
   (* JSON *)
   :: ("json_extract", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
+  (* TODO 2.8: updates by path, removal, arrays, merges, depth, search, overlaps, pretty printing *)
+  :: ("json_set", my_json_update true true) :: ("json_insert", my_json_update true false)
+  :: ("json_replace", my_json_update false true)
+  :: ("json_remove", fun l => my_json_paths (fun p d => match p with nil => None | _ => Some (remove_path p d) end) l)
+  :: ("json_array_append", my_json_pathvals (fun p d v => Some (array_append p d v)))
+  :: ("json_array_insert", my_json_pathvals (fun p d v => array_insert p d v))
+  :: ("json_merge_patch", my_json_docs (fun a b => merge_patch (json_size a + json_size b) a b))
+  :: ("json_merge_preserve", my_json_docs (fun a b => merge_preserve (json_size a + json_size b) a b))
+  :: ("json_merge", my_json_docs (fun a b => merge_preserve (json_size a + json_size b) a b))
+  :: ("json_depth", fun l => match l with
+                             | d :: nil => match my_json_doc d with
+                                           | Some (Some j) => Value_Z (Some (Z.of_nat (json_depth j)))
+                                           | Some None => Value_Z None
+                                           | None => Value_Err "Invalid JSON text in argument 1" end
+                             | _ => Value_Z None end)
+  :: ("json_contains_path", fun l => match l with
+                                     | d :: mode :: paths =>
+                                       match my_json_doc d, text_of mode with
+                                       | Some (Some j), Some m =>
+                                         let found := map (fun p => match text_of p with
+                                                                    | Some t => match parse_path t with
+                                                                                | Some st => match follow st j with Some _ => Some true | None => Some false end
+                                                                                | None => None end
+                                                                    | None => None end) paths in
+                                         if existsb (fun x => match x with None => true | _ => false end) found
+                                         then Value_Err "Invalid JSON path expression"
+                                         else let bs := map (fun x => match x with Some b => b | None => false end) found in
+                                              match Temporal.upper_string m with
+                                              | "ONE"%string => Value_Z (Some (if existsb (fun b => b) bs then 1 else 0))
+                                              | "ALL"%string => Value_Z (Some (if forallb (fun b => b) bs then 1 else 0))
+                                              | _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
+                                       | Some None, _ => Value_Z None
+                                       | _, _ => Value_Z None end
+                                     | _ => Value_Z None end)
+  :: ("json_search", fun l => match l with
+                              | d :: mode :: str :: _ =>
+                                match my_json_doc d, text_of mode, text_of str with
+                                | Some (Some j), Some m, Some t =>
+                                  let ps := search_paths (json_size j) t "$" j in
+                                  match Temporal.upper_string m, ps with
+                                  | _, nil => Value_J None
+                                  | "ONE"%string, p :: _ => VJ 0 (JStr p)
+                                  | "ALL"%string, p :: nil => VJ 0 (JStr p)
+                                  | "ALL"%string, _ => VJ 0 (JArr (map JStr ps))
+                                  | _, _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
+                                | _, _, _ => Value_J None end
+                              | _ => Value_J None end)
+  :: ("json_overlaps", fun l => match l with
+                                | a :: b :: nil => match my_json_doc a, my_json_doc b with
+                                                   | Some (Some x), Some (Some y) => Value_Z (Some (if json_overlaps x y then 1 else 0))
+                                                   | _, _ => Value_Z None end
+                                | _ => Value_Z None end)
+  :: ("json_pretty", fun l => match l with
+                              | d :: nil => match my_json_doc d with
+                                            | Some (Some j) => Value_string (Some (pretty 2 (normalize j)))
+                                            | _ => Value_string None end
+                              | _ => Value_string None end)
   :: ("->", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
   :: ("->>", fun l => match l with d :: p :: nil => my_json_unquote (my_json_extract d p) | _ => Value_string None end)
   :: ("json_unquote", fun l => match l with v :: nil => my_json_unquote v | _ => Value_string None end)
@@ -585,6 +716,105 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("quarter", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(_, m, _) := civil_from_days (ts_days t) in Value_Z (Some ((m - 1) / 3 + 1)) | None => Value_Z None end | _ => Value_Z None end)
   :: ("week", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (my_week0 (ts_days t))) | None => Value_Z None end | _ => Value_Z None end)
   :: ("last_day", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(y, m, _) := civil_from_days (ts_days t) in VDate (days_from_civil y m (days_in_month y m)) | None => Value_T None end | _ => Value_T None end)
+  (* TODO 2.7 *)
+  :: ("str_to_date", fun l => match l with
+                              | s :: f :: nil => match text_of s, text_of f with
+                                                 | Some s, Some f => my_str_to_date s f | _, _ => Value_T None end
+                              | _ => Value_T None end)
+  :: ("makedate", fun l => match l with
+                           | y :: j :: nil => match z_arg y, z_arg j with
+                                              | Some y, Some j => if Z.leb j 0 then Value_T None
+                                                                  else VDate (days_from_civil (if Z.ltb y 70 then y + 2000 else if Z.ltb y 100 then y + 1900 else y) 1 1 + j - 1)
+                                              | _, _ => Value_T None end
+                           | _ => Value_T None end)
+  :: ("maketime", fun l => match l with
+                           | h :: m :: sec :: nil => match z_arg h, z_arg m, lenient sec with
+                                                     | Some h, Some m, Some se =>
+                                                       if (Z.ltb (m) 0) || (Z.ltb (59) m) then Value_T None
+                                                       else let sq := Qc_of_num se in
+                                                            let us := Qc_round (Qcmult sq (Qc_of_Z 1000000)) in
+                                                            let sgn := if Z.ltb h 0 then -1 else 1 in
+                                                            VTime (clamp_time (sgn * ((Z.abs h * 60 + m) * 60 * 1000000 + us))) (match se with Num_Z _ => 0%nat | Num_Q q => Nat.min 6 (qc_scale q) end)
+                                                     | _, _, _ => Value_T None end
+                           | _ => Value_T None end)
+  :: ("sec_to_time", fun l => match l with
+                              | v :: nil => match lenient v with
+                                            | Some n => let q := Qc_of_num n in
+                                                        VTime (clamp_time (Qc_round (Qcmult q (Qc_of_Z 1000000)))) (match n with Num_Z _ => 0%nat | Num_Q q => Nat.min 6 (qc_scale q) end)
+                                            | None => Value_T None end
+                              | _ => Value_T None end)
+  :: ("time_to_sec", fun l => match l with
+                              | v :: nil => match temporal_parts v with
+                                            | Some (1%nat, us, _) => Value_Z (Some (Z.quot us 1000000))
+                                            | _ => match my_ts_of v with Some (t, _) => Value_Z (Some (ts_usec t / 1000000)) | None => Value_Z None end end
+                              | _ => Value_Z None end)
+  :: ("from_days", fun l => match l with v :: nil => match z_arg v with Some n => my_from_days n | None => Value_T None end | _ => Value_T None end)
+  :: ("from_unixtime", fun l => match l with
+                                | v :: rest => match lenient v with
+                                               | Some n => let q := Qc_of_num n in
+                                                           if Qc_lt_bool q (Qc_of_Z 0) then Value_T None
+                                                           else let t := ts_of (days_from_civil 1970 1 1) 0 + Qc_round (Qcmult q (Qc_of_Z 1000000)) in
+                                                                match rest with
+                                                                | nil => VTs t (match n with Num_Z _ => 0%nat | Num_Q q => Nat.min 6 (qc_scale q) end)
+                                                                | f :: nil => match text_of f with
+                                                                              | Some f => Value_string (Some (my_format (S (String.length f)) t f))
+                                                                              | None => Value_string None end
+                                                                | _ => Value_T None end
+                                               | None => Value_T None end
+                                | _ => Value_T None end)
+  :: ("dayname", fun l => match l with v :: nil => match my_ts_of v with
+                                                   | Some (t, _) => Value_string (Some (day_name (day_of_week (ts_days t)))) | None => Value_string None end
+                                     | _ => Value_string None end)
+  :: ("monthname", fun l => match l with v :: nil => match my_ts_of v with
+                                                     | Some (t, _) => let '(_, m, _) := civil_from_days (ts_days t) in Value_string (Some (month_name m))
+                                                     | None => Value_string None end
+                                       | _ => Value_string None end)
+  :: ("period_add", fun l => match l with
+                             | p :: n :: nil => match z_arg p, z_arg n with
+                                                | Some p, Some n => Value_Z (Some (if Z.eqb p 0 then 0 else months_period (period_months p + n)))
+                                                | _, _ => Value_Z None end
+                             | _ => Value_Z None end)
+  :: ("period_diff", fun l => match l with
+                              | a :: b :: nil => match z_arg a, z_arg b with
+                                                 | Some a, Some b => Value_Z (Some (period_months a - period_months b))
+                                                 | _, _ => Value_Z None end
+                              | _ => Value_Z None end)
+  :: ("timediff", fun l => match l with
+                           | a :: b :: nil => match temporal_parts a, temporal_parts b with
+                                              | Some (1%nat, x, f1), Some (1%nat, y, f2) => VTime (clamp_time (x - y)) (Nat.max f1 f2)
+                                              | _, _ => match my_ts_of a, my_ts_of b with
+                                                        | Some (x, _), Some (y, _) => VTime (clamp_time (x - y)) 6
+                                                        | _, _ => Value_T None end end
+                           | _ => Value_T None end)
+  :: ("addtime", fun l => match l with
+                          | a :: b :: nil => match temporal_parts b with
+                                             | Some (1%nat, d, _) => match temporal_parts a with
+                                                                    | Some (1%nat, x, f) => VTime (clamp_time (x + d)) f
+                                                                    | _ => match my_ts_of a with Some (x, _) => VTs (x + d) 6 | None => Value_T None end end
+                                             | _ => Value_T None end
+                          | _ => Value_T None end)
+  :: ("subtime", fun l => match l with
+                          | a :: b :: nil => match temporal_parts b with
+                                             | Some (1%nat, d, _) => match temporal_parts a with
+                                                                    | Some (1%nat, x, f) => VTime (clamp_time (x - d)) f
+                                                                    | _ => match my_ts_of a with Some (x, _) => VTs (x - d) 6 | None => Value_T None end end
+                                             | _ => Value_T None end
+                          | _ => Value_T None end)
+  :: ("time_format", fun l => match l with
+                              | v :: f :: nil => match temporal_parts v, text_of f with
+                                                 | Some (1%nat, us, _), Some f => Value_string (Some (time_format us f))
+                                                 | _, Some f => match my_ts_of v with Some (t, _) => Value_string (Some (time_format (ts_usec t) f)) | None => Value_string None end
+                                                 | _, _ => Value_string None end
+                              | _ => Value_string None end)
+  :: ("utc_date", fun _ => VDate (ts_days statement_time))
+  :: ("utc_time", fun _ => VTime (ts_usec statement_time) 0)
+  :: ("utc_timestamp", fun _ => VTs statement_time 0)
+  :: ("extract", fun l => match l with
+                          | u :: v :: nil => match text_of u, my_ts_of v with
+                                             | Some u, Some (t, _) => match my_extract (Temporal.upper_string u) t with
+                                                                      | Some z => Value_Z (Some z) | None => Value_Z None end
+                                             | _, _ => Value_Z None end
+                          | _ => Value_Z None end)
   :: ("to_days", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (ts_days t + 719528)) | None => Value_Z None end | _ => Value_Z None end)
   :: ("date", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => VDate (ts_days t) | None => Value_T None end | _ => Value_T None end)
   :: ("date_format", fun l => match l with
