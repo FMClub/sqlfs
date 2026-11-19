@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull IEEE Values Dialects ValueKit PostgreSQL MySQL.
+Require Import Bool3 OrderedSet SqlFull IEEE Values Dialects ValueKit Collation PostgreSQL MySQL.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -39,17 +39,30 @@ Import NullValues.
     Integers are unbounded and reals are exact rationals: overflows and rounding are not
     modelled. *)
 
+(** the collation of a comparison: the explicit collation of the left operand, otherwise of the right
+    one, otherwise [BINARY] ("Rules for determining which collating function to use", datatype3.html) *)
+Definition lite_coll (v : value) : option (collation * bool) :=
+  match v with Value_C (Some (_, n)) => lite_collation_of_name n | _ => None end.
+
+Definition lite_str (v : value) : option string :=
+  match v with Value_string (Some s) => Some s | Value_C (Some (s, _)) => Some s | _ => None end.
+
 Definition lite_compare (v1 v2 : value) : option comparison :=
   if (is_null v1 || is_null v2)%bool then None
-  else match v1, v2 with
-       | Value_string (Some a), Value_string (Some b) => Some (string_compare a b)
-       | Value_string _, _ => Some Gt
-       | _, Value_string _ => Some Lt
-       | _, _ => match lenient v1, lenient v2 with
-                 | Some a, Some b => Some (num_cmp a b)
-                 | _, _ => None
-                 end
-       end.
+  else match lite_str v1, lite_str v2 with
+       | Some a, Some b => 
+         let (c, p) := match lite_coll v1, lite_coll v2 with
+                       | Some cp, _ | None, Some cp => cp
+                       | None, None => (Coll_Binary, false) end in
+         Some (string_compare (Collation.coll_key c p a) (Collation.coll_key c p b))
+       | Some _, None => Some Gt
+       | None, Some _ => Some Lt
+       | _, _ =>
+    match lenient v1, lenient v2 with
+    | Some a, Some b => Some (num_cmp a b)
+    | _, _ => None
+    end
+  end.
 
 Definition lite_order (a b : value) : comparison :=
   match lite_compare a b with Some c => c | None => value_compare a b end.
@@ -188,6 +201,15 @@ Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
                                               | _ => v1 end
                          | _ => Value_Z None end)
   :: ("case", case_by lite_truth)
+  (* [x COLLATE c]: [no such collation sequence] for an unknown name *)
+  :: ("collate", fun l => match l with
+                          | v :: Value_string (Some n) :: nil =>
+                            match lite_collation_of_name n, text_of v with
+                            | Some _, Some s => Value_C (Some (s, n))
+                            | Some _, None => v
+                            | None, _ => Value_Err "no such collation sequence"
+                            end
+                          | _ => Value_string None end)
   :: ("typeof", fun l => match l with v :: nil => Value_string (Some (type_name v)) | _ => Value_string None end)
   (* logic *)
   :: ("and", logic_and) :: ("or", logic_or)
@@ -294,6 +316,8 @@ Definition lite_supports (f : feature) : bool :=
 
 Definition canon_lite (v : value) : value :=
   match v with
+  | Value_C (Some (s, n)) => 
+    Value_string (Some (match lite_collation_of_name n with Some (c, p) => Collation.coll_key c p s | None => s end))
   | Value_bool (Some b) => Value_Q (Some (Qc_of_Z (if b then 1 else 0)))
   | _ => canon_numeric v
   end.
@@ -314,4 +338,5 @@ Definition SQLite : vsem :=
           true
           (fun _ _ => false)
           (* a literal with a decimal point is a [REAL] *)
-          lite_real.
+          lite_real
+          (fun _ => false).

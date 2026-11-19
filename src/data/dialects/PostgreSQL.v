@@ -56,7 +56,9 @@ Definition PostgreSQL : vsem :=
           (table_of_list (filter (fun p => negb (String.eqb (fst p) "group_concat")) aggregate_table
                           ++ ("string_agg_sep", agg_concat_sep_by is_null "") :: nil))
           is_null
-          bool3_of_value
+          (fun v => match v with
+                    | Value_string (Some s) => match bool_of_string s with Some b => bool3_of_bool b | None => unknown3 end
+                    | _ => bool3_of_value v end)
           value_of_bool3
           sql_eq3
           sql_order
@@ -70,4 +72,11 @@ Definition PostgreSQL : vsem :=
           (fun v => match v with
                     | Value_Z (Some z) => if int_range_ok 32 z then VInt 32 z 
                                           else if int_range_ok 64 z then v else VDec (Qc_of_Z z) 0 0
-                    | _ => v end).
+                    | _ => v end)
+          (* a condition must be a boolean ([coerce_to_boolean]): a string is read as a boolean literal
+             (['true'], ['t'], ['yes'], ['1'], ...), another value is a type error *)
+          (fun v => if is_null v then false
+                    else match v with
+                         | Value_bool _ => false
+                         | Value_string (Some s) => match bool_of_string s with Some _ => false | None => true end
+                         | _ => true end).

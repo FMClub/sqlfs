@@ -239,7 +239,10 @@ Record dialect : Type :=
       scalar_first_row : bool;
       (** the value of a literal: a decimal literal [1.50] is a [REAL] in SQLite and a [NUMBER]
           without scale in Oracle *)
-      const_of : value -> value
+      const_of : value -> value;
+      (** a value which cannot be used as a condition (PostgreSQL: a value which is not a boolean,
+          [argument of WHERE must be type boolean]) *)
+      truth_error : value -> bool
     }.
 
 Hypothesis O : dialect.
@@ -1498,7 +1501,7 @@ with scond_raises (ce : cte_env) (env : senv) (c : scond) {struct c} : bool :=
   | C_Pred p l => 
     let vs := map (eval_sexpr ce env) l in
     existsb (is_error O) vs || pred_error O p vs
-  | C_Expr e => is_error O (eval_sexpr ce env e)
+  | C_Expr e => let v := eval_sexpr ce env e in is_error O v || truth_error O v
   | C_Quant qtf p l q la =>
     let vs := map (eval_sexpr ce env) l in
     let rows := eval_squery ce env q in

@@ -146,6 +146,8 @@ Module NullValues.
     - [Value_I]      : an integer of a narrower or unsigned type [(z, w)]: [w] is 16 or 32 for the
                        [smallint] and [integer] of PostgreSQL, 1 for the [BIGINT UNSIGNED] of MySQL
                        (a [Value_Z] is a [bigint], [BIGINT])
+    - [Value_C]      : a string with an explicit collation ([s COLLATE c]): the string and the
+                       name of the collation
     - [Value_Err]    : the failure of an evaluation (division by zero in PostgreSQL,
                        an invalid conversion, ...), with the kind of the error. It
                        belongs to no SQL domain: a query whose evaluation produces it
@@ -159,7 +161,8 @@ Inductive value : Set :=
   | Value_Err : string -> value
   | Value_D : option (Qc * nat * nat) -> value
   | Value_F : option (Qc * nat) -> value
-  | Value_I : option (Z * nat) -> value.
+  | Value_I : option (Z * nat) -> value
+  | Value_C : option (string * string) -> value.
 
 Register value as datacert.value.type.
 Register Value_string as datacert.value.Value_string.
@@ -176,6 +179,7 @@ match v with
   | Value_D _ => type_Q
   | Value_F _ => type_Q
   | Value_I _ => type_Z
+  | Value_C _ => type_string
   end.
 
 (** Default values for each type: the NULL of that type. *)
@@ -190,7 +194,7 @@ Definition default_value d :=
 Definition is_null v :=
   match v with
   | Value_string None | Value_Z None | Value_bool None | Value_Q None | Value_D None | Value_F None 
-  | Value_I None => true
+  | Value_I None | Value_C None => true
   | _ => false
   end.
 
@@ -216,6 +220,7 @@ Defined.
 Definition ODec : Oset.Rcd (Qc * nat * nat) := mk_opairs (mk_opairs OQc Onat) Onat.
 Definition OFlt : Oset.Rcd (Qc * nat) := mk_opairs OQc Onat.
 Definition OInt : Oset.Rcd (Z * nat) := mk_opairs OZ Onat.
+Definition OColl : Oset.Rcd (string * string) := mk_opairs Ostring Ostring.
 
 Definition value_rank v : N :=
   match v with
@@ -227,6 +232,7 @@ Definition value_rank v : N :=
   | Value_D _ => 5%N
   | Value_F _ => 6%N
   | Value_I _ => 7%N
+  | Value_C _ => 8%N
   end.
 
 Definition value_compare x y :=
@@ -239,13 +245,14 @@ Definition value_compare x y :=
     | Value_D d1, Value_D d2 => option_compare _ (Oset.compare ODec) d1 d2
     | Value_F d1, Value_F d2 => option_compare _ (Oset.compare OFlt) d1 d2
     | Value_I d1, Value_I d2 => option_compare _ (Oset.compare OInt) d1 d2
+    | Value_C d1, Value_C d2 => option_compare _ (Oset.compare OColl) d1 d2
     | _, _ => N.compare (value_rank x) (value_rank y)
   end.
 
 Definition OVal : Oset.Rcd value.
 split with value_compare.
 - (* 1/3 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ]];
     simpl; try discriminate; trivial.
   + generalize (Oset.eq_bool_ok Ostring s1 s2); simpl; case (string_compare s1 s2).
     * apply (f_equal (fun x => Value_string (Some x))).
@@ -282,9 +289,14 @@ split with value_compare.
     * apply (f_equal (fun x => Value_I (Some x))).
     * intros H1 H2; injection H2; apply H1.
     * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok OColl k1 k2); unfold Oset.eq_bool; simpl;
+    destruct (compareAB string_compare string_compare k1 k2).
+    * apply (f_equal (fun x => Value_C (Some x))).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
 - (* 1/2 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ]]
-         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ] | e3 | [d3 | ] | [f3 | ] | [i3 | ]]; simpl; trivial; try discriminate.
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ]]
+         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ] | e3 | [d3 | ] | [f3 | ] | [i3 | ] | [k3 | ]]; simpl; trivial; try discriminate.
   + apply (Oset.compare_lt_trans Ostring).
   + apply (Oset.compare_lt_trans OZ).
   + apply (Oset.compare_lt_trans Obool).
@@ -293,8 +305,9 @@ split with value_compare.
   + apply (Oset.compare_lt_trans ODec).
   + apply (Oset.compare_lt_trans OFlt).
   + apply (Oset.compare_lt_trans OInt).
+  + apply (Oset.compare_lt_trans OColl).
 - (* 1/1 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ]];
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ] | e1 | [d1 | ] | [f1 | ] | [i1 | ] | [k1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ] | e2 | [d2 | ] | [f2 | ] | [i2 | ] | [k2 | ]];
     simpl; trivial.
   + apply (Oset.compare_lt_gt Ostring).
   + apply (Oset.compare_lt_gt OZ).
@@ -304,6 +317,7 @@ split with value_compare.
   + apply (Oset.compare_lt_gt ODec).
   + apply (Oset.compare_lt_gt OFlt).
   + apply (Oset.compare_lt_gt OInt).
+  + apply (Oset.compare_lt_gt OColl).
 Defined.
 
 Definition FVal := Fset.build OVal.
@@ -1383,6 +1397,13 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
                                  | None => Value_D None
                                  end
                                | _ => Value_D None end)
+  (* [x COLLATE "C"]: the only collation of the model is the byte order of [C] (and [POSIX]); the
+     collations of the operating system and of ICU are not modelled *)
+  :: ("collate", fun l => match l with
+                          | Value_string s :: Value_string (Some n) :: nil =>
+                            if (String.eqb n "C" || String.eqb n "POSIX" || String.eqb n "default")%bool 
+                            then Value_string s else Value_Err "collation not modelled"
+                          | _ => Value_string None end)
   :: ("cast_float8", fun l => match l with v :: nil => cast_float false v | _ => Value_F None end)
   :: ("cast_float4", fun l => match l with v :: nil => cast_float true v | _ => Value_F None end)
   :: nil.

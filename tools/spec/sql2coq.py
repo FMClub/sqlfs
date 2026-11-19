@@ -1181,6 +1181,8 @@ def parse_create(toks):
             width = None
             if ty in STR_TYPES and p.op('(') and p.peek(1)[0] == 'num':
                 width = int(p.peek(1)[1])
+                if ty == 'char':
+                    width = ('char', width)
             if ty in ('float', 'real', 'double', 'float4', 'float8'):
                 bits = {'double': 64, 'float8': 64, 'float4': 32, 'real': REAL_BITS}.get(ty, FLOAT_BITS)
                 width = ('flt', bits)
@@ -1257,14 +1259,20 @@ def literal(p):
 
 def conv_value(lit, kind, limit=None):
     """The Coq value which is stored, with the conversion of the column type."""
+    if lit[0] == 'str' and isinstance(limit, tuple) and limit[0] == 'char' and len(lit[1]) > limit[1]:
+        raise Skip('truncation')
     if lit[0] == 'str' and isinstance(limit, int) and len(lit[1]) > limit:
         raise Skip('truncation')
-    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] not in ('dec', 'flt', 'uns', 'pgint') and '.' not in lit[1] and 'e' not in lit[1].lower() and not (limit[0] <= int(lit[1]) <= limit[1]):
+    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] not in ('dec', 'flt', 'uns', 'pgint', 'char') and '.' not in lit[1] and 'e' not in lit[1].lower() and not (limit[0] <= int(lit[1]) <= limit[1]):
         raise Skip('out of range')
     if lit[0] == 'null':
         return {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[kind]
     if kind == 'S':
         if lit[0] == 'str':
+            # a CHAR(n) column of the MySQL family returns its value without the trailing spaces
+            # (unless PAD_CHAR_TO_FULL_LENGTH)
+            if isinstance(limit, tuple) and limit[0] == 'char' and ENGINE == 'mysql':
+                return 'VS %s' % coq_str(lit[1].rstrip(' '))
             return 'VS %s' % coq_str(lit[1])
         raise Skip('number into string column')
     if lit[0] == 'str':

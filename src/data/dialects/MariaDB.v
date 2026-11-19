@@ -8,7 +8,7 @@
 
 Require Import List String ZArith NArith.
 
-Require Import Bool3 OrderedSet SqlFull Values Dialects ValueKit MySQL.
+Require Import Collation Bool3 OrderedSet SqlFull Values Dialects ValueKit MySQL.
 
 Open Scope string_scope.
 
@@ -45,6 +45,6 @@ Definition maria_supports (f : feature) : bool :=
 (** The default session: [utf8mb4_uca1400_ai_ci] (PAD SPACE, case insensitive), no
     [ONLY_FULL_GROUP_BY] nor [PIPES_AS_CONCAT] in [sql_mode], [group_concat_max_len] = 1048576
     ([Sys_group_concat_max_len] in [sql/sys_vars.cc]). *)
-Definition maria_default_session : my_session := mk_my_session true true 4 false false 1048576%N.
+Definition maria_default_session : my_session := mk_my_session true Coll_UCA900_AI_CI 4 false false 1048576%N.
 
 Definition MariaDB : vsem := mysql_vs maria_default_session "MariaDB" maria_supports.

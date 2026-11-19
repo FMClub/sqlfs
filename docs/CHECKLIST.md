@@ -42,10 +42,9 @@ updates it.
 
 - [~] Numbers: integers and exact rationals (done); decimal scale ([x], TODO 1.2.1), IEEE floats ([x], TODO 1.2.2),
       integer ranges and overflow ([x], TODO 1.2.3), `numeric(p,s)` rounding on cast ([x])
-- [~] Strings: byte-wise and case-insensitive/`PAD SPACE` collations (done); **accent folding and `utf8mb4_0900_ai_ci`, `utf8mb4_unicode_ci`,
-      `uca1400`, PostgreSQL locale/ICU collations, `COLLATE` clauses and collation precedence** ([ ]); charsets and encodings, `BINARY` strings, `bytea`, blobs ([ ]);
+- [~] Strings: collations from the engines' tables (`general_ci`, `0900_ai_ci`, `unicode_520_ci`, `unicode_ci`, `bin`, SQLite, `C`), accents and expansions, `COLLATE` and explicit precedence ([x], TODO 1.3); `uca1400` (approximated), PostgreSQL ICU/libc, column collations ([ ]); charsets and encodings, `BINARY` strings, `bytea`, blobs ([ ]);
       `CHAR(n)` vs `VARCHAR(n)` padding and length limits ([ ])
-- [ ] Booleans of each dialect (real boolean in PostgreSQL, 0/1 in MySQL/SQLite, none in Oracle mode)
+- [x] Booleans of each dialect (real boolean in PostgreSQL, 0/1 in MySQL/SQLite, none in Oracle mode) (TODO 1.4)
 - [ ] Dates and times: `DATE`, `TIME`, `TIMESTAMP[TZ]`, `DATETIME`, `YEAR`, `INTERVAL`, time zones, calendar arithmetic, `EXTRACT`, `DATE_TRUNC`,
       `DATE_ADD`, `STR_TO_DATE`, `TO_CHAR`, SQLite date functions (strings/numbers), Oracle `DATE` with time
 - [ ] JSON: types, operators (`->`, `->>`, `@>`), path languages (`JSONPath`, MySQL path), `JSON_TABLE`, comparison and ordering of JSON values

@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Values Dialects ValueKit PostgreSQL.
+Require Import Bool3 OrderedSet SqlFull Values Dialects ValueKit PostgreSQL Collation.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -54,8 +54,8 @@ Record my_session : Type :=
     {
       (** the default collation: [PAD SPACE]? *)
       ms_pad : bool;
-      (** the default collation: case insensitive? *)
-      ms_ci : bool;
+      (** the default collation *)
+      ms_coll : collation;
       (** [div_precision_increment] *)
       ms_div_incr : nat;
       (** [sql_mode] contains [PIPES_AS_CONCAT]: [||] is the concatenation, not the logical OR *)
@@ -66,27 +66,39 @@ Record my_session : Type :=
       ms_group_concat_max_len : N
     }.
 
-Section Collation.
+Section Session.
 
 Variable ss : my_session.
 
 Let pad := ms_pad ss.
 
-(** is the collation case insensitive? (false for a binary collation, as TiDB's default [utf8mb4_bin]) *)
-Let ci := ms_ci ss.
+Let coll := ms_coll ss.
 
-(** The key of a string for a comparison *)
-Definition coll_key (s : string) : string := (if ci then lower_s else fun x => x) (if pad then string_rtrim s else s).
+(** The key of a string for a comparison: its weights under the collation ([Collation.v]) *)
+Definition coll_key (s : string) : string := Collation.coll_key coll pad s.
 
 (** the system variable [div_precision_increment], whose default value is 4 in MySQL and in OceanBase *)
 Let div_precision_increment : nat := ms_div_incr ss.
 
 Definition my_isnull := is_null.
 
+(** the collation of a comparison: the explicit collation of an operand ([COLLATE]), otherwise the
+    collation of the session; two different explicit collations are an error (see [my_pred_error]) *)
+Definition explicit_coll (v : value) : option (collation * bool) :=
+  match v with Value_C (Some (_, n)) => my_collation_of_name n | _ => None end.
+
+Definition str_value (v : value) : option string :=
+  match v with Value_string (Some s) => Some s | Value_C (Some (s, _)) => Some s | _ => None end.
+
 Definition my_compare (v1 v2 : value) : option comparison :=
   if (is_null v1 || is_null v2)%bool then None
-  else match v1, v2 with
-       | Value_string (Some a), Value_string (Some b) => Some (string_compare (coll_key a) (coll_key b))
+  else match str_value v1, str_value v2 with
+       | Some a, Some b => 
+         let (c, p) := match explicit_coll v1, explicit_coll v2 with
+                       | Some cp, _ | None, Some cp => cp
+                       | None, None => (coll, pad)
+                       end in
+         Some (string_compare (Collation.coll_key c p a) (Collation.coll_key c p b))
        | _, _ => match lenient v1, lenient v2 with
                  | Some a, Some b => Some (num_cmp a b)
                  | _, _ => None
@@ -133,10 +145,10 @@ Definition my_pred_table : list (string * (list value -> bool3)) :=
   :: ("is unknown", unary3 (truth_is unknown3))
   :: ("is not unknown", unary3 (fun v => negb3 (truth_is unknown3 v)))
   :: ("like", binary3 (fun v p => match text_of v, text_of p with
-                                  | Some s, Some p => bool3_of_bool (like_gen (Some "\"%char) (lower_s p) (lower_s s))
+                                  | Some s, Some p => bool3_of_bool (coll_like coll (Some 92) p s)
                                   | _, _ => unknown3 end))
   :: ("not like", binary3 (fun v p => negb3 (match text_of v, text_of p with
-                                  | Some s, Some p => bool3_of_bool (like_gen (Some "\"%char) (lower_s p) (lower_s s))
+                                  | Some s, Some p => bool3_of_bool (coll_like coll (Some 92) p s)
                                   | _, _ => unknown3 end)))
   :: ("true", fun _ => true3)
   :: ("false", fun _ => false3)
@@ -235,18 +247,19 @@ Definition my_locate (l : list value) : value :=
   match l with
   | sub :: s :: nil => 
     match text_of sub, text_of s with
-    | Some sub, Some s => Value_Z (Some (string_index (lower_s sub) (lower_s s)))
+    | Some sub, Some s => Value_Z (Some (coll_index coll sub s))
     | _, _ => Value_Z None
     end
   | sub :: s :: pos :: nil => 
     match text_of sub, text_of s with
     | Some sub, Some s => 
       let p := match z_arg pos with Some p => p | None => 0 end in
-      let n := Z.of_nat (String.length s) in
+      let cs := utf8_decode s in
+      let n := Z.of_nat (List.length cs) in
       if Z.ltb p 1 || Z.ltb (n + 1) p 
       then Value_Z (Some 0)
-      else let rest := String.substring (Z.to_nat (p - 1)) (String.length s) s in
-           match string_index (lower_s sub) (lower_s rest) with
+      else let rest := Collation.utf8_encode (skipn (Z.to_nat (p - 1)) cs) in
+           match coll_index coll sub rest with
            | 0 => Value_Z (Some 0)
            | i => Value_Z (Some (i + p - 1))
            end
@@ -353,7 +366,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("locate", my_locate)
   :: ("instr", fun l => match l with
                         | s :: sub :: nil => match text_of sub, text_of s with
-                                             | Some sub, Some s => Value_Z (Some (string_index (lower_s sub) (lower_s s)))
+                                             | Some sub, Some s => Value_Z (Some (coll_index coll sub s))
                                              | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   (* casts *)
@@ -367,6 +380,15 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                                        | Some p, Some s => my_cast_decimal p s v
                                                        | _, _ => Value_D None end
                                | _ => Value_D None end)
+  (* [s COLLATE c]: an unknown collation is an error ([ER_UNKNOWN_COLLATION]) *)
+  :: ("collate", fun l => match l with
+                          | v :: Value_string (Some n) :: nil =>
+                            match my_collation_of_name n, text_of v with
+                            | Some _, Some s => Value_C (Some (s, n))
+                            | Some _, None => Value_string None
+                            | None, _ => Value_Err "Unknown collation"
+                            end
+                          | _ => Value_string None end)
   (* [CAST(x AS UNSIGNED)]: the value modulo 2^64 ([Item_func_unsigned]) *)
   :: ("cast_unsigned", fun l => match l with 
                                 | v :: nil => match z_arg v with 
@@ -417,6 +439,10 @@ Definition my_supports (f : feature) : bool :=
 Definition canon_my (v : value) : value :=
   match v with
   | Value_string (Some s) => Value_string (Some (coll_key s))
+  | Value_C (Some (s, n)) => 
+    Value_string (Some (match my_collation_of_name n with
+                        | Some (c, p) => Collation.coll_key c p s
+                        | None => s end))
   | Value_bool (Some b) => Value_Q (Some (Qc_of_Z (if b then 1 else 0)))
   | _ => canon_numeric v
   end.
@@ -435,20 +461,25 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           true
           (fun f => match f with F_Bare_Column => negb (ms_only_full_group_by ss) | _ => supports f end)
           false
-          (fun _ _ => false)
+          (* [Illegal mix of collations]: a comparison of two strings with different explicit collations *)
+          (fun p l => match l with
+                      | Value_C (Some (_, n1)) :: Value_C (Some (_, n2)) :: _ => 
+                        negb (String.eqb n1 n2) && existsb (String.eqb p) ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: "<=>" :: nil)
+                      | _ => false end)
           (* an integer literal is a [BIGINT], a [BIGINT UNSIGNED] above 2^63 - 1, a [DECIMAL] above 2^64 - 1 *)
           (fun v => match v with
                     | Value_Z (Some z) => if int_range_ok 64 z then v 
                                           else if int_range_ok 1 z then Value_I (Some (z, 1%nat))
                                           else VDec (Qc_of_Z z) 0 0
-                    | _ => v end).
+                    | _ => v end)
+          (fun _ => false).
 
-End Collation.
+End Session.
 
 (** MySQL 8 with its default collation [utf8mb4_0900_ai_ci] (no padding). *)
 (** The default session of MySQL 8.0 and 8.4: [sql_mode] is [ONLY_FULL_GROUP_BY, STRICT_TRANS_TABLES,
     NO_ZERO_IN_DATE, NO_ZERO_DATE, ERROR_FOR_DIVISION_BY_ZERO, NO_ENGINE_SUBSTITUTION],
     [group_concat_max_len] is 1024. *)
-Definition my_default_session : my_session := mk_my_session false true 4 false true 1024%N.
+Definition my_default_session : my_session := mk_my_session false Coll_UCA900_AI_CI 4 false true 1024%N.
 
 Definition MySQL : vsem := mysql_vs my_default_session "MySQL" my_supports.
