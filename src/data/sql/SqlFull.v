@@ -157,6 +157,8 @@ Inductive feature : Type :=
   (** [e op ANY (q)], [e op ALL (q)] *)
   | F_Any_All
   | F_With
+  (** a condition used as a value, or a value used as a condition (booleans) *)
+  | F_Cond_Value
   (** [(e1, ..., en) IN (q)] with [n > 1] *)
   | F_Row_In.
 
@@ -344,7 +346,7 @@ Fixpoint sexpr_features (e : sexpr) {struct e} : list feature :=
     sexpr_features e ++ scond_features c ++
     match c with C_True => nil | _ => F_Filter_Agg :: nil end
   | E_Case c e1 e2 => scond_features c ++ sexpr_features e1 ++ sexpr_features e2
-  | E_Cond c => scond_features c
+  | E_Cond c => F_Cond_Value :: scond_features c
   | E_Sub q => squery_features q
   end
 
@@ -354,7 +356,7 @@ with scond_features (c : scond) {struct c} : list feature :=
   | C_Not c => scond_features c
   | C_True => nil
   | C_Pred _ l => flat_map sexpr_features l
-  | C_Expr e => sexpr_features e
+  | C_Expr e => F_Cond_Value :: sexpr_features e
   | C_Quant _ _ l q _ => F_Any_All :: flat_map sexpr_features l ++ squery_features q
   | C_In l q _ => 
     (match l with _ :: _ :: _ => F_Row_In :: nil | _ => nil end) ++
