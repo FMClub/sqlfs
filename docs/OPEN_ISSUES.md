@@ -114,11 +114,17 @@ settled by the same definition.
 
 ## I6. Dialect-dependent choices are hard-wired
 
-**Status: framework done, instances in progress.** The engine-level differences
-(NULL ordering, collation-aware identification of values, supported constructs)
-are the record `dialect` of `SqlFull.v`; the plan, the matrix of differences between
-PostgreSQL, MySQL, SQLite and OceanBase, and what is verified are in
-`docs/DIALECTS.md`. The value-level dialects are the next step.
+**Status: the dialects are modelled; acceptance rules and more of each dialect remain.**
+PostgreSQL, MySQL, SQLite and OceanBase (MySQL and Oracle modes) are instances of
+the record `vsem` (`src/data/dialects/`), which gives both the interpretation of the
+values and the engine-level choices of the record `dialect` of `SqlFull.v`. The same
+query can be run under each (`to_dialect`), and 40 differential examples in
+`src/testing/Test_Dialects.v` check the results. The matrix of differences, the sources
+and what is not modelled are in `docs/DIALECTS.md`.
+
+Still open: the acceptance of a query by the names of its functions and aggregates,
+`ONLY_FULL_GROUP_BY` and the bare columns of SQLite, and the behaviours of OceanBase
+which its documentation does not state (marked "assumed" in `docs/DIALECTS.md`).
 
 ## I7. SQL features which are not covered
 

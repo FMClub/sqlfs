@@ -50,3 +50,10 @@ data/proof_of_concept/SqlFullSyntax.v
 testing/Test_SqlFull.v
 testing/Test_Audit.v
 testing/Test_Dialect.v
+data/dialects/Dialects.v
+data/dialects/ValueKit.v
+data/dialects/PostgreSQL.v
+data/dialects/MySQL.v
+data/dialects/SQLite.v
+data/dialects/OceanBase.v
+testing/Test_Dialects.v

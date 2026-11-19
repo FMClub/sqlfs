@@ -37,7 +37,7 @@ Definition db : db_state :=
        [ [VS "Bob"; VZ 1]; [VS "bob"; VZ 2]; [VS "Alice"; VZ 3]; [NullS; VZ 4] ])
     (Rel "q") [nm; n] [ [VS "BOB"; VZ 1]; [VS "Alice"; VZ 5] ].
 
-(** A dialect which differs from PostgreSQL by its case insensitive collation, by the 
+(** A dialect which differs from TNull_PostgreSQL by its case insensitive collation, by the 
     NULLs being the smallest values, and by the lack of some constructs. *)
 Definition fold_case v := 
   match v with 
@@ -80,7 +80,7 @@ Definition names := select_where [as_ (col nm) nm] [from_table "p"] c_true.
 Definition distinct_names := select_distinct [as_ (col nm) nm] [from_table "p"] c_true.
 
 Example distinct_pg : 
-  rows PostgreSQL distinct_names [nm] [ [VS "Bob"]; [VS "bob"]; [VS "Alice"]; [NullS] ] = true.
+  rows TNull_PostgreSQL distinct_names [nm] [ [VS "Bob"]; [VS "bob"]; [VS "Alice"]; [NullS] ] = true.
 Proof. check. Qed.
 
 (** The first occurrence is kept. *)
@@ -93,7 +93,7 @@ Definition group_names :=
                [from_table "p"] c_true [col nm] c_true.
 
 Example group_pg :
-  rows PostgreSQL group_names [nm; c; k] 
+  rows TNull_PostgreSQL group_names [nm; c; k] 
     [ [VS "Bob"; VZ 1; VZ 1]; [VS "bob"; VZ 1; VZ 2]; [VS "Alice"; VZ 1; VZ 3]; [NullS; VZ 1; VZ 4] ] 
   = true.
 Proof. check. Qed.
@@ -105,7 +105,7 @@ Proof. check. Qed.
 
 (** [count(DISTINCT nm)]: the NULL is not counted. *)
 Example count_distinct_pg :
-  rows PostgreSQL (select_where [as_ (agg_distinct "count" (col nm)) c] [from_table "p"] c_true)
+  rows TNull_PostgreSQL (select_where [as_ (agg_distinct "count" (col nm)) c] [from_table "p"] c_true)
        [c] [ [VZ 3] ] = true.
 Proof. check. Qed.
 
@@ -119,7 +119,7 @@ Proof. check. Qed.
 Definition qnames := select_where [as_ (col nm) nm] [from_table "q"] c_true.
 
 Example union_pg :
-  rows PostgreSQL (set_op_ Union Set_Distinct names qnames) [nm] 
+  rows TNull_PostgreSQL (set_op_ Union Set_Distinct names qnames) [nm] 
     [ [VS "Bob"]; [VS "bob"]; [VS "Alice"]; [NullS]; [VS "BOB"] ] = true.
 Proof. check. Qed.
 
@@ -129,7 +129,7 @@ Example union_ci :
 Proof. check. Qed.
 
 Example intersect_pg :
-  rows PostgreSQL (set_op_ Inter Set_Distinct names qnames) [nm] [ [VS "Alice"] ] = true.
+  rows TNull_PostgreSQL (set_op_ Inter Set_Distinct names qnames) [nm] [ [VS "Alice"] ] = true.
 Proof. check. Qed.
 
 Example intersect_ci :
@@ -141,15 +141,15 @@ Definition xs := values_ [n] [ [int 1]; [int 1]; [int 1]; [int 2]; [int 3] ].
 Definition ys := values_ [n] [ [int 1]; [int 1]; [int 2]; [int 2]; [int 4] ].
 
 Example intersect_all :
-  rows PostgreSQL (set_op_ Inter Set_All xs ys) [n] [ [VZ 1]; [VZ 1]; [VZ 2] ] = true.
+  rows TNull_PostgreSQL (set_op_ Inter Set_All xs ys) [n] [ [VZ 1]; [VZ 1]; [VZ 2] ] = true.
 Proof. check. Qed.
 
 Example except_all :
-  rows PostgreSQL (set_op_ Diff Set_All xs ys) [n] [ [VZ 1]; [VZ 3] ] = true.
+  rows TNull_PostgreSQL (set_op_ Diff Set_All xs ys) [n] [ [VZ 1]; [VZ 3] ] = true.
 Proof. check. Qed.
 
 Example except_all_2 :
-  rows PostgreSQL (set_op_ Diff Set_All ys xs) [n] [ [VZ 2]; [VZ 4] ] = true.
+  rows TNull_PostgreSQL (set_op_ Diff Set_All ys xs) [n] [ [VZ 2]; [VZ 4] ] = true.
 Proof. check. Qed.
 
 (** * ORDER BY: the position of the NULLs *)
@@ -157,12 +157,12 @@ Proof. check. Qed.
 Definition by_name d := order_by names [o_by (col nm) d].
 
 Example nulls_last_pg : 
-  rows_ordered PostgreSQL (by_name Asc) [nm] 
+  rows_ordered TNull_PostgreSQL (by_name Asc) [nm] 
     [ [VS "Alice"]; [VS "Bob"]; [VS "bob"]; [NullS] ] = true.
 Proof. check. Qed.
 
 Example nulls_first_pg_desc : 
-  rows_ordered PostgreSQL (by_name Desc) [nm] 
+  rows_ordered TNull_PostgreSQL (by_name Desc) [nm] 
     [ [NullS]; [VS "bob"]; [VS "Bob"]; [VS "Alice"] ] = true.
 Proof. check. Qed.
 
@@ -178,7 +178,7 @@ Proof. check. Qed.
 
 (** An explicit NULLS clause overrides the default of the dialect. *)
 Example nulls_explicit : 
-  rows_ordered PostgreSQL 
+  rows_ordered TNull_PostgreSQL 
     (order_by names [o_by_nulls (col nm) Asc Nulls_First]) [nm] 
     [ [NullS]; [VS "Alice"]; [VS "Bob"]; [VS "bob"] ] = true.
 Proof. check. Qed.
@@ -186,7 +186,7 @@ Proof. check. Qed.
 (** * Joins and comparisons use the order of the dialect *)
 
 Example join_pg :
-  rows PostgreSQL 
+  rows TNull_PostgreSQL 
     (select_where [as_ (col nm) nm; as_ (col n2) n2]
        [join J_Inner (from_table "p") 
              (from_as (table "q") [(nm, nm2); (n, n2)]) (pred "=" [col nm; col nm2])] c_true)
@@ -200,7 +200,7 @@ Definition rank_names :=
     [from_query (window names [w_as w_rank [] [o_by (col nm) Asc] k])] c_true.
 
 Example rank_pg :
-  rows PostgreSQL rank_names [nm; k] 
+  rows TNull_PostgreSQL rank_names [nm; k] 
     [ [VS "Alice"; VZ 1]; [VS "Bob"; VZ 2]; [VS "bob"; VZ 3]; [NullS; VZ 4] ] = true.
 Proof. check. Qed.
 
@@ -230,7 +230,7 @@ Example features_4 :
   squery_features groups_frame_query = [F_Window; F_Frame_Groups]. Proof. check. Qed.
 
 Example accepted_pg : 
-  forallb (fun q => accepted_by PostgreSQL q) 
+  forallb (fun q => accepted_by TNull_PostgreSQL q) 
           [full_join_query; lateral_query; nulls_query; groups_frame_query] = true.
 Proof. check. Qed.
 

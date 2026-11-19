@@ -22,7 +22,7 @@ Close Scope Qc_scope.
     What SqlFull needs to know about the values of NullValues, for a dialect which, like
     PostgreSQL, compares strings byte by byte and puts the NULLs last. *)
 
-Definition PostgreSQL : dialect TNull :=
+Definition TNull_PostgreSQL : dialect TNull :=
   mk_dialect TNull
              NullValues.is_null
              (NullValues.Value_Z None)
@@ -35,7 +35,7 @@ Definition PostgreSQL : dialect TNull :=
              false
              (fun _ => true).
 
-Definition TNull_ops := PostgreSQL.
+Definition TNull_ops := TNull_PostgreSQL.
 
 (** * Evaluation in a database state *)
 
