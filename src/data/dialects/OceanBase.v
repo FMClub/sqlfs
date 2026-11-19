@@ -45,7 +45,7 @@ Definition ob_my_supports (f : feature) : bool :=
   | _ => true
   end.
 
-Definition OceanBaseMySQL : vsem := mysql_vs true "OceanBase (MySQL mode)" ob_my_supports.
+Definition OceanBaseMySQL : vsem := mysql_vs true true "OceanBase (MySQL mode)" ob_my_supports.
 
 (** * Oracle mode
 

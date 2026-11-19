@@ -1,8 +1,9 @@
 # SQL dialects
 
 The goal is one formal semantics of the query language of SQL which covers the
-mainstream relational systems: PostgreSQL, MySQL, SQLite and OceanBase (in its
-MySQL and Oracle modes). They agree on the structure of queries and on
+mainstream relational systems: PostgreSQL, MySQL, SQLite, OceanBase (in its
+MySQL and Oracle modes), and the MySQL family tested by recent logical-bug detection work
+(ValScope, OSDI 2026; Pinolo, ATC 2023): MariaDB, TiDB, Percona Server and PolarDB. They agree on the structure of queries and on
 three-valued logic, and differ in many details. This document says how the
 differences are organised, what is done, and what is planned.
 
@@ -76,6 +77,32 @@ section). `planned` means that it is not modelled yet.
 | Floating-point numbers | IEEE | IEEE | IEEE | IEEE | binary float | not modelled (exact rationals) |
 | Accent folding (`_ai_ci`) | no | yes | no | yes | no | not modelled |
 | Blobs, dates, JSON, regular expressions | | | | | | not modelled |
+
+## The MySQL family: MariaDB, TiDB, Percona, PolarDB
+
+These four share the value semantics of `MySQL.v` (`mysql_vs`, parameterised by the padding and the
+case sensitivity of the collation, and by the constructs supported). The differences which the
+formal model captures, from the source of MariaDB and TiDB (`MariaDB/server` at `39281811`,
+`pingcap/tidb` at `e35413c`, November 2026) and from the documentation of PolarDB and Percona:
+
+| | MySQL 8 | MariaDB | TiDB | Percona Server | PolarDB (MySQL edition, 8.0.2) |
+|---|---|---|---|---|---|
+| Default collation | `utf8mb4_0900_ai_ci`, NO PAD | `utf8mb4_uca1400_ai_ci`, PAD SPACE | `utf8mb4_bin`, PAD SPACE: case sensitive | as MySQL | as MySQL |
+| `ONLY_FULL_GROUP_BY` by default | yes | no | yes | yes | yes |
+| `INTERSECT`, `EXCEPT` (with `ALL`) | yes (8.0.31) | yes | yes | yes | no (MySQL 8.0.18) |
+| `FULL JOIN` | no | no | yes (`FULL OUTER JOIN`) | no | no |
+| `LATERAL` | yes | no | yes | yes | yes |
+| `FILTER (WHERE ...)` | no | yes | no | no | no |
+| `FETCH FIRST ... WITH TIES` | no | yes | no | no | no |
+| `GROUPS` frames | no | no | parsed, rejected by the planner | no | no |
+| `ROLLUP`, `CUBE`, `GROUPING SETS` | `WITH ROLLUP` | `WITH ROLLUP` | `WITH ROLLUP`, `GROUPING()` | `WITH ROLLUP` | `WITH ROLLUP` |
+| `NULLS FIRST/LAST` | no | no | no | no | no |
+
+Not covered for these systems: the Oracle mode of MariaDB (`sql_mode=ORACLE`), the functions which exist in
+only one of them (the tables are those of MySQL), TiDB's new-collation framework beyond `utf8mb4_bin`,
+the value of a bare column in MariaDB, and the optimizer-visible differences (which do not change results).
+Percona's source and the PolarDB engine are not open for the SQL layer in the same way: for these two the model
+relies on the documentation (`docs.percona.com` could not be fetched; the feature comparison was read through a mirror).
 
 ## Sources and how they were checked
 
