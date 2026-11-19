@@ -298,12 +298,109 @@ REASONS = {
 }
 
 
+MY_FAMILY = [
+    (r'^(row_number|rank|dense_rank|percent_rank|cume_dist|ntile|lag|lead|first_value|last_value|nth_value)$',
+     'syntax', 'window function (SqlFull.v, swfun)'),
+    (r'^(cast|convert|date_add_interval|date_sub_interval|grouping|default|default_func|row|char_func|insert_func|'
+     r'exists|values|position|set|assign|arg_case|not_between|not_in|coll_pred|multiset)$',
+     'syntax', 'construct of the grammar (CAST, DATE_ADD ... INTERVAL, GROUPING, ROW, EXISTS, ...)'),
+    (r'^(eq|ne|lt|le|gt|ge|nulleq|bitand|bitor|bitxor|bitneg|intdiv|leftshift|rightshift|mul|istrue|isfalse|'
+     r'istrue_with_null|unaryminus|plus|minus|div|mod|and|or|xor|not|like|in|is|isnull|concat_operator_oracle)$',
+     'operator', 'implementation of an operator: the operator is modelled under its symbol'),
+    (r'^_?st_|^mbr|^(geomcollection|geometrycollection|linestring|multilinestring|multipoint|multipolygon|point|'
+     r'polygon|multilinestr|spatial_|sdo_relate)', 'excluded', 'type not modelled: spatial (GIS) types'),
+    (r'^(can_access_|get_dd_|internal_|is_visible_dd_object|remove_dd_property_key|get_jdv_property|'
+     r'convert_cpu_id_mask|convert_interval_to_user_interval|like_range_|inner_|calc_|enum_to_|demote_cast|'
+     r'decode_histogram|get_mysql_routine|get_routine|align_date4cmp|agg_param_list|pl_|plsql_|ols_|_udt|'
+     r'subquery_|remove_const|obj_access|output_pack|part_id|partition_hash|pdml_|random_part|ref_query|'
+     r'temp_table_|tmp_file_|to_outfile_row|prefix_pattern|seq_value|_make_xml|dml_event|encode_sortkey|'
+     r'doc_id|doc_length|bm25|max_pt|keyvalue|dll_normal|image_type|errno|dump$|timestamp_nvl|'
+     r'check_catalog_access|check_location_access|collect_file_list|calc_odps|format_profile|user_can_access)',
+     'excluded', 'internal function of the server (data dictionary, executor or PL support): not callable by a user query'),
+    (r'^(get_lock|release_lock|release_all_locks|is_free_lock|is_used_lock|sleep|benchmark|master_pos_wait|'
+     r'source_pos_wait|master_gtid_wait|binlog_gtid_pos|wsrep_|gtid_subset|gtid_subtract|ps_current_thread_id|'
+     r'ps_thread_id|load_file|current_role|current_role_in|current_user_in|current_user_priv|roles_graphml|'
+     r'icu_version|is_enabled_role|tidb_|current_resource_group|effective_tenant|is_serving_tenant|host_ip|'
+     r'rpc_port|ob_|last_trace_id|last_execution_id|last_refresh_scn|current_scn|merging_frozen_time|'
+     r'startup_mode|decode_trace_id|audit_log_|get_sys_var|get_user_var|getvar|setvar|getparam|'
+     r'nextval|setval|lastval|scn_to_timestamp|timestamp_to_scn|ora_login_user|userenv|sys_guid|schemas|'
+     r'nls_charset_id|ob_transaction_id|utl_inaddr_|current_catalog|calc_urowid|chartorowid|rowidto|'
+     r'json_storage_free|json_storage_size|name_const|sm3)', 'excluded',
+     'locks, replication, session or server state: not a function of the database of the query'),
+    (r'^(uuid_short|random_bytes|rand|uuid|sys_guid)$', 'excluded',
+     'nondeterministic: the result is not a function of the database (TODO 3.10)'),
+    (r'^(aes_|des_|enhanced_aes|encrypt|decrypt|compress|uncompress|uncompressed_length|password|old_password|kdf|'
+     r'dbms_crypto|inet6_|is_ipv6|is_ipv4_compat|is_ipv4_mapped|bin_to_uuid|uuid_to_bin|is_uuid|crc32c|xxh|'
+     r'random_bytes|weight_string|hextoraw|rawto|utl_i18n|to_blob|empty_blob|empty_clob|to_clob|md5_concat_ws|'
+     r'encode$|decode$|column_|zeroblob|randomblob)', 'excluded',
+     'binary strings, encryption or compression: the strings of the model are text, and keys are server state'),
+    (r'^(convert_tz|from_tz|new_time|sys_extract_utc|tz_offset|dbtimezone|sessiontimezone)$', 'excluded',
+     'needs the time zone database: the model has the UTC offset of the session only'),
+    (r'^(vec_|from_vector|to_vector|embed_text|cosine_|l1_distance|l2_|inner_product|embedded_vec|'
+     r'vector_)', 'excluded', 'type not modelled: vectors'),
+    (r'^(extractvalue|updatexml|xml|existsnode_xml|extract_xml|insertchildxml|deletexml|sys_makexml)', 'excluded',
+     'type not modelled: XML'),
+    (r'^(charset|collation|coercibility)$', 'excluded',
+     'metadata of an expression (its character set, collation and coercibility): the model has values, not types'),
+    (r'_oracle$|^(decode_oracle)$', 'excluded',
+     'variant for sql_mode=ORACLE: the Oracle mode of MariaDB is not covered (docs/DIALECTS.md)'),
+    (r'^(match_against|fts_match_word)$', 'excluded', 'full-text search: needs a full-text index'),
+    (r'^json_|^jsonb', 'planned', 'JSON function not modelled yet'),
+]
+MY_FAMILY += [
+    (r'^(statement_digest|statement_digest_text|validate_password_strength|version_with_update|'
+     r'wait_for_executed_gtid_set|wait_until_sql_thread_after_gtids|mysql_port|mysql_proc_info|sys_privilege_check|'
+     r'sys_view_bigint_param|sql_mode_convert|extract_cert_expired_time|vitess_hash|etag)$', 'excluded',
+     'locks, replication, session or server state: not a function of the database of the query'),
+    (r'^(string_to_vector|semantic_|spiv_|tokenize|word_count|word_segment|search_index_inner|'
+     r'negative_inner_product)', 'excluded', 'type not modelled: vectors and full-text indexes'),
+    (r'^rb_', 'excluded', 'type not modelled: roaring bitmaps (OceanBase)'),
+    (r'^(sm4_)', 'excluded', 'binary strings, encryption or compression: the strings of the model are text, and keys are server state'),
+    (r'^(partition_key|range_placement|pos_list|bucket|hash|ora_hash|wrapper_inner|set_to_inner_type|'
+     r'randcanonical)$', 'excluded', 'internal function of the server (data dictionary, executor or PL support): not callable by a user query'),
+    (r'^(uuid_v4|uuid_v7|uuid_timestamp|uuid_version)$', 'excluded',
+     'nondeterministic: the result is not a function of the database (TODO 3.10)'),
+    (r'^(format_bytes|format_pico_time|format_nano_time)$', 'planned', 'formatting function of performance values'),
+    (r'^(time|timestamp|timestamp_add|timestampadd|to_seconds|get_format|yearweek|date_trunc|months_add|'
+     r'months_between|add_months|trunc|to_char|to_date|cur_date|time_to_usec|usec_to_time|parsedatetime|'
+     r'localtimestamp|current_timestamp|date_add|date_sub)$', 'planned', 'date and time function not modelled yet'),
+]
+REASONS['MySQL'] = MY_FAMILY
+REASONS['MariaDB'] = MY_FAMILY
+REASONS['TiDB'] = MY_FAMILY + [(r'^(mask_)', 'planned', 'data masking function of TiDB'),
+                               (r'^(approx_count_distinct|approx_percentile)$', 'excluded',
+                                'approximate aggregate: the result is any value within the error bound')]
+REASONS['OceanBaseMySQL'] = MY_FAMILY + [(r'^array|^map|^element_at|^cardinality$', 'planned',
+                                          'array and map types of OceanBase 4.3: not modelled yet')]
+REASONS['OceanBaseOracle'] = MY_FAMILY + [
+    (r'^(acos|asin|atan|atan2|cos|cosh|exp|ln|log|sin|sinh|sqrt|tan|tanh|remainder|power)$', 'planned',
+     'NUMBER function with up to 40 significant digits: the rounding of the number library of OceanBase is not '
+     'established from the shared source'),
+    (r'^(connect_by_root|sys_connect_by_path)$', 'excluded', 'hierarchical query operators: see the Oracle-mode closeout'),
+    (r'^(numtodsinterval|numtoyminterval|to_dsinterval|to_yminterval|to_binary_double|to_binary_float|to_nchar|'
+     r'to_multi_byte|to_single_byte|nchr|asciistr|unistr|nls_|nlssort|instrb|substrb|lengthb|to_pinyin|'
+     r'label_to_char|char_to_label)', 'planned', 'Oracle type or national character function not modelled yet'),
+]
+REASONS['SQLite'] = [
+    (r'^(row_number|rank|dense_rank|percent_rank|cume_dist|ntile|lag|lead|first_value|last_value|nth_value)$',
+     'syntax', 'window function (SqlFull.v, swfun)'),
+    (r'^(current_date|current_time|current_timestamp)$', 'syntax',
+     'keyword of the grammar: the time of the statement (SystemFuns.v)'),
+    (r'^sqlite_|^(affinity|expr_compare|expr_implies_expr|implies_nonnull_row|oom|datedebug|fpdecode|parseuri|'
+     r'load_extension|subtype|unknown|name|test_)', 'excluded',
+     'internal or test function of SQLite (ALTER TABLE support, compile options, testing): not a query function'),
+    (r'^(randomblob|zeroblob|jsonb)', 'excluded',
+     'blobs: the strings of the model are text (and randomblob is nondeterministic)'),
+    (r'^json_', 'planned', 'JSON function not modelled yet'),
+]
+
+
 def classify(engine, src, modelled, names):
     res = {}
     if engine == 'PostgreSQL':
         res = pg_classify(src, modelled)
     else:
-        res = {n: ('planned', '') for n in names if n not in modelled}
+        res = {n: ('planned', 'function of the engine not modelled yet') for n in names if n not in modelled}
     syn = SYNTAX.get(engine, {})
     for n in list(res):
         if n in syn:

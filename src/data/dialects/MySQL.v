@@ -997,12 +997,182 @@ Definition canon_my (v : value) : value :=
   | _ => canon_numeric v
   end.
 
+(** ** Functions added by the closeout of the MySQL family (TODO 4.2) *)
+Local Open Scope Z_scope.
+
+(** the digits of [z] (non-negative) in base [b] (2 to 36), in upper case *)
+Definition my_digits (b z : Z) : string :=
+  let fix go (fuel : nat) (z : Z) (acc : string) :=
+      match fuel with
+      | O => acc
+      | S f => let d := Z.modulo z b in
+               let acc := String (Ascii.ascii_of_nat (Z.to_nat (if Z.ltb d 10 then 48 + d else 55 + d))) acc in
+               if Z.ltb z b then acc else go f (Z.div z b) acc
+      end in
+  go 70%nat z EmptyString.
+
+(** the value of the longest prefix of [s] which is a number in base [b] (and its sign) *)
+Definition my_parse_base (b : Z) (s : string) : Z :=
+  let digit (c : Ascii.ascii) : option Z :=
+      let n := Z.of_nat (Ascii.nat_of_ascii c) in
+      let d := if (48 <=? n) && (n <=? 57) then n - 48
+               else if (65 <=? n) && (n <=? 90) then n - 55
+               else if (97 <=? n) && (n <=? 122) then n - 87 else 99 in
+      if d <? b then Some d else None in
+  let fix go (s : string) (acc : Z) :=
+      match s with
+      | String c r => match digit c with Some d => go r (acc * b + d) | None => acc end
+      | EmptyString => acc
+      end in
+  let fix ltrim (s : string) := match s with String " "%char r => ltrim r | _ => s end in
+  let s := ltrim s in
+  match s with
+  | String "-"%char r => - go r 0
+  | String "+"%char r => go r 0
+  | _ => go s 0
+  end.
+
+(** [CONV (n, from, to)]: unsigned 64-bit arithmetic; a negative [to] gives a signed result *)
+Definition my_conv (l : list value) : value :=
+  match l with
+  | v :: f :: t :: nil =>
+    match text_of v, z_arg f, z_arg t with
+    | Some s, Some fb, Some tb =>
+      let fb' := Z.abs fb in let tb' := Z.abs tb in
+      if (fb' <? 2) || (36 <? fb') || (tb' <? 2) || (36 <? tb') then Value_string None
+      else let n := Z.modulo (my_parse_base fb' s) (2 ^ 64) in
+           if (tb <? 0) && (2 ^ 63 <=? n) then Value_string (Some ("-" ++ my_digits tb' (2 ^ 64 - n)))
+           else Value_string (Some (my_digits tb' n))
+    | _, _, _ => Value_string None
+    end
+  | _ => Value_Err "wrong number of arguments"
+  end.
+
+(** CRC-32 (ISO 3309, polynomial [0xEDB88320] reflected) of the bytes of a string *)
+Definition crc32_byte (crc : Z) (b : Z) : Z :=
+  let fix bits (n : nat) (c : Z) :=
+      match n with O => c | S m => bits m (if Z.odd c then Z.lxor (Z.shiftr c 1) 3988292384 else Z.shiftr c 1) end in
+  bits 8%nat (Z.lxor crc b).
+Definition crc32_string (s : string) : Z :=
+  let fix go (s : string) (c : Z) :=
+      match s with String a r => go r (crc32_byte c (Z.of_nat (Ascii.nat_of_ascii a))) | EmptyString => c end in
+  Z.lxor (go s 4294967295) 4294967295.
+
+(** [INET_ATON]: [a.b.c.d], or fewer parts (the last one is the low byte: ['127.1'] is [127.0.0.1]) *)
+Definition my_inet_parts (s : string) : option (list Z) :=
+  let fix go (s : string) (cur : option Z) (acc : list Z) :=
+      match s with
+      | EmptyString => match cur with Some z => Some (rev (z :: acc)) | None => None end
+      | String "."%char r => match cur with Some z => go r None (z :: acc) | None => None end
+      | String c r => let n := Z.of_nat (Ascii.nat_of_ascii c) in
+                      if (48 <=? n) && (n <=? 57)
+                      then go r (Some (match cur with Some z => z * 10 | None => 0 end + (n - 48))) acc
+                      else None
+      end in
+  match go s None nil with
+  | Some ps => if (Nat.leb (List.length ps) 4) && forallb (fun z => z <=? 255) ps then Some ps else None
+  | None => None
+  end.
+Definition my_inet_aton (s : string) : option Z :=
+  match my_inet_parts s with
+  | Some ps => let n := List.length ps in
+               let hi := firstn (n - 1) ps in
+               let lo := last ps 0 in
+               Some (fst (fold_left (fun (acc : Z * Z) z => (fst acc + z * 2 ^ (8 * snd acc), snd acc - 1)) hi
+                                    (0, 3)) + lo)
+  | None => None
+  end.
+
+Definition my_quote (s : string) : string :=
+  let fix go (s : string) :=
+      match s with
+      | EmptyString => EmptyString
+      | String c r => let n := Ascii.nat_of_ascii c in
+                      if Nat.eqb n 39 || Nat.eqb n 92 then String "\"%char (String c (go r))
+                      else if Nat.eqb n 0 then String "\"%char (String "0"%char (go r))
+                      else if Nat.eqb n 26 then String "\"%char (String "Z"%char (go r))
+                      else String c (go r)
+      end in
+  "'" ++ go s ++ "'".
+
+Definition my_closeout_funs : list (string * (list value -> value)) :=
+  ("conv", my_conv)
+  :: ("bin", fun l => match l with v :: nil => my_conv (v :: Value_Z (Some 10) :: Value_Z (Some 2) :: nil)
+                                 | _ => Value_Err "wrong number of arguments" end)
+  :: ("oct", fun l => match l with v :: nil => my_conv (v :: Value_Z (Some 10) :: Value_Z (Some 8) :: nil)
+                                 | _ => Value_Err "wrong number of arguments" end)
+  :: ("crc32", fun l => match l with v :: nil => match text_of v with
+                                                 | Some s => VInt 0 (crc32_string s) | None => Value_I None end
+                                   | _ => Value_Err "wrong number of arguments" end)
+  :: ("inet_aton", fun l => match l with v :: nil => match text_of v with
+                                                     | Some s => match my_inet_aton s with Some z => VInt 0 z | None => Value_I None end
+                                                     | None => Value_I None end
+                                       | _ => Value_Err "wrong number of arguments" end)
+  :: ("inet_ntoa", fun l => match l with v :: nil => match z_arg v with
+                                                     | Some z => if (z <? 0) || (2 ^ 32 <=? z) then Value_string None
+                                                                 else Value_string (Some (string_of_Z (z / 2 ^ 24) ++ "." ++ string_of_Z (Z.modulo (z / 2 ^ 16) 256) ++ "." ++
+                                                                                         string_of_Z (Z.modulo (z / 256) 256) ++ "." ++ string_of_Z (Z.modulo z 256)))
+                                                     | None => Value_string None end
+                                       | _ => Value_Err "wrong number of arguments" end)
+  :: ("is_ipv4", fun l => match l with v :: nil => match text_of v with
+                                                   | Some s => match my_inet_parts s with
+                                                               | Some ps => Value_Z (Some (if Nat.eqb (List.length ps) 4 then 1 else 0))
+                                                               | None => Value_Z (Some 0) end
+                                                   | None => Value_Z (Some 0) end
+                                     | _ => Value_Err "wrong number of arguments" end)
+  :: ("quote", fun l => match l with v :: nil => match text_of v with
+                                                 | Some s => Value_string (Some (my_quote s))
+                                                 | None => Value_string (Some "NULL") end
+                                   | _ => Value_Err "wrong number of arguments" end)
+  (* [WEEKOFYEAR (d)] is [WEEK (d, 3)]: the ISO 8601 week *)
+  :: ("weekofyear", fun l => match l with
+                             | v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (snd (iso_week_year (ts_days t))))
+                                                                 | None => Value_Z None end
+                             | _ => Value_Err "wrong number of arguments" end)
+  :: ("any_value", fun l => match l with v :: nil => v | _ => Value_Err "wrong number of arguments" end)
+  :: ("make_set", fun l => match l with
+                           | b :: ss => match z_arg b with
+                                        | Some z => let z := Z.modulo z (2 ^ 64) in
+                                                    let picked := flat_map (fun p => let '(i, v) := p in
+                                                                    if Z.testbit z (Z.of_nat i) then
+                                                                      match text_of v with Some t => t :: nil | None => nil end
+                                                                    else nil) (combine (seq 0 (List.length ss)) ss) in
+                                                    Value_string (Some (String.concat "," picked))
+                                        | None => Value_string None end
+                           | nil => Value_Err "wrong number of arguments" end)
+  :: ("export_set", fun l =>
+        match l with
+        | b :: on :: off :: rest =>
+          let sep := match rest with s :: _ => text_of s | nil => Some "," end in
+          let n := match rest with _ :: k :: _ => z_arg k | _ => Some 64 end in
+          match z_arg b, text_of on, text_of off, sep, n with
+          | Some z, Some o, Some f, Some sp, Some k =>
+            let k := if (k <? 0) || (64 <? k) then 64 else k in
+            let z := Z.modulo z (2 ^ 64) in
+            Value_string (Some (String.concat sp (map (fun i => if Z.testbit z (Z.of_nat i) then o else f) (seq 0 (Z.to_nat k)))))
+          | _, _, _, _, _ => Value_string None
+          end
+        | _ => Value_Err "wrong number of arguments" end)
+  :: nil.
+
+Local Open Scope string_scope.
+Definition my_aliases : list (string * string) :=
+  ("character_length", "char_length") :: ("lcase", "lower") :: ("ucase", "upper") :: ("time", "cast_time")
+  :: ("timestamp_diff", "timestampdiff") :: ("localtime", "now") :: ("localtimestamp", "now") :: nil.
+Definition with_my_aliases (t : list (string * (list value -> value))) : list (string * (list value -> value)) :=
+  t ++ flat_map (fun p => match string_assoc _ (snd p) t with Some f => (fst p, f) :: nil | None => nil end) my_aliases
+    (* [TIMESTAMP (e)] is [CAST (e AS DATETIME)] *)
+    ++ match string_assoc _ "cast_datetime" t with
+       | Some f => ("timestamp", fun l => match l with d :: nil => f (d :: nil)
+                                                    | _ => Value_Err "wrong number of arguments" end) :: nil
+       | None => nil end.
+
 Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
   mk_vsem name
           (table_of_list (like_table my_skit true (rep_of (ms_coll ss)) (rep_of (ms_coll ss)) (Some 92)
                           ++ ("regexp", rx_like my_rx false) :: ("not regexp", fun l => negb3 (rx_like my_rx false l))
                           :: my_pred_table))
-          (table_of_list (sys_table default_env name ++ my_symbol_table))
+          (table_of_list (with_my_aliases (sys_table default_env name ++ my_closeout_funs ++ my_symbol_table)))
           (table_of_list my_aggregate_table)
           is_null
           my_truth
