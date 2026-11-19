@@ -143,7 +143,7 @@ Still open:
 
 In the expected order of difficulty; priorities are to be decided:
 - (done) recursive CTEs: `SQ_WithRec` iterates the step on the working table (`UNION ALL` appends, `UNION` keeps only new rows and stops on a fixpoint); the number of steps is bounded by `rec_fuel` (1000, as MySQL's `cte_max_recursion_depth`), so a non-terminating recursion returns the rows of the first 1000 steps instead of an error; mutual and multiple recursion are not modelled;
-- (done) `GROUPING SETS` / `ROLLUP` / `CUBE` / `GROUPING()`: grouping expressions that a set does not group read as NULL; limitation: `ORDER BY` keys are not masked;
+- (done) `GROUPING SETS` / `ROLLUP` / `CUBE` / `GROUPING()`: grouping expressions that a set does not group read as NULL;
 - (done) `FETCH FIRST n [PERCENT] ROWS ONLY | WITH TIES` (`SQ_Fetch`): `WITH TIES` is accepted by PostgreSQL and Oracle mode, `PERCENT` (rounded up, computed before the offset) by Oracle mode only;
 - (done) `RANGE` window frames with integer offsets (`Frame_Range`): single numeric ORDER BY key, descending order mirrored, NULL keys are peers of each other only; decimal offsets, `INTERVAL` offsets and frame exclusion are not covered;
 - date/time types, floating-point numbers, collations;
@@ -163,3 +163,34 @@ In the expected order of difficulty; priorities are to be decided:
   (`fresh_attr_is_fresh`) and is not in `_CoqProject`. Proving it needs the
   injectivity of the decimal printing of natural numbers and a pigeonhole
   argument; nothing in the build depends on it.
+
+## I9. Completeness ledger
+
+**Status: open.** The goal is a formal semantics of queries with no gap, for PostgreSQL, MySQL,
+SQLite, OceanBase (two modes), MariaDB, TiDB, Percona Server and PolarDB. This ledger lists each
+known gap and its status; it is updated by every pull request which touches one of them.
+
+| # | Gap | Status |
+|---|---|---|
+| 1 | Aggregate home block, correlated subqueries | resolved (PR #7) |
+| 2 | Names of functions, predicates and aggregates are checked per dialect | resolved (PR #7) |
+| 3 | `GROUPING SETS`, `ROLLUP`, `CUBE`, `GROUPING()`, `ORDER BY` under grouping sets | resolved (PR #8, tests of `ORDER BY` added later) |
+| 4 | `WITH RECURSIVE` | resolved, bounded by `rec_fuel` (PR #9); mutual recursion not modelled |
+| 5 | Bare columns (`ONLY_FULL_GROUP_BY`) | resolved for acceptance (PR #10); the value of a bare column in SQLite/MariaDB/OceanBase is not modelled; no functional dependencies |
+| 6 | `RANGE` frames with integer offsets | resolved (PR #10); decimal and interval offsets, frame exclusion open |
+| 7 | `FETCH FIRST ... WITH TIES`, `PERCENT` | resolved (PR #11) |
+| 8 | MariaDB, TiDB, Percona, PolarDB: constructs, default collation, `sql_mode` | resolved for the constructs of `SqlFull` (PR #12); their functions beyond those of MySQL, and MariaDB's Oracle mode, open |
+| 9 | `PERCENT_RANK`, `CUME_DIST` | resolved (rational values) |
+| 10 | Decimal scale (`length(0.00)`, `4/3 = 1.333333333` in OceanBase) | open: needs a scale in the value type |
+| 11 | Floating-point numbers (IEEE rounding, `NaN`, `Infinity`, `-0`) | open: values are exact rationals |
+| 12 | Dates, times, timestamps, intervals, time zones | open |
+| 13 | Integer ranges, overflow, `BIGINT UNSIGNED` | open |
+| 14 | Runtime errors (division by zero in PostgreSQL, invalid casts) are NULL here (I3) | open: needs a result type with errors |
+| 15 | Regular expressions (`~`, `REGEXP`, `REGEXP_LIKE`, `REGEXP_REPLACE`) | open |
+| 16 | JSON and arrays | open |
+| 17 | Collations beyond case folding and padding (accent folding, `utf8mb4_unicode_ci`, locale collations of PostgreSQL) | open |
+| 18 | Ordered-set aggregates (`percentile_cont`, `mode`), `ORDER BY` / `SEPARATOR` in `group_concat` / `string_agg`, multi-argument aggregates | open |
+| 19 | `NATURAL` and `USING` joins, `DISTINCT ON`, table functions (`generate_series`), `TABLE` and `VALUES` as statements | open (some are derived forms) |
+| 20 | SQLite: bare column in an aggregate query with `min` / `max` | open |
+| 21 | `ROW` values and row comparison with more than one column outside `IN` | open |
+| 22 | Static typing and well-formedness of queries (I5) | open |

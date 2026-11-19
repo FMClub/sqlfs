@@ -137,6 +137,7 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (vs_order d)
              (fun z => NullValues.Value_Z (Some z))
              NullValues.rat_of_value
+             NullValues.value_of_rat
              (vs_canon d)
              (vs_nulls_smallest d)
              (vs_supports d)
@@ -244,6 +245,8 @@ with swfun_to (f : swfun T1 relname) {struct f} : swfun T2 relname :=
   | W_Rank _ _ => W_Rank T2 relname
   | W_Dense_Rank _ _ => W_Dense_Rank T2 relname
   | W_Ntile _ _ n => W_Ntile T2 relname n
+  | W_Percent_Rank _ _ => W_Percent_Rank T2 relname
+  | W_Cume_Dist _ _ => W_Cume_Dist T2 relname
   | W_Lag e n d => @W_Lag T2 relname (sexpr_to e) n (sexpr_to d)
   | W_Lead e n d => @W_Lead T2 relname (sexpr_to e) n (sexpr_to d)
   | W_First_Value e fr => @W_First_Value T2 relname (sexpr_to e) fr

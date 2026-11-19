@@ -55,6 +55,7 @@ Definition CI : dialect TNull :=
              (fun a b => NullValues.sql_order (fold_case a) (fold_case b))
              (fun z => NullValues.Value_Z (Some z))
              NullValues.rat_of_value
+             NullValues.value_of_rat
              fold_case
              true
              (fun f => match f with 

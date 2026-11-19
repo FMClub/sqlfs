@@ -32,6 +32,7 @@ Definition TNull_PostgreSQL : dialect TNull :=
              NullValues.sql_order
              (fun z => NullValues.Value_Z (Some z))
              NullValues.rat_of_value
+             NullValues.value_of_rat
              (fun v => v)
              false
              (fun _ => true)
@@ -207,6 +208,8 @@ Definition w_row_number := @W_Row_Number TNull relname.
 Definition w_rank := @W_Rank TNull relname.
 Definition w_dense_rank := @W_Dense_Rank TNull relname.
 Definition w_ntile n := @W_Ntile TNull relname n.
+Definition w_percent_rank := @W_Percent_Rank TNull relname.
+Definition w_cume_dist := @W_Cume_Dist TNull relname.
 Definition w_lag (e : sexpr) n (d : sexpr) := @W_Lag TNull relname e n d.
 Definition w_lead (e : sexpr) n (d : sexpr) := @W_Lead TNull relname e n d.
 Definition w_first_value (e : sexpr) fr := @W_First_Value TNull relname e fr.

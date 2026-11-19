@@ -200,6 +200,8 @@ Record dialect : Type :=
       (** the number which a value stands for, as the key of a [RANGE] window frame with an offset
           (NULL and the values which are not numbers have none) *)
       rat_of : value -> option Q;
+      (** the value which stands for a rational number ([PERCENT_RANK], [CUME_DIST]) *)
+      value_of_rat : Q -> value;
       (** The key of a value for the operations which identify values which are
           not distinct without being equal: [GROUP BY], [DISTINCT], the set operations
           and [DISTINCT] aggregates. It is the identity when the comparison of strings is
@@ -327,6 +329,10 @@ with swfun : Type :=
   | W_Rank : swfun
   | W_Dense_Rank : swfun
   | W_Ntile : nat -> swfun
+  (** [(rank - 1) / (rows - 1)], 0 for a single row *)
+  | W_Percent_Rank : swfun
+  (** the number of rows which are before the current row or its peers, divided by the number of rows *)
+  | W_Cume_Dist : swfun
   (** [LAG (e, n, default)] *)
   | W_Lag : sexpr -> nat -> sexpr -> swfun
   (** [LEAD (e, n, default)] *)
@@ -1018,6 +1024,8 @@ Inductive wsem : Type :=
   | WS_Rank : wsem
   | WS_Dense_Rank : wsem
   | WS_Ntile : nat -> wsem
+  | WS_Percent_Rank : wsem
+  | WS_Cume_Dist : wsem
   (** [true] for LAG, [false] for LEAD *)
   | WS_Shift : bool -> (tuple -> value) -> nat -> (tuple -> value) -> wsem
   | WS_First : (tuple -> value) -> frame -> wsem
@@ -1134,6 +1142,19 @@ Definition eval_wsem (a : attribute) (w : wsem)
     let gi := nth i gidx 0 in
     value_of_Z O (Z.of_nat (S (List.length (filter (fun g => Nat.ltb g gi) gidx))))
   | WS_Dense_Rank => value_of_Z O (Z.of_nat (S (nth i gidx 0)))
+  | WS_Percent_Rank =>
+    let gi := nth i gidx 0 in
+    let n := List.length sorted in
+    let r := List.length (filter (fun g => Nat.ltb g gi) gidx) in
+    value_of_rat O (match n with
+                    | S (S _) => Qdiv (inject_Z (Z.of_nat r)) (inject_Z (Z.of_nat (Nat.pred n)))
+                    | _ => 0%Z # 1
+                    end)
+  | WS_Cume_Dist =>
+    let gi := nth i gidx 0 in
+    let n := List.length sorted in
+    let k := List.length (filter (fun g => Nat.leb g gi) gidx) in
+    value_of_rat O (Qdiv (inject_Z (Z.of_nat k)) (inject_Z (Z.of_nat n)))
   | WS_Ntile b =>
     match b with
     | 0 => null_of a
@@ -1425,6 +1446,8 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
                      | W_Rank => WS_Rank
                      | W_Dense_Rank => WS_Dense_Rank
                      | W_Ntile n => WS_Ntile n
+                     | W_Percent_Rank => WS_Percent_Rank
+                     | W_Cume_Dist => WS_Cume_Dist
                      | W_Lag e n d => WS_Shift true (ev e) n (ev d)
                      | W_Lead e n d => WS_Shift false (ev e) n (ev d)
                      | W_First_Value e fr => WS_First (ev e) fr
