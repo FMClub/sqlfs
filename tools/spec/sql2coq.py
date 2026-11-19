@@ -419,7 +419,7 @@ class P:
 
     def e_or(self):
         l = self.e_xor()
-        while self.eat_kw('or') or self.eat_op('||'):
+        while self.eat_kw('or') or (ENGINE != 'postgresql' and self.eat_op('||')):
             l = ('bin', 'or' if self.t[self.i - 1][1] in ('or', 'OR', 'Or') or self.t[self.i - 1][1].lower() == 'or' else '||', l, self.e_xor())
         return l
 
@@ -561,9 +561,11 @@ class P:
     # the bit operators of the MySQL family: | below &, below << >>, below + -; ^ above * /
     def e_bitor(self):
         l = self.e_bitand()
-        while self.peek() == ('op', '|'):
+        # in PostgreSQL, [||] is an operator of the same level as [|]: below [+], above the comparisons
+        while self.peek() == ('op', '|') or (ENGINE == 'postgresql' and self.peek() == ('op', '||')):
+            op = self.peek()[1]
             self.i += 1
-            l = ('bin', '|', l, self.e_bitand())
+            l = ('bin', op, l, self.e_bitand())
         return l
 
     def e_bitand(self):
@@ -624,7 +626,53 @@ class P:
             return ('bitnot', self.e_unary())
         if self.eat_kw('not'):
             return ('not', self.e_unary())
-        return self.e_primary()
+        e = self.e_primary()
+        # PostgreSQL [e :: type]
+        while ENGINE == 'postgresql' and self.peek() == ('op', ':') and self.peek(1) == ('op', ':'):
+            self.i += 2
+            ty, args = self.pg_type()
+            if ty in ('decimal', 'numeric') and args:
+                p_, s_ = (args + [0])[:2]
+                e = ('cast_dec', p_, s_, e)
+            else:
+                e = ('cast', ty, e)
+            e = self.postfix(e)
+        return e
+
+    def agg_filter(self):
+        """[FILTER (WHERE c)] after an aggregate"""
+        if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'filter' and self.peek(1) == ('op', '('):
+            self.i += 2
+            self.need_kw('where')
+            c = self.expr()
+            self.need_op(')')
+            return c
+        return None
+
+    def pg_type(self):
+        """A type name (several words: double precision, character varying, timestamp with time zone),
+        its arguments, and [] for an array (not modelled: Skip)."""
+        words = [self.peek()[1].lower()]
+        self.i += 1
+        while self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('precision', 'varying', 'with', 'without',
+                                                                          'time', 'zone'):
+            words.append(self.peek()[1].lower())
+            self.i += 1
+        args = []
+        if self.op('('):
+            self.i += 1
+            while not self.eat_op(')'):
+                t = self.peek()
+                if t[0] == 'num':
+                    args.append(int(t[1]))
+                self.i += 1
+        if self.op('['):
+            raise Skip('cast type array')
+        ty = ' '.join(words)
+        ty = {'double precision': 'double', 'character varying': 'varchar', 'character': 'char',
+              'timestamp with time zone': 'timestamptz', 'timestamp without time zone': 'timestamp',
+              'time without time zone': 'time', 'time with time zone': 'timetz'}.get(ty, ty)
+        return ty, args
 
     def e_primary(self):
         t = self.peek()
@@ -653,9 +701,9 @@ class P:
         if self.eat_kw('null'):
             return ('null',)
         if self.eat_kw('true'):
-            return ('num', '1')
+            return ('bool', True) if ENGINE == 'postgresql' else ('num', '1')
         if self.eat_kw('false'):
-            return ('num', '0')
+            return ('bool', False) if ENGINE == 'postgresql' else ('num', '0')
         if self.kw('case'):
             return self.case()
         if self.kw('cast'):
@@ -663,16 +711,19 @@ class P:
             self.need_op('(')
             e = self.expr()
             self.need_kw('as')
-            ty = self.peek()[1].lower()
-            self.i += 1
-            args = []
-            if self.op('('):
+            if ENGINE == 'postgresql':
+                ty, args = self.pg_type()
+            else:
+                ty = self.peek()[1].lower()
                 self.i += 1
-                while not self.eat_op(')'):
-                    t = self.peek()
-                    if t[0] == 'num':
-                        args.append(int(t[1]))
+                args = []
+                if self.op('('):
                     self.i += 1
+                    while not self.eat_op(')'):
+                        t = self.peek()
+                        if t[0] == 'num':
+                            args.append(int(t[1]))
+                        self.i += 1
             if ty == 'unsigned' or ty == 'signed':
                 self.eat_kw('integer') or self.eat_kw('int')
             self.need_op(')')
@@ -792,9 +843,11 @@ class P:
                     self.i = save
                 if self.eat_op('*'):
                     self.need_op(')')
+                    flt = self.agg_filter()
                     if self.kw('over'):
                         raise Skip('window')
-                    return ('call', lname, [], True, False)
+                    e = ('call', lname, [], True, False)
+                    return ('filter', e, flt) if flt is not None else e
                 distinct = self.eat_kw('distinct')
                 if not distinct:
                     self.eat_kw('all')
@@ -824,9 +877,11 @@ class P:
                         raise Skip('within group nulls')
                     self.need_op(')')
                     within = (oe, desc)
+                flt = self.agg_filter()
                 if self.kw('over'):
                     raise Skip('window')
-                return ('call', lname, args, False, distinct, within)
+                e = ('call', lname, args, False, distinct, within)
+                return ('filter', e, flt) if flt is not None else e
             if self.eat_op('.'):
                 if self.op('*'):
                     raise Skip('qualified star')
@@ -1137,11 +1192,28 @@ class Tr:
             return '(fn "cast_interval" [(str %s)])' % coq_str(e[1])
         if k == 'cast_dec':
             return '(fn "cast_decimal" [%s; (int %d); (int %d)])' % (self.ex(e[3]), e[1], e[2])
+        if k == 'filter':
+            call, c = e[1], e[2]
+            name, args, star, distinct = call[1], call[2], call[3], call[4]
+            if name not in AGGS or distinct or (len(call) > 5 and call[5] is not None):
+                raise Skip('filter clause')
+            if star:
+                return '(agg_filter "count" (int 1) %s)' % self.cond(c)
+            if len(args) != 1 or name in AGGS2:
+                raise Skip('filter clause')
+            return '(agg_filter "%s" %s %s)' % (name, self.ex(args[0]), self.cond(c))
+        if k == 'bool':
+            return '(cst (NullValues.Value_bool (Some %s)))' % ('true' if e[1] else 'false')
         if k == 'cast':
             ty = e[1]
             f = {'signed': 'cast_int', 'unsigned': 'cast_unsigned', 'integer': 'cast_int', 'int': 'cast_int', 'bigint': 'cast_int', 'smallint': 'cast_int', 'char': 'cast_string', 'varchar': 'cast_string', 'text': 'cast_string', 'decimal': 'cast_numeric', 'numeric': 'cast_numeric', 'real': 'cast_double', 'float': 'cast_double', 'double': 'cast_double'}.get(ty)
             if ENGINE == 'postgresql':
-                f = {'bigint': 'cast_bigint', 'smallint': 'cast_smallint', 'real': 'cast_float4', 'float': 'cast_float8', 'double': 'cast_float8'}.get(ty, f)
+                f = {'bigint': 'cast_bigint', 'smallint': 'cast_smallint', 'real': 'cast_float4', 'float': 'cast_float8',
+                     'double': 'cast_float8', 'int2': 'cast_smallint', 'int4': 'cast_int', 'int8': 'cast_bigint',
+                     'float4': 'cast_float4', 'float8': 'cast_float8', 'bool': 'cast_bool', 'boolean': 'cast_bool',
+                     'date': 'cast_date', 'time': 'cast_time', 'timestamp': 'cast_timestamp',
+                     'timestamptz': 'cast_timestamptz', 'interval': 'cast_interval', 'json': 'cast_json',
+                     'jsonb': 'cast_jsonb', 'bpchar': 'cast_string', 'name': 'cast_string'}.get(ty, f)
             if ENGINE == 'sqlite':
                 f = {'real': 'cast_real', 'float': 'cast_real', 'double': 'cast_real'}.get(ty, f)
             if f is None:
@@ -1196,6 +1268,8 @@ class Tr:
 
     def cond(self, e):
         k = e[0]
+        if k == 'bool':
+            return 'c_true' if e[1] else '(c_not c_true)'
         if k == 'bin' and e[1] == 'and':
             return '(c_and %s %s)' % (self.cond(e[2]), self.cond(e[3]))
         if k == 'bin' and e[1] == 'or':
@@ -1270,6 +1344,8 @@ def has_call(e, name):
 def is_agg_call(e):
     # the scalar max (a, b, ...) and min of SQLite are not aggregates; WITHIN GROUP makes an aggregate
     if e[0] == 'call' and len(e) > 5 and e[5] is not None:
+        return True
+    if e[0] == 'filter':
         return True
     return (e[0] == 'call' and e[1] in AGGS and
             not (ENGINE == 'sqlite' and e[1] in ('max', 'min') and len(e[2]) > 1))
@@ -1968,7 +2044,12 @@ def test_items(test_src, blocks):
     return items
 
 
+LENIENT = False
+USER_FUNCS = set()
+
+
 def process(path, out, stats):
+    USER_FUNCS.clear()
     import os
     if os.path.getsize(path) > 3000000:
         stats['skipped_files'] += 1
@@ -1984,6 +2065,8 @@ def process(path, out, stats):
     test_path = re.sub(r'/r/mysql/([^/]*)\.result$', r'/t/\1.test', path)
     items = None
     try:
+        if test_path == path:
+            raise OSError('no test script')
         test_src = open(test_path, encoding='utf-8', errors='replace').read()
         if re.search(r'^\s*(while|eval|let|--source|--exec|--perl|--eval)\b', test_src, re.I | re.M):
             stats['skipped_files'] += 1
@@ -1997,12 +2080,47 @@ def process(path, out, stats):
     if items is None:
         items = [(stmt, res, False) for stmt, res in blocks]
     unsafe = re.compile(r'\b(rollback|savepoint|create\s+procedure|create\s+function|delimiter|call\s|prepare\s|load\s+data|set\s+autocommit|start\s+transaction|begin\b|xa\s)', re.I)
-    if any(unsafe.search(stmt) for stmt, _, _ in items):
+    if not LENIENT and any(unsafe.search(stmt) for stmt, _, _ in items):
         stats['skipped_files'] += 1
         return
+    in_txn = False
     for bi, (stmt, res, expect_err) in enumerate(items):
         s = stmt.strip()
         if len(s) > 20000:
+            continue
+        if LENIENT:
+            # (--lenient) a transaction, a routine or a statement which the translator cannot follow makes
+            # the tables which it mentions unreliable, instead of skipping the file
+            if re.match(r'^\s*(begin|start\s+transaction)\b', s, re.I):
+                in_txn = True
+            ends = re.match(r'^\s*(commit|rollback|end|abort)\b', s, re.I)
+            # a child (INHERITS, PARTITION OF) adds its rows to the parent: the parent is unreliable
+            for m in re.finditer(r'\b(?:inherits\s*\(\s*|partition\s+of\s+)(\w+)', s, re.I):
+                if m.group(1).lower() in tables:
+                    tables[m.group(1).lower()].ok = False
+            # a data-modifying WITH, SELECT INTO, CREATE TABLE AS: the tables mentioned are unreliable
+            if re.match(r'^\s*with\b', s, re.I) and re.search(r'\b(insert|update|delete|merge)\b', s, re.I) or \
+               re.search(r'\binto\s+(temp\w*\s+|unlogged\s+)?(table\s+)?\w+\s+from\b', s, re.I) and re.match(r'^\s*select', s, re.I):
+                for t in tables.values():
+                    if re.search(r'\b' + re.escape(t.name) + r'\b', s, re.I):
+                        t.ok = False
+                stats['skip']['data-modifying statement'] = stats['skip'].get('data-modifying statement', 0) + 1
+                continue
+            if in_txn or unsafe.search(s) or re.match(r'^\s*(create\s+(or\s+replace\s+)?(function|procedure|'
+                                                      r'aggregate|operator|type|domain|cast|rule|trigger)|do\b)', s, re.I):
+                for t in tables.values():
+                    if re.search(r'\b' + re.escape(t.name) + r'\b', s, re.I):
+                        t.ok = False
+                if re.match(r'^\s*create\s+(or\s+replace\s+)?(function|aggregate|operator|cast)', s, re.I):
+                    m = re.search(r'(function|aggregate)\s+([\w.]+)', s, re.I)
+                    if m:
+                        USER_FUNCS.add(m.group(2).split('.')[-1].lower())
+                if ends:
+                    in_txn = False
+                stats['skip']['transaction or routine'] = stats['skip'].get('transaction or routine', 0) + 1
+                continue
+        if USER_FUNCS and re.search(r'\b(' + '|'.join(map(re.escape, USER_FUNCS)) + r')\s*\(', s, re.I):
+            stats['skip']['user-defined function'] = stats['skip'].get('user-defined function', 0) + 1
             continue
         failed = expect_err or (res is not None and any(l.startswith('ERROR') for l in res))
         try:
@@ -2153,6 +2271,8 @@ def process(path, out, stats):
                 stats['translated'] += 1
         except Skip as e:
             if head == 'select':
+                if os.environ.get('SQL2COQ_DEBUG'):
+                    sys.stderr.write('SKIP %s :: %s\n' % (e, s[:200].replace('\n', ' ')))
                 stats['skip'][str(e).split(' ')[0] + ' ' + (str(e).split(' ')[1] if ' ' in str(e) else '')] = stats['skip'].get(str(e).split(' ')[0] + ' ' + (str(e).split(' ')[1] if ' ' in str(e) else ''), 0) + 1
         except (IndexError, KeyError, ValueError, AttributeError) as e:
             if head == 'select':
@@ -2177,8 +2297,15 @@ def main():
             dialect = args[1]
         elif args[0] == '--outdir':
             outdir = args[1]
+        elif args[0] == '--lenient':
+            global LENIENT
+            LENIENT = True
+            args = args[1:]
+            continue
         args = args[2:]
     import os
+    global ENGINE
+    ENGINE = {'PostgreSQL': 'postgresql', 'SQLite': 'sqlite'}.get(dialect, 'mysql')
     stats = {'selects': 0, 'translated': 0, 'no_result': 0, 'skipped_files': 0, 'skip': {}}
     for path in args:
         out = []

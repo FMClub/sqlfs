@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""PostgreSQL regression tests in the format of the result files of mysqltest (TODO 5.3).
+
+A file `expected/NAME.out` of `src/test/regress` echoes each statement of `sql/NAME.sql` followed by
+its output: a table printed by psql (a header, a line of dashes, the rows, `(N rows)`), a command
+tag (`CREATE TABLE`, `INSERT 0 3`), or an error. This script writes NAME.result where each statement
+is followed by its rows separated by tabs (the format which `sql2coq.py` reads):
+
+- the command tags, notices and errors are dropped (an error is written `ERROR ...`, so that the
+  statement is not translated);
+- psql prints NULL and the empty string the same way (an empty cell): a result with an empty cell
+  is written as an error (`ERROR ambiguous empty cell`), and the statement is not checked;
+- a cell continued on the next line (`+`) and the expanded display (`\\x`) are not read: the result
+  is dropped the same way;
+- the psql meta-commands (`\\set`, `\\pset`, ...) are dropped; a file which uses `\\pset` or `\\x`
+  changes the display, and is skipped as a whole.
+
+The data of the regression database (`onek`, `tenk1`, `int4_tbl`, ...) are created by `test_setup.sql`
+and `create_table.sql` from files which `COPY` reads: the tables which no statement of the file creates
+are unknown to the translator, and the queries on them are skipped.
+
+Usage: pg2result.py REGRESS_DIR OUTDIR NAME...
+"""
+import os
+import re
+import sys
+
+TAG = re.compile(r'^(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE|SET|RESET|BEGIN|COMMIT|ROLLBACK|ANALYZE|VACUUM|'
+                 r'COPY|GRANT|REVOKE|COMMENT|TRUNCATE|SELECT \d+|DO|PREPARE|EXECUTE|DEALLOCATE|DECLARE|'
+                 r'FETCH|MOVE|CLOSE|SAVEPOINT|RELEASE|LOCK|DISCARD|EXPLAIN|LISTEN|NOTIFY|CHECKPOINT|CALL|'
+                 r'REFRESH|CLUSTER|REINDEX|SECURITY|IMPORT|MERGE \d+|START TRANSACTION)\b')
+
+
+def complete(s):
+    """A statement ends with ';' outside quotes, comments and dollar quotes."""
+    inq = None
+    i = 0
+    depth = 0
+    while i < len(s):
+        c = s[i]
+        if inq:
+            if s.startswith(inq, i):
+                i += len(inq)
+                inq = None
+                continue
+        elif s.startswith('--', i):
+            j = s.find('\n', i)
+            i = len(s) if j < 0 else j
+            continue
+        elif s.startswith('/*', i):
+            j = s.find('*/', i)
+            if j < 0:
+                return False
+            i = j + 2
+            continue
+        elif c in "'\"":
+            inq = c
+        elif c == '$':
+            m = re.match(r'\$[A-Za-z_]*\$', s[i:])
+            if m:
+                inq = m.group(0)
+                i += len(inq)
+                continue
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        i += 1
+    last = s.rstrip().split('\n')[-1]
+    last = re.sub(r'\s--[^\']*$', '', ' ' + last)
+    return inq is None and (s.rstrip().endswith(';') or last.rstrip().endswith(';'))
+
+
+def parse_out(lines):
+    """[(statement, output lines)]"""
+    items = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        l = lines[i]
+        if l.strip() == '' or l.lstrip().startswith('--') or l.startswith('\\'):
+            i += 1
+            continue
+        stmt = l
+        while not complete(stmt) and i + 1 < n:
+            i += 1
+            stmt += '\n' + lines[i]
+        i += 1
+        out = []
+        # the output: until a blank line after a table, or a line which is not output
+        if i < n and i + 1 < n and re.match(r'^-+(\+-+)*$', lines[i + 1].strip()) and '|' in lines[i] or \
+           (i + 1 < n and re.match(r'^-+$', lines[i + 1].strip()) and lines[i].strip()):
+            while i < n and not re.match(r'^\(\d+ rows?\)$', lines[i]):
+                out.append(lines[i])
+                i += 1
+            if i < n:
+                out.append(lines[i])
+                i += 1
+        else:
+            # (the regression tests run psql with -q: no command tags are printed)
+            while i < n and (re.match(r'^(ERROR|WARNING|NOTICE|DETAIL|HINT|LINE \d+|CONTEXT|INFO|'
+                                                              r'\s*\^|QUERY|server closed)', lines[i])):
+                out.append(lines[i])
+                i += 1
+        items.append((stmt, out))
+    return items
+
+
+MONTHS = {m: i + 1 for i, m in enumerate(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct',
+                                           'Nov', 'Dec'])}
+
+
+def iso_cell(c):
+    """The regression database runs with DateStyle 'Postgres, MDY': a date is printed 04-09-1957 and a
+    timestamp Mon Feb 23 00:00:00.5 2004; they are written in the ISO style, which the model prints.
+    A timestamp with a time zone, a BC date and an interval in the postgres style give None."""
+    m = re.fullmatch(r'(\d\d)-(\d\d)-(\d{4})', c)
+    if m:
+        return '%s-%s-%s' % (m.group(3), m.group(1), m.group(2))
+    m = re.fullmatch(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (\w{3}) (\d\d) (\d\d:\d\d:\d\d(?:\.\d+)?) (\d{4})', c)
+    if m and m.group(2) in MONTHS:
+        return '%s-%02d-%s %s' % (m.group(5), MONTHS[m.group(2)], m.group(3), m.group(4))
+    if re.search(r'\b(BC|PST|PDT|UTC|GMT)\b', c) or c.startswith('@ ') or \
+       re.match(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \w{3} \d\d ', c):
+        return None
+    return c
+
+
+STATEMENT = re.compile(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|'
+                       r'commit|rollback|use|analyze|call|start|begin)\b', re.I)
+
+
+def convert_output(out):
+    if not out:
+        return []
+    if out[0].startswith('ERROR'):
+        return ['ERROR ' + out[0][6:].strip()]
+    if DATESTYLE_CHANGED:
+        return ['ERROR DateStyle changed by the test']
+    if len(out) < 3 or not re.match(r'^\(\d+ rows?\)$', out[-1]):
+        return []
+    header = [c.strip() for c in out[0].split('|')]
+    rows = []
+    for l in out[2:-1]:
+        if l.endswith('+') or (len(l.split('|')) != len(header)):
+            return ['ERROR multi-line cell']
+        cells = [c.strip() for c in l.split('|')]
+        if any(c == '' for c in cells):
+            return ['ERROR ambiguous empty cell']
+        cells = [iso_cell(c) for c in cells]
+        if any(c is None for c in cells):
+            return ['ERROR time zone, BC date or interval style']
+        if STATEMENT.match(cells[0]):
+            return ['ERROR a row which reads as a statement']
+        rows.append('\t'.join(cells))
+    if len(header) == 1 and header[0] == '':
+        return ['ERROR unnamed column']
+    return ['\t'.join(header)] + rows
+
+
+MAX_ROWS = 1000
+DATESTYLE_CHANGED = False
+
+
+def sql_lit(v):
+    if v == '\\N':
+        return 'NULL'
+    if re.fullmatch(r'-?\d+(\.\d+)?', v):
+        return v
+    return "'" + v.replace("'", "''") + "'"
+
+
+def setup_statements(regress):
+    """The tables of test_setup.sql: its CREATE TABLE and INSERT statements, and its COPY of a data file
+    as INSERT statements (the tables of more than MAX_ROWS rows are left out: tenk1, tenk2)."""
+    text = open(os.path.join(regress, 'sql', 'test_setup.sql'), encoding='utf-8').read()
+    lines = [l for l in text.split('\n') if not l.lstrip().startswith('--')]
+    out, skipped = [], set()
+    filename = None
+    i = 0
+    while i < len(lines):
+        l = lines[i]
+        if not l.strip():
+            i += 1
+            continue
+        m = re.match(r"^\\set filename :abs_srcdir '(/data/[^']+)'", l)
+        if m:
+            filename = m.group(1)
+            i += 1
+            continue
+        if l.startswith('\\'):
+            i += 1
+            continue
+        st = l
+        while not complete(st) and i + 1 < len(lines):
+            i += 1
+            st += '\n' + lines[i]
+        i += 1
+        st = re.sub(r'\s*\n\s*', ' ', st.strip())
+        m = re.match(r'^COPY (\w+) FROM', st, re.I)
+        if m:
+            rows = open(regress + filename, encoding='utf-8').read().split('\n')
+            rows = [r for r in rows if r]
+            if len(rows) > MAX_ROWS:
+                skipped.add(m.group(1).lower())
+                continue
+            for k in range(0, len(rows), 100):
+                vals = ', '.join('(' + ', '.join(sql_lit(v) for v in r.split('\t')) + ')' for r in rows[k:k + 100])
+                out.append('INSERT INTO %s VALUES %s;' % (m.group(1), vals))
+            continue
+        m = re.match(r'^CREATE TABLE (\w+) AS SELECT \* FROM (\w+);$', st, re.I)
+        if m:
+            if m.group(2).lower() in skipped:
+                skipped.add(m.group(1).lower())
+                continue
+            # a copy: the same columns and rows
+            base = [x for x in out if re.match(r'^CREATE TABLE %s\b' % m.group(2), x, re.I)]
+            if base:
+                out.append(re.sub(r'^CREATE TABLE %s\b' % m.group(2), 'CREATE TABLE ' + m.group(1), base[0], flags=re.I))
+                out += [re.sub(r'^INSERT INTO %s\b' % m.group(2), 'INSERT INTO ' + m.group(1), x, flags=re.I)
+                        for x in out if re.match(r'^INSERT INTO %s\b' % m.group(2), x, re.I)]
+            continue
+        if re.match(r'^(CREATE TABLE|INSERT INTO)\b', st, re.I) and not re.search(r'\bINHERITS\b', st, re.I):
+            out.append(st)
+    return out
+
+
+def main():
+    global DATESTYLE_CHANGED
+    regress, outdir = sys.argv[1], sys.argv[2]
+    os.makedirs(outdir, exist_ok=True)
+    global SETUP
+    SETUP = setup_statements(regress)
+    for name in sys.argv[3:]:
+        src = os.path.join(regress, 'expected', name + '.out')
+        text = open(src, encoding='utf-8', errors='replace').read()
+        if re.search(r'^\\(pset|x|a|f|C|t)\b', text, re.M):
+            sys.stderr.write('%s: skipped (psql display settings)\n' % name)
+            continue
+        lines = text.split('\n')
+        if lines and lines[-1] == '':
+            lines.pop()
+        DATESTYLE_CHANGED = False
+        res = list(SETUP)
+        for stmt, out in parse_out(lines):
+            # one statement per line group, comments removed (sql2coq reads the statement up to ';')
+            if re.search(r"'(?:[^'\n]|'')*\n(?:[^']|'')*'", stmt):
+                continue  # a literal on several lines: joining the lines would change it
+            st = re.sub(r'(?m)--.*$', '', stmt).strip()
+            st = re.sub(r'\s*\n\s*', ' ', st)
+            if not st:
+                continue
+            if re.match(r'^(set|reset)\s+(session\s+)?datestyle\b', st, re.I):
+                DATESTYLE_CHANGED = not st.lower().startswith('reset')
+                continue
+            if re.match(r'^explain\b', st, re.I):
+                continue
+            res.append(st)
+            res += convert_output(out)
+        with open(os.path.join(outdir, name + '.result'), 'w') as f:
+            f.write('\n'.join(res) + '\n')
+
+
+if __name__ == '__main__':
+    main()

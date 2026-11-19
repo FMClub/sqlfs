@@ -65,7 +65,8 @@ Definition cell_ok (v : NullValues.value) (s : string) : bool :=
        | NullValues.Value_D (Some (q, _, sc)) => String.eqb s (NullValues.dec_text q sc)
        (* a float is compared by its text, as the MySQL family prints it *)
        | NullValues.Value_F (Some _) => match text_of v with Some t => String.eqb s t | None => false end
-       | NullValues.Value_bool (Some b) => String.eqb s (if b then "1" else "0")
+       (* a boolean: [1]/[0] in the MySQL family, [t]/[f] in psql *)
+       | NullValues.Value_bool (Some b) => if b then String.eqb s "1" || String.eqb s "t" else String.eqb s "0" || String.eqb s "f"
        | NullValues.Value_string (Some t) => String.eqb s t
        (* the dates, the intervals, the JSON documents and the collated strings: by their text *)
        | _ => match text_of v with Some t => String.eqb s t | None => false end

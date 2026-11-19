@@ -57,3 +57,20 @@ Example my_lcase : (val MySQL (fn "lcase" [str "ABC"]), val TiDB (fn "ucase" [st
 Proof. check. Qed.
 Example my_weekofyear : val MySQL (fn "weekofyear" [str "2008-02-20"]) = "8".
 Proof. check. Qed.
+
+(** ** PostgreSQL behaviours found by its regression tests (TODO 5.3) *)
+(** [text || anynonarray] converts the other operand: ['four: ' || 2 + 2] *)
+Example pg_concat_int : val PostgreSQL (fn "||" [str "four: "; fn "+" [int 2; int 2]]) = "four: 4".
+Proof. check. Qed.
+(** a boolean is [t] or [f] in [concat] (its output function) *)
+Example pg_concat_bool : val PostgreSQL (fn "concat" [str "x"; cst (NullValues.Value_bool (Some true))]) = "xt".
+Proof. check. Qed.
+(** a date compared with a string literal: the literal is read as a date *)
+Example pg_date_literal : val PostgreSQL (e_case (pred "<" [fn "cast_date" [str "1999-01-08"]; str "2000-01-01"]) (int 1) (int 0)) = "1".
+Proof. check. Qed.
+(** a timestamp is printed with the fewest fractional digits *)
+Example pg_ts_text : val PostgreSQL (fn "date_trunc" [str "week"; fn "cast_timestamp" [str "2004-02-29 15:44:17.71393"]]) = "2004-02-23 00:00:00".
+Proof. check. Qed.
+(** [json] keeps its text *)
+Example pg_json_text : val PostgreSQL (fn "cast_json" [str "[1,2]"]) = "[1,2]".
+Proof. check. Qed.

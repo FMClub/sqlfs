@@ -250,6 +250,8 @@ Definition text_of (v : value) : option string :=
     | 0%nat => Some (date_text n) | 1%nat => Some (time_text n fsp) | _ => Some (timestamp_text n fsp) end
   | Value_C (Some (s, _)) => Some s
   | Value_J (Some (t, 2%nat)) => Some (array_text t)
+  (* PostgreSQL [json]: the text as it was given (only [jsonb] is normalized) *)
+  | Value_J (Some (t, 1%nat)) => Some t
   | Value_J (Some (t, _)) => match parse_json t with Some j => Some (text_spaced j) | None => Some t end
   | Value_bool (Some b) => Some (if b then "1" else "0")
   | _ => None
