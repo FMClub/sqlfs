@@ -114,14 +114,11 @@ settled by the same definition.
 
 ## I6. Dialect-dependent choices are hard-wired
 
-**Current state**: the following are implementation-defined in the SQL
-standard, and are fixed here to the behaviour of PostgreSQL: NULLs are the
-largest values in an ordering; integer division truncates towards zero; `avg`
-returns an exact rational; `GREATEST` / `LEAST` ignore NULLs; a `LIMIT`
-without a total order returns one determined result.
-
-**To decide**: whether to make these parameters (a "dialect" record), so that
-the same theorems can be instantiated for several database systems.
+**Status: framework done, instances in progress.** The engine-level differences
+(NULL ordering, collation-aware identification of values, supported constructs)
+are the record `dialect` of `SqlFull.v`; the plan, the matrix of differences between
+PostgreSQL, MySQL, SQLite and OceanBase, and what is verified are in
+`docs/DIALECTS.md`. The value-level dialects are the next step.
 
 ## I7. SQL features which are not covered
 
