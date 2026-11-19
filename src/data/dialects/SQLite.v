@@ -594,7 +594,9 @@ Definition lite_cmp_coerce (p : string) (ks : list nat) (l : list value) : list 
 
 Definition SQLite : vsem :=
   mk_vsem "SQLite"
-          (table_of_list (like_table lite_skit false low_cp low_cp None ++ lite_pred_table))
+          (table_of_list (like_table lite_skit false low_cp low_cp None
+                          (* [REGEXP] calls the user function [regexp ()], which SQLite does not define *)
+                          ++ ("regexp", fun _ => unknown3) :: ("not regexp", fun _ => unknown3) :: lite_pred_table))
           (table_of_list lite_symbol_table)
           (table_of_list lite_aggregate_table)
           is_null
@@ -607,7 +609,7 @@ Definition SQLite : vsem :=
           lite_supports
           true
           (* [ESCAPE expression must be a single character] *)
-          (bad_escape lite_skit)
+          (fun p l => bad_escape lite_skit p l || String.eqb p "regexp" || String.eqb p "not regexp")
           (* a literal with a decimal point is a [REAL] *)
           lite_real
           (fun _ => false)

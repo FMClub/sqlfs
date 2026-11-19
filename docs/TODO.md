@@ -250,8 +250,34 @@ Targets: every function of the table is either modelled or has an explicit exclu
 - **2.4 Regular expressions**: three engines: PostgreSQL ARE (`~`, `~*`, `regexp_match`, `regexp_replace`, `regexp_split_to_table`), MySQL/MariaDB (ICU in MySQL 8, PCRE in MariaDB 10.0.5+, `REGEXP`, `REGEXP_LIKE/INSTR/REPLACE/SUBSTR`, flags `c i m n u`),
   TiDB (Go RE2 syntax), OceanBase (MySQL mode ICU; Oracle mode POSIX with Oracle flags), SQLite (extension, not built in: `REGEXP` operator calls a user function: record as "absent"). Model: a regex AST, parse per syntax, a matching semantics
   (leftmost-first for Perl-style, leftmost-longest for POSIX), flags, `NULL` handling. Verify the matcher with the engines' regex test files. Needs 1.3.
+  **Status: DONE**. The model and its limits are described in `docs/functions/regex.md`.
+  - `Regex.v` holds the syntax, the parser per flavour, the backtracking matcher, and the two match
+    policies: leftmost-first, and PostgreSQL's greediness-based longest/shortest.
+  - `RegexFuns.v` defines the functions of each dialect.
+  - `Test_Regex.v` takes its cases from PostgreSQL's `regex.out` and from the manuals.
+  - The translator reads `REGEXP`/`RLIKE`, `~`/`~*`/`!~`, `SIMILAR TO` and `substring(... from 'pattern')`.
+
+  Excluded:
+  - array-returning functions (`regexp_match`, `regexp_matches`, `regexp_split_*`);
+  - the `x` flag and `\p{}` classes;
+  - Unicode case folding.
 - **2.5 Aggregates**: the list per dialect (`any_value`, `bit_xor`, `std`/`stddev*`, `variance`, `array_agg`, `json_agg`/`json_arrayagg`/`json_objectagg`, `count(distinct a, b)`, `corr`/`covar_*`/`regr_*`, `approx_count_distinct`, `bool_*`, `every`, `string_agg`/`group_concat`/`listagg` with every option,
   `first`/`last` (Oracle `KEEP`), `median`), empty-group results, `DISTINCT` + `FILTER` + `ORDER BY` combinations, overflow of `sum`, type of `sum`/`avg` results per dialect (MySQL `sum` of int is decimal; PostgreSQL `sum(int)` is `bigint`, `sum(bigint)` is `numeric`; SQLite integer overflow error).
+  **Status: DONE** — table in `docs/functions/aggregates.md`, tests in `src/testing/Test_Aggregates.v`
+  (`Aggregates.v`). Done in this item:
+  - variance and standard deviation with each dialect's result type (PostgreSQL `numeric` scales of
+    `numeric_stddev_internal`, MySQL `DOUBLE`);
+  - the two-variable statistics (`covar_*`, `corr`, `regr_*`);
+  - `bit_xor`, and the MySQL unsigned results of `BIT_AND`/`BIT_OR` on the empty group;
+  - `any_value`;
+  - the JSON aggregates of MySQL and PostgreSQL;
+  - `count(distinct a, b)`.
+
+  The translator reads aggregates of two arguments. Excluded:
+  - `array_agg` (arrays, 2.8);
+  - `approx_count_distinct` (not specified exactly);
+  - Oracle `KEEP` (syntax, Phase 3);
+  - ordered-set aggregates (2.6).
 - **2.6 Ordered-set and hypothetical-set aggregates**: `percentile_cont`, `percentile_disc`, `mode`, `rank/dense_rank/percent_rank/cume_dist(args) WITHIN GROUP`, `MEDIAN` (Oracle, MariaDB window); new syntax `E_AggWithin` carrying the direct arguments and the `WITHIN GROUP (ORDER BY ..)`.
 - **2.7 Date and time functions**: per family (see 1.5): `extract`, `date_trunc`, `date_add/sub`, `adddate`, `datediff`, `timestampdiff`, `date_format`, `to_char`/`to_date`/`to_timestamp`, `str_to_date`, `strftime`, `julianday`, `now`/`current_*`, `age`, `make_date`, `interval` arithmetic, `last_day`, `add_months`, `months_between`.
 - **2.8 JSON and array functions**: see 1.6/1.7: `json_extract`, `json_set`, `json_array`, `json_object`, `json_contains`, `json_length`, `jsonb_*`, `array_*`, `unnest`, `ANY(array)`.

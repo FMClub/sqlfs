@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns.
+Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -48,7 +48,7 @@ Definition ob_my_supports (f : feature) : bool :=
 (** The default session: [utf8mb4_general_ci] (PAD SPACE, case insensitive), [sql_mode] without
     [ONLY_FULL_GROUP_BY] nor [PIPES_AS_CONCAT], [group_concat_max_len] = 1024
     ([src/share/system_variable/ob_system_variable_init.json]). *)
-Definition ob_my_default_session : my_session := mk_my_session true Coll_General_CI 4 false false 1024%N.
+Definition ob_my_default_session : my_session := mk_my_session true Coll_General_CI 4 false false 1024%N 0.
 
 Definition OceanBaseMySQL : vsem := mysql_vs ob_my_default_session "OceanBase (MySQL mode)" ob_my_supports.
 
@@ -157,6 +157,10 @@ Definition ora_skit : skit :=
           (fun v => match lenient v with Some (Num_Z z) => Some z | Some (Num_Q q) => Some (Qc_trunc q) | None => None end)
           (fun s => match s with EmptyString => Value_string None | _ => Value_string (Some s) end)
           (Value_string None).
+
+(** the regular expressions of Oracle: POSIX syntax with the Perl escapes, case-sensitive by default,
+    [.] does not match a line break unless the flag [n], groups [\n] in a replacement *)
+Definition ora_rx : rx_env := mk_rx_env ora_skit fl_ora false false false false "ORA-12733: regular expression too long or invalid".
 
 Definition ora_str_fun1 (f : string -> string) := ora_str1 (fun s => Value_string (Some (f s))).
 
@@ -321,6 +325,8 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
                                            | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   :: ("power", num_fun2 conv num_power)
+  :: ("regexp_count", rx_count ora_rx) :: ("regexp_instr", rx_instr ora_rx)
+  :: ("regexp_substr", rx_substr ora_rx) :: ("regexp_replace", rx_replace ora_rx)
   (* [DECODE (e, s1, r1, ..., [default])]: the first [ri] whose [si] equals [e], two NULLs being equal *)
   :: ("decode", fun l => match l with
                          | e :: rest =>
@@ -480,7 +486,9 @@ Definition canon_ora (v : value) : value :=
 
 Definition OceanBaseOracle : vsem :=
   mk_vsem "OceanBase (Oracle mode)"
-          (table_of_list (like_table ora_skit false (fun c => c) (fun c => c) None ++ ora_pred_table))
+          (table_of_list (like_table ora_skit false (fun c => c) (fun c => c) None
+                          ++ ("regexp_like", rx_like ora_rx false) :: ("not regexp_like", fun l => negb3 (rx_like ora_rx false l))
+                          :: ora_pred_table))
           (table_of_list ora_symbol_table)
           (table_of_list ora_aggregate_table)
           ora_isnull
@@ -492,7 +500,7 @@ Definition OceanBaseOracle : vsem :=
           false
           ora_supports
           false
-          (fun p l => ora_pred_error p l || bad_escape ora_skit p l)
+          (fun p l => ora_pred_error p l || bad_escape ora_skit p l || rx_bad ora_rx ("regexp_like" :: "not regexp_like" :: nil)%string p l)
           (* a [NUMBER] has no display scale: [1.50] is [1.5] *)
           (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end)
           (fun _ => false)
