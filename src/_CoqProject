@@ -99,3 +99,4 @@ testing/slt/SQLite/Slt_expr_slt_good_102.v
 testing/Test_Grouping.v
 testing/Test_Recursive.v
 testing/Test_Range.v
+testing/Test_Fetch.v
