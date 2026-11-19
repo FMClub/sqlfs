@@ -487,4 +487,5 @@ Definition PostgreSQL : vsem :=
                          | Value_bool _ => false
                          | Value_string (Some s) => match bool_of_string s with Some _ => false | None => true end
                          | _ => true end)
-          (fun _ _ l => l).
+          (fun _ _ l => l)
+          (fun l => l).

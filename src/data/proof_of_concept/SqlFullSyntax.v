@@ -39,7 +39,7 @@ Definition TNull_PostgreSQL : dialect TNull :=
              (fun _ _ => true) (fun _ => true) (fun _ => true)
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
              NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v) (fun _ => false)
-             (fun _ => 0%nat) (fun _ _ l => l).
+             (fun _ => 0%nat) (fun _ _ l => l) (fun l => l).
 
 Definition TNull_ops := TNull_PostgreSQL.
 
@@ -171,6 +171,13 @@ Definition join (jt : join_type) (f1 f2 : sfrom) (c : scond) : sfrom :=
   @Fr_Join TNull relname jt false f1 f2 c.
 Definition join_lateral (jt : join_type) (f1 f2 : sfrom) (c : scond) : sfrom := 
   @Fr_Join TNull relname jt true f1 f2 c.
+(** [STRAIGHT_JOIN] (MySQL) is an inner join whose operands the optimizer may not reorder: the same
+    result. [f1 CROSS APPLY f2] and [f1 OUTER APPLY f2] (Oracle, SQL Server) are lateral joins,
+    inner and left. The Oracle operator [(+)] marks the columns of the optional side of an outer join:
+    [WHERE a.x = b.x(+)] is [a LEFT JOIN b ON a.x = b.x] (TODO 3.2). *)
+Definition straight_join (f1 f2 : sfrom) (c : scond) : sfrom := join J_Inner f1 f2 c.
+Definition cross_apply (f1 f2 : sfrom) : sfrom := join_lateral J_Inner f1 f2 (@C_True TNull relname).
+Definition outer_apply (f1 f2 : sfrom) : sfrom := join_lateral J_Left f1 f2 (@C_True TNull relname).
 Definition g_fine := @G_Fine TNull relname.
 Definition g_by (l : list sexpr) := @G_By TNull relname l.
 Definition g_sets (l : list (list sexpr)) := @G_Sets TNull relname l.
