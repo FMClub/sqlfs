@@ -94,7 +94,7 @@ def tokenize(s):
         elif s[i:i + 2] in ('<=', '>=', '<>', '!=', '||', '&&', ':=', '<<', '>>'):
             toks.append(('op', s[i:i + 2]))
             i += 2
-        elif c in '+-*/%=<>(),.;@&|^~!':
+        elif c in '+-*/%=<>(),.;@&|^~![]:':
             toks.append(('op', c))
             i += 1
         else:
@@ -348,6 +348,20 @@ class P:
             return ('not', self.e_not())
         return self.e_pred()
 
+    def postfix(self, e):
+        # a[i] and a[i:j] (PostgreSQL)
+        while ENGINE == 'postgresql' and self.op('['):
+            self.i += 1
+            lo = self.expr()
+            if self.eat_op(':'):
+                hi = self.expr()
+                self.need_op(']')
+                e = ('call', 'slice', [e, lo, hi], False, False)
+            else:
+                self.need_op(']')
+                e = ('call', 'subscript', [e, lo], False, False)
+        return e
+
     def ilike_mark(self):
         self.i += 1
         return True
@@ -437,7 +451,12 @@ class P:
                         self.i += 1
                         self.need_op('(')
                         if not self.kw('select'):
-                            raise Skip('quantified list')
+                            if ENGINE != 'postgresql':
+                                raise Skip('quantified list')
+                            arr = self.expr()
+                            self.need_op(')')
+                            l = ('cmp_array', t[1], quant, l, arr)
+                            continue
                         q = self.query()
                         self.need_op(')')
                         l = ('quant', t[1], quant, [l] if l[0] != 'row' else l[1], q)
@@ -600,6 +619,15 @@ class P:
                 raise Skip('interval unit')
             self.i += 1
             return ('interval', n, unit.upper())
+        if ENGINE == 'postgresql' and t[0] in ('id', 'kw') and t[1].lower() == 'array' and self.peek(1) == ('op', '['):
+            self.i += 2
+            items = []
+            if not self.op(']'):
+                items.append(self.expr())
+                while self.eat_op(','):
+                    items.append(self.expr())
+            self.need_op(']')
+            return self.postfix(('call', 'array', items, False, False))
         if self.kw('binary'):
             raise Skip('construct')
         if t[0] in ('id', 'kw'):
@@ -898,7 +926,7 @@ AGGS = {'count', 'sum', 'avg', 'min', 'max', 'group_concat', 'bit_and', 'bit_or'
         'bit_xor', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'any_value', 'json_arrayagg', 'json_agg', 'jsonb_agg',
         'bool_and', 'bool_or', 'every', 'covar_pop', 'covar_samp', 'corr', 'regr_count', 'regr_slope',
         'regr_intercept', 'regr_r2', 'regr_sxx', 'regr_syy', 'regr_sxy', 'regr_avgx', 'regr_avgy',
-        'json_objectagg', 'json_object_agg', 'jsonb_object_agg', 'median'}
+        'json_objectagg', 'json_object_agg', 'jsonb_object_agg', 'median', 'array_agg', 'json_group_array'}
 # the aggregates of two arguments
 AGGS2 = {'covar_pop', 'covar_samp', 'corr', 'regr_count', 'regr_slope', 'regr_intercept', 'regr_r2', 'regr_sxx',
          'regr_syy', 'regr_sxy', 'regr_avgx', 'regr_avgy', 'json_objectagg', 'json_object_agg', 'jsonb_object_agg'}
@@ -919,7 +947,13 @@ FUNS = {'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power',
         'date_bin', 'isfinite', 'next_day', 'date_format', 'to_days', 'datediff', 'last_day', 'dayofweek',
         'dayofmonth', 'dayofyear', 'weekday', 'week', 'quarter', 'year', 'month', 'day', 'hour', 'minute',
         'second', 'microsecond', 'date', 'unix_timestamp', 'timestampdiff', 'curdate', 'now', 'sysdate',
-        'date_trunc', 'date_part', 'to_char', 'make_date'}
+        'date_trunc', 'date_part', 'to_char', 'make_date', 'json_set', 'json_insert', 'json_replace', 'json_remove',
+        'json_array_append', 'json_array_insert', 'json_merge_patch', 'json_merge_preserve', 'json_merge',
+        'json_depth', 'json_contains_path', 'json_search', 'json_overlaps', 'json_pretty', 'json_patch', 'json_quote',
+        'jsonb_set', 'jsonb_insert', 'jsonb_strip_nulls', 'json_strip_nulls', 'jsonb_pretty', 'array_length',
+        'cardinality', 'array_append', 'array_prepend', 'array_cat', 'array_position', 'array_positions',
+        'array_remove', 'array_replace', 'array_to_string', 'string_to_array', 'array_lower', 'array_upper',
+        'array_ndims', 'array_dims'}
 ALIAS = {'ucase': 'upper', 'lcase': 'lower', 'character_length': 'char_length'}
 
 
@@ -970,7 +1004,7 @@ class Tr:
             if op == '^' and ENGINE == 'postgresql':
                 name = 'power'
             return '(fn "%s" [%s; %s])' % (name, self.ex(e[2]), self.ex(e[3]))
-        if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant', 'regexp', 'similar'):
+        if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant', 'regexp', 'similar', 'cmp_array'):
             return '(e_cond %s)' % self.cond(e)
         if k == 'subq':
             cq, n = self.sub(e[1], 1)
@@ -1093,6 +1127,9 @@ class Tr:
             name = ('not ' if e[1] else '') + name
             args = [self.ex(e[2]), self.ex(e[3])] + ([self.ex(esc)] if esc is not None else [])
             return '(pred "%s" [%s])' % (name, '; '.join(args))
+        if k == 'cmp_array':
+            op = {'=': '=', '<>': '<>', '!=': '<>', '<': '<', '<=': '<=', '>': '>', '>=': '>='}[e[1]]
+            return '(pred "%s%s" [%s; %s])' % (op, e[2], self.ex(e[3]), self.ex(e[4]))
         if k == 'regexp':
             return '(pred "%s" [%s; %s])' % ('not regexp' if e[1] else 'regexp', self.ex(e[2]), self.ex(e[3]))
         if k == 'similar':

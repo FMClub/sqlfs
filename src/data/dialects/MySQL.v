@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -256,6 +256,80 @@ Definition my_rx : rx_env :=
             false
             (negb (Nat.eqb (ms_regex ss) 1))
             "Illegal argument to a regular expression".
+
+(** the JSON functions of TODO 2.8: a document, then paths (and values); NULL if one is NULL *)
+Definition my_json_update (create replace : bool) (l : list value) : value :=
+  match l with
+  | d :: rest =>
+    if existsb is_null l then Value_J None
+    else match my_json_doc d with
+         | Some (Some j) =>
+           let fix go (r : list value) (acc : json) : option json :=
+               match r with
+               | nil => Some acc
+               | p :: v :: r' => match text_of p with
+                                 | Some t => match parse_path t with
+                                             | Some st => go r' (set_path create replace st acc (my_json_of_value v))
+                                             | None => None end
+                                 | None => None end
+               | _ => None
+               end in
+           match go rest j with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
+         | Some None => Value_J None
+         | None => Value_Err "Invalid JSON text in argument 1"
+         end
+  | nil => Value_Err "Incorrect parameter count"
+  end.
+
+Definition my_json_paths (f : list step -> json -> option json) (l : list value) : value :=
+  match l with
+  | d :: paths =>
+    if existsb is_null l then Value_J None
+    else match my_json_doc d with
+         | Some (Some j) =>
+           let r := fold_left (fun acc p => match acc, text_of p with
+                                            | Some a, Some t => match parse_path t with Some st => f st a | None => None end
+                                            | _, _ => None end) paths (Some j) in
+           match r with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
+         | Some None => Value_J None
+         | None => Value_Err "Invalid JSON text in argument 1"
+         end
+  | nil => Value_Err "Incorrect parameter count"
+  end.
+
+Definition my_json_pathvals (f : list step -> json -> json -> option json) (l : list value) : value :=
+  match l with
+  | d :: rest =>
+    if existsb is_null l then Value_J None
+    else match my_json_doc d with
+         | Some (Some j) =>
+           let fix go (r : list value) (acc : json) : option json :=
+               match r with
+               | nil => Some acc
+               | p :: v :: r' => match text_of p with
+                                 | Some t => match parse_path t with
+                                             | Some st => match f st acc (my_json_of_value v) with Some a => go r' a | None => None end
+                                             | None => None end
+                                 | None => None end
+               | _ => None
+               end in
+           match go rest j with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
+         | Some None => Value_J None
+         | None => Value_Err "Invalid JSON text in argument 1"
+         end
+  | nil => Value_Err "Incorrect parameter count"
+  end.
+
+Definition my_json_docs (f : json -> json -> json) (l : list value) : value :=
+  if existsb is_null l then Value_J None
+  else match map my_json_doc l with
+       | Some (Some j) :: rest =>
+         match fold_left (fun acc d => match acc, d with Some a, Some (Some b) => Some (f a b) | _, _ => None end) rest (Some j) with
+         | Some r => VJ 0 r
+         | None => Value_Err "Invalid JSON text"
+         end
+       | _ => Value_Err "Invalid JSON text"
+       end.
 
 Definition my_concat_ws (l : list value) : value :=
   match l with
@@ -508,6 +582,63 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                | _ => Value_D None end)
   (* JSON *)
   :: ("json_extract", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
+  (* TODO 2.8: updates by path, removal, arrays, merges, depth, search, overlaps, pretty printing *)
+  :: ("json_set", my_json_update true true) :: ("json_insert", my_json_update true false)
+  :: ("json_replace", my_json_update false true)
+  :: ("json_remove", fun l => my_json_paths (fun p d => match p with nil => None | _ => Some (remove_path p d) end) l)
+  :: ("json_array_append", my_json_pathvals (fun p d v => Some (array_append p d v)))
+  :: ("json_array_insert", my_json_pathvals (fun p d v => array_insert p d v))
+  :: ("json_merge_patch", my_json_docs (fun a b => merge_patch (json_size a + json_size b) a b))
+  :: ("json_merge_preserve", my_json_docs (fun a b => merge_preserve (json_size a + json_size b) a b))
+  :: ("json_merge", my_json_docs (fun a b => merge_preserve (json_size a + json_size b) a b))
+  :: ("json_depth", fun l => match l with
+                             | d :: nil => match my_json_doc d with
+                                           | Some (Some j) => Value_Z (Some (Z.of_nat (json_depth j)))
+                                           | Some None => Value_Z None
+                                           | None => Value_Err "Invalid JSON text in argument 1" end
+                             | _ => Value_Z None end)
+  :: ("json_contains_path", fun l => match l with
+                                     | d :: mode :: paths =>
+                                       match my_json_doc d, text_of mode with
+                                       | Some (Some j), Some m =>
+                                         let found := map (fun p => match text_of p with
+                                                                    | Some t => match parse_path t with
+                                                                                | Some st => match follow st j with Some _ => Some true | None => Some false end
+                                                                                | None => None end
+                                                                    | None => None end) paths in
+                                         if existsb (fun x => match x with None => true | _ => false end) found
+                                         then Value_Err "Invalid JSON path expression"
+                                         else let bs := map (fun x => match x with Some b => b | None => false end) found in
+                                              match Temporal.upper_string m with
+                                              | "ONE"%string => Value_Z (Some (if existsb (fun b => b) bs then 1 else 0))
+                                              | "ALL"%string => Value_Z (Some (if forallb (fun b => b) bs then 1 else 0))
+                                              | _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
+                                       | Some None, _ => Value_Z None
+                                       | _, _ => Value_Z None end
+                                     | _ => Value_Z None end)
+  :: ("json_search", fun l => match l with
+                              | d :: mode :: str :: _ =>
+                                match my_json_doc d, text_of mode, text_of str with
+                                | Some (Some j), Some m, Some t =>
+                                  let ps := search_paths (json_size j) t "$" j in
+                                  match Temporal.upper_string m, ps with
+                                  | _, nil => Value_J None
+                                  | "ONE"%string, p :: _ => VJ 0 (JStr p)
+                                  | "ALL"%string, p :: nil => VJ 0 (JStr p)
+                                  | "ALL"%string, _ => VJ 0 (JArr (map JStr ps))
+                                  | _, _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
+                                | _, _, _ => Value_J None end
+                              | _ => Value_J None end)
+  :: ("json_overlaps", fun l => match l with
+                                | a :: b :: nil => match my_json_doc a, my_json_doc b with
+                                                   | Some (Some x), Some (Some y) => Value_Z (Some (if json_overlaps x y then 1 else 0))
+                                                   | _, _ => Value_Z None end
+                                | _ => Value_Z None end)
+  :: ("json_pretty", fun l => match l with
+                              | d :: nil => match my_json_doc d with
+                                            | Some (Some j) => Value_string (Some (pretty 2 (normalize j)))
+                                            | _ => Value_string None end
+                              | _ => Value_string None end)
   :: ("->", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
   :: ("->>", fun l => match l with d :: p :: nil => my_json_unquote (my_json_extract d p) | _ => Value_string None end)
   :: ("json_unquote", fun l => match l with v :: nil => my_json_unquote v | _ => Value_string None end)

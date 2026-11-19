@@ -63,6 +63,7 @@ data/dialects/Regex.v
 data/dialects/RegexFuns.v
 data/dialects/Aggregates.v
 data/dialects/TemporalFuns.v
+data/dialects/JsonFuns.v
 data/dialects/PostgreSQL.v
 data/dialects/MySQL.v
 data/dialects/SQLite.v
@@ -126,6 +127,7 @@ testing/Test_Regex.v
 testing/Test_Aggregates.v
 testing/Test_OrderedSet.v
 testing/Test_DateTime.v
+testing/Test_JsonFuns.v
 testing/Test_Integer.v
 testing/Test_Collation.v
 testing/Test_Truth.v

@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL Hash StringFuns.
+Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL Hash StringFuns JsonFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -311,6 +311,29 @@ Definition lite_skit : skit :=
           (fun v => match lenient v with Some (Num_Z z) => Some z | Some (Num_Q q) => Some (Qc_trunc q) | None => None end)
           (fun s => Value_string (Some s)) (Value_string None).
 
+(** [json_set (doc, path, value, ...)] and its kin: a text value is a JSON string *)
+Definition lite_json_update (create replace : bool) (l : list value) : value :=
+  match l with
+  | d :: rest =>
+    match lite_json_doc d with
+    | Some (Some j) =>
+      let fix go (r : list value) (acc : json) : option json :=
+          match r with
+          | nil => Some acc
+          | p :: v :: r' => match text_of p with
+                            | Some t => match parse_path t with
+                                        | Some st => go r' (set_path create replace st acc (lite_json_of_value v))
+                                        | None => None end
+                            | None => go r' acc end
+          | _ => None
+          end in
+      match go rest j with Some r => Value_string (Some (text_compact r)) | None => Value_Err "bad JSON path" end
+    | Some None => Value_string None
+    | None => Value_Err "malformed JSON"
+    end
+  | nil => Value_Err "wrong number of arguments"
+  end.
+
 Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
   let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
@@ -359,6 +382,28 @@ Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("->", fun l => match l with d :: p :: nil => match lite_json_at d p with Some (Some r) => Value_string (Some (text_compact r)) | Some None => Value_string None | None => Value_Err "malformed JSON" end | _ => Value_string None end)
   :: ("->>", fun l => match l with d :: p :: nil => match lite_json_at d p with Some (Some r) => lite_sql_of_json r | Some None => Value_Z None | None => Value_Err "malformed JSON" end | _ => Value_Z None end)
   :: ("json_array", fun l => Value_string (Some (text_compact (JArr (map lite_json_of_value l)))))
+  (* TODO 2.8: [json_set], [json_insert], [json_replace], [json_remove], [json_patch], [json_quote] *)
+  :: ("json_set", lite_json_update true true) :: ("json_insert", lite_json_update true false)
+  :: ("json_replace", lite_json_update false true)
+  :: ("json_remove", fun l => match l with
+                              | d :: paths => match lite_json_doc d with
+                                              | Some (Some j) =>
+                                                match fold_left (fun acc p => match acc, text_of p with
+                                                                              | Some a, Some t => match parse_path t with Some st => Some (remove_path st a) | None => None end
+                                                                              | Some a, None => Some a
+                                                                              | None, _ => None end) paths (Some j) with
+                                                | Some r => Value_string (Some (text_compact r))
+                                                | None => Value_Err "bad JSON path" end
+                                              | Some None => Value_string None
+                                              | None => Value_Err "malformed JSON" end
+                              | nil => Value_Err "wrong number of arguments" end)
+  :: ("json_patch", fun l => match l with
+                             | a :: b :: nil => match lite_json_doc a, lite_json_doc b with
+                                                | Some (Some x), Some (Some y) => Value_string (Some (text_compact (merge_patch (json_size x + json_size y) x y)))
+                                                | Some None, _ | _, Some None => Value_string None
+                                                | _, _ => Value_Err "malformed JSON" end
+                             | _ => Value_Err "wrong number of arguments" end)
+  :: ("json_quote", fun l => match l with v :: nil => Value_string (Some (text_compact (lite_json_of_value v))) | _ => Value_Err "wrong number of arguments" end)
   :: ("json_object", fun l => 
         let fix pairs (l : list value) : option (list (string * json)) :=
             match l with
@@ -479,6 +524,12 @@ Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
 Definition lite_aggregate_table_raw : list (string * (list value -> value)) :=
      ("count", agg_count_by is_null)
   :: ("count(*)", fun l => Value_Z (Some (Z.of_nat (List.length l))))
+  (* [json_group_array (v)], [json_group_object (k, v)] *)
+  :: ("json_group_array", fun l => Value_string (Some (text_compact (JArr (map lite_json_of_value l)))))
+  :: ("json_group_object", fun l =>
+        let fix pairs (r : list value) : list (string * json) :=
+            match r with k :: v :: r' => match text_of k with Some t => (t, lite_json_of_value v) :: pairs r' | None => pairs r' end | _ => nil end in
+        Value_string (Some (text_compact (JObj (pairs l)))))
   :: ("sum", agg_sum_by is_null lenient)
   :: ("total", fun l => match agg_sum_by is_null lenient l with
                         | Value_Z None => Value_Q (Some (Qc_of_Z 0))
