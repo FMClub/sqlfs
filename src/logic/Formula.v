@@ -1001,6 +1001,74 @@ Hypothesis contains_null_eq : forall t1 t2, t1 =t= t2 -> contains_null t1 = cont
 
 Hypothesis I : list (setA * group_by * list tuple) -> dom -> bagT.
 
+(** Comparison of the tuple [p] of the left hand side of [IN] with a tuple [x] of its
+    right hand side. As in SQL, the comparison is done component-wise: the result is
+    the conjunction of the comparisons of the components, each of them being UNKNOWN
+    as soon as one of its two values is NULL. Hence a component which definitely differs
+    makes the whole comparison FALSE, even if another component is NULL. *)
+Definition restrict_tuple (t : tuple) (a : attribute) := 
+  mk_tuple T (Fset.singleton (A T) a) (dot T t).
+
+Definition in_component (p x : tuple) (a : attribute) : Bool.b B :=
+  if (contains_null (restrict_tuple p a) || contains_null (restrict_tuple x a))%bool
+  then unknown
+  else match Oset.compare (OVal T) (dot T p a) (dot T x a) with
+       | Eq => Bool.true B 
+       | _ => Bool.false B 
+       end.
+
+Definition in_match (p x : tuple) : Bool.b B :=
+  if Fset.equal (A T) (labels T p) (labels T x)
+  then Bool.forallb B (in_component p x) (Fset.elements _ (labels T p))
+  else if (contains_null p || contains_null x)%bool then unknown else Bool.false B.
+
+Lemma restrict_tuple_eq :
+  forall t1 t2, t1 =t= t2 -> forall a, a inS labels T t1 -> 
+    restrict_tuple t1 a =t= restrict_tuple t2 a.
+Proof.
+intros t1 t2 Ht a Ha; unfold restrict_tuple.
+rewrite tuple_eq in Ht; rewrite tuple_eq; split.
+- rewrite (Fset.equal_eq_1 _ _ _ _ (labels_mk_tuple _ _ _)), 
+    (Fset.equal_eq_2 _ _ _ _ (labels_mk_tuple _ _ _)).
+  apply Fset.equal_refl.
+- intros b Hb.
+  rewrite (Fset.mem_eq_2 _ _ _ (labels_mk_tuple _ _ _)), Fset.singleton_spec,
+    Oset.eq_bool_true_iff in Hb; subst b.
+  rewrite 2 dot_mk_tuple, Fset.singleton_spec, Oset.eq_bool_refl.
+  apply (proj2 Ht _ Ha).
+Qed.
+
+Lemma forallb_ext :
+  forall (A : Type) (f g : A -> Bool.b B) l, 
+    (forall a, List.In a l -> f a = g a) -> Bool.forallb B f l = Bool.forallb B g l.
+Proof.
+intros A f g l; induction l as [ | a l]; intro H; [apply refl_equal | ].
+simpl; apply f_equal2.
+- apply H; left; apply refl_equal.
+- apply IHl; intros; apply H; right; assumption.
+Qed.
+
+Lemma in_match_eq :
+  forall p1 p2 x1 x2, p1 =t= p2 -> x1 =t= x2 -> in_match p1 x1 = in_match p2 x2.
+Proof.
+intros p1 p2 x1 x2 Hp Hx; unfold in_match.
+assert (Lp := tuple_eq_labels _ _ _ Hp); assert (Lx := tuple_eq_labels _ _ _ Hx).
+rewrite (Fset.equal_eq_1 _ _ _ _ Lp), (Fset.equal_eq_2 _ _ _ _ Lx).
+rewrite (contains_null_eq _ _ Hp), (contains_null_eq _ _ Hx).
+case_eq (Fset.equal (A T) (labels T p2) (labels T x2)); intro Hl; [ | apply refl_equal].
+rewrite (Fset.elements_spec1 _ _ _ Lp).
+apply forallb_ext; intros a Ha.
+assert (Ha2 : a inS labels T p2) by (apply Fset.in_elements_mem; assumption).
+assert (Ha1 : a inS labels T p1) by (rewrite (Fset.mem_eq_2 _ _ _ Lp); assumption).
+assert (Hx2 : a inS labels T x2) by (rewrite <- (Fset.mem_eq_2 _ _ _ Hl); assumption).
+assert (Hx1 : a inS labels T x1) by (rewrite (Fset.mem_eq_2 _ _ _ Lx); assumption).
+unfold in_component.
+rewrite (contains_null_eq _ _ (restrict_tuple_eq _ _ Hp _ Ha1)),
+  (contains_null_eq _ _ (restrict_tuple_eq _ _ Hx _ Hx1)),
+  (tuple_eq_dot_alt _ _ _ Hp _ Ha1), (tuple_eq_dot_alt _ _ _ Hx _ Hx1).
+apply refl_equal.
+Qed.
+
 Fixpoint eval_sql_formula env (f : sql_formula) : Bool.b B :=
   match f with
   | Sql_Conj a f1 f2 => (interp_conj B a) (eval_sql_formula env f1) (eval_sql_formula env f2)
@@ -1018,10 +1086,7 @@ Fixpoint eval_sql_formula env (f : sql_formula) : Bool.b B :=
       let p := (projection env (Select_List (_Select_List s))) in
       interp_quant 
         B Exists_F
-        (fun x => match Oeset.compare (OTuple T) p x with 
-                  | Eq => if contains_null p then unknown else Bool.true B 
-                  | _ => if (contains_null p || contains_null x) then unknown else Bool.false B 
-                  end)
+        (fun x => in_match p x)
         (Febag.elements _ (I env sq))                   
   | Sql_Exists sq =>
       if Febag.is_empty _ (I env sq) 
@@ -1081,10 +1146,7 @@ Lemma eval_sql_formula_unfold :
       let p := (projection env (Select_List (_Select_List s))) in
       interp_quant 
         B Exists_F
-        (fun x => match Oeset.compare (OTuple T) p x with 
-                  | Eq => if contains_null p then unknown else Bool.true B 
-                  | _ => if (contains_null p || contains_null x) then unknown else Bool.false B 
-                  end)
+        (fun x => in_match p x)
         (Febag.elements _ (I env sq))                   
   | Sql_Exists sq =>
       if Febag.is_empty _ (I env sq) 
@@ -1381,10 +1443,7 @@ intros n; induction n as [ | n].
       rewrite 2 Plus.plus_0_r.
       apply Plus.le_plus_r.
     * intros x1 x2 Hx1 Hx.
-      rewrite <- (Oeset.compare_eq_2 _ _ _ _ Hx), <- (Oeset.compare_eq_1 _ _ _ _ Aux).
-      rewrite <- (contains_null_eq _ _ Hx).
-      rewrite <- (contains_null_eq _ _ Aux).
-      apply refl_equal.
+      apply in_match_eq; [apply Aux | apply Hx].
   + rewrite 2 (eval_sql_formula_unfold _ (Sql_Exists _)).
     apply if_eq.
     * rewrite 2 Febag.is_empty_spec.
