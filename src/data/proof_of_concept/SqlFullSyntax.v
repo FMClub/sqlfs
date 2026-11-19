@@ -232,6 +232,8 @@ Definition w_lead (e : sexpr) n (d : sexpr) := @W_Lead TNull relname e n d.
 Definition w_first_value (e : sexpr) fr := @W_First_Value TNull relname e fr.
 Definition w_last_value (e : sexpr) fr := @W_Last_Value TNull relname e fr.
 Definition w_nth_value (e : sexpr) n fr := @W_Nth_Value TNull relname e n fr.
+(** [f IGNORE NULLS], [f FROM LAST] *)
+Definition w_opts (f : swfun TNull relname) (ignore_nulls from_last : bool) := @W_Opts TNull relname f ignore_nulls from_last.
 Definition values_ (la : list attribute) (rows : list (list sexpr)) : squery := 
   @SQ_Values TNull relname la rows.
 

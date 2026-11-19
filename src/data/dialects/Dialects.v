@@ -280,6 +280,7 @@ with swfun_to (f : swfun T1 relname) {struct f} : swfun T2 relname :=
   | W_First_Value e fr => @W_First_Value T2 relname (sexpr_to e) fr
   | W_Last_Value e fr => @W_Last_Value T2 relname (sexpr_to e) fr
   | W_Nth_Value e n fr => @W_Nth_Value T2 relname (sexpr_to e) n fr
+  | W_Opts f' ign last => @W_Opts T2 relname (swfun_to f') ign last
   end.
 
 End Transport.

@@ -589,7 +589,8 @@ Definition lite_aggregate_table : list (string * (list value -> value)) :=
 Definition lite_supports (f : feature) : bool :=
   match f with
   | F_Lateral | F_Intersect_All | F_Except_All | F_Any_All 
-  | F_Grouping_Sets | F_Rollup | F_Cube | F_Fetch_Ties | F_Fetch_Percent => false
+  | F_Grouping_Sets | F_Rollup | F_Cube | F_Fetch_Ties | F_Fetch_Percent
+  | F_Null_Treatment | F_From_Last => false
   | _ => true
   end.
 

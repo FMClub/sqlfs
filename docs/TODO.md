@@ -339,6 +339,22 @@ Targets: every function of the table is either modelled or has an explicit exclu
 - **3.1 Window functions, completion**: frame exclusion `EXCLUDE CURRENT ROW | GROUP | TIES | NO OTHERS`; `RANGE` with decimal, float, date and `INTERVAL` offsets (needs 1.2, 1.5); `IGNORE NULLS`/`RESPECT NULLS` and `FROM FIRST/LAST` for `nth_value`/`lag`/`lead`/`first_value`;
   named windows (`WINDOW w AS (..)`, inheritance `OVER (w ORDER BY ..)`); window functions inside `ORDER BY` and in expressions with `DISTINCT`; the default frame rule when `ORDER BY` is present or absent; `lag`/`lead` with negative or zero offsets and defaults of other types; `ntile` with NULL.
   *Done when* the PostgreSQL `window.sql` regression file and MySQL `window_functions*.test` translate and pass.
+  **Status: DONE in the core**. Tests are in `src/testing/Test_Window2.v`. Added:
+  - frame exclusion: `Frame_Excl` with `EXCLUDE CURRENT ROW | GROUP | TIES | NO OTHERS`;
+  - rational `RANGE` offsets (`Preceding_Q`/`Following_Q`): decimals and doubles, and intervals over
+    `DATE` keys (in days) or `TIMESTAMP` keys (in microseconds), as `rat_of_value` maps temporal keys to
+    those units;
+  - `IGNORE NULLS` and `FROM LAST` (`W_Opts`) for `first_value`, `last_value`, `nth_value`, `lag`, `lead`;
+  - the features `F_Frame_Exclusion` (PostgreSQL, SQLite), and `F_Null_Treatment` and `F_From_Last`
+    (Oracle mode only), checked by acceptance.
+
+  Other notes:
+  - Named windows (`WINDOW w AS (...)`, `OVER (w ORDER BY ...)`) are a derived form: the translator
+    expands them.
+  - The default frame was already modelled (`default_frame`).
+  - Offsets of `lag`/`lead` are natural numbers: a negative offset is an error in the engines.
+  - Not modelled: `RANGE` offsets in months, `INTERVAL` offsets over `TIME` with wrap-around.
+  - Replaying PostgreSQL's `window.sql` needs the PostgreSQL regression harness of Phase 5.2.
 - **3.2 Joins**: `USING` (merged column, order of columns in `SELECT *`, `NATURAL` over several columns with the engine's column ordering), `JOIN ... ON` with outer joins and `WHERE` pushdown independence (semantic equivalence lemmas), comma joins precedence vs `JOIN` (MySQL: `JOIN` binds tighter than comma),
   `STRAIGHT_JOIN`, semi/anti joins (`LEFT SEMI`, not SQL), `CROSS APPLY`/`OUTER APPLY` (Oracle mode: `LATERAL` forms), `(+)` Oracle outer-join operator, full join `ON` with non-equi conditions.
 - **3.3 Set operations**: precedence (`INTERSECT` before `UNION`/`EXCEPT`; MySQL 8.0.31+ same), parenthesised operands with their own `ORDER BY`/`LIMIT`, column naming and type unification (`UNION` of int and decimal), `MINUS` (Oracle), `EXCEPT ALL`/`INTERSECT ALL` multiplicity laws, `CORRESPONDING` (not in these engines: exclusion note), and NULL-equality in set operations per collation.
