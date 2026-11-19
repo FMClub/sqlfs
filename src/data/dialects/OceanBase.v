@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns Aggregates.
+Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns Aggregates TemporalFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -313,12 +313,30 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
   :: ("floor", num_fun1 conv num_floor)
   :: ("ceil", num_fun1 conv num_ceil)
   :: ("round", fun l => match l with
+                        | (Value_T (Some _) as v) :: rest =>
+                          match to_ts v, match rest with nil => Some "DD"%string | f :: nil => text_of f | _ => None end with
+                          | Some t, Some f => match ora_trunc_round true t f with
+                                              | Some r => VTs r 0 | None => Value_Err "ORA-01898: too many precision specifiers" end
+                          | _, _ => Value_T None end
                         | v :: nil => num_fun1 conv (fun a => num_round a 0) l
                         | v :: d :: nil => match conv v, z_arg d with
                                            | Some a, Some d => value_of_num (num_round a d) 
                                            | _, _ => Value_Z None end
                         | _ => Value_Z None end)
+  (* [NEXT_DAY], [TRUNC] and [ROUND] of a date ([DD] by default) *)
+  :: ("next_day", fun l => match l with
+                           | v :: n :: nil => match to_ts v, text_of n with
+                                              | Some t, Some n => match next_day t n with
+                                                                  | Some r => VTs r 0
+                                                                  | None => Value_Err "ORA-01846: not a valid day of the week" end
+                                              | _, _ => Value_T None end
+                           | _ => Value_T None end)
   :: ("trunc", fun l => match l with
+                        | (Value_T (Some _) as v) :: rest =>
+                          match to_ts v, match rest with nil => Some "DD"%string | f :: nil => text_of f | _ => None end with
+                          | Some t, Some f => match ora_trunc_round false t f with
+                                              | Some r => VTs r 0 | None => Value_Err "ORA-01898: too many precision specifiers" end
+                          | _, _ => Value_T None end
                         | v :: nil => num_fun1 conv (fun a => num_trunc a 0) l
                         | v :: d :: nil => match conv v, z_arg d with
                                            | Some a, Some d => value_of_num (num_trunc a d) 

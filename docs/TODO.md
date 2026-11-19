@@ -289,6 +289,17 @@ Targets: every function of the table is either modelled or has an explicit exclu
   - arrays of fractions;
   - MariaDB's window `MEDIAN` (windows: Phase 3).
 - **2.7 Date and time functions**: per family (see 1.5): `extract`, `date_trunc`, `date_add/sub`, `adddate`, `datediff`, `timestampdiff`, `date_format`, `to_char`/`to_date`/`to_timestamp`, `str_to_date`, `strftime`, `julianday`, `now`/`current_*`, `age`, `make_date`, `interval` arithmetic, `last_day`, `add_months`, `months_between`.
+  **Status: DONE**. The table is in `docs/functions/datetime.md`, the code in `TemporalFuns.v`, and the tests in `src/testing/Test_DateTime.v`. The functions added by this item:
+  - MySQL: `STR_TO_DATE`, `MAKEDATE`/`MAKETIME`, `SEC_TO_TIME`/`TIME_TO_SEC`, `FROM_DAYS`, `FROM_UNIXTIME`, `DAYNAME`/`MONTHNAME`, `PERIOD_*`, `TIMEDIFF`/`ADDTIME`/`SUBTIME`, `TIME_FORMAT`, `UTC_*`, and `EXTRACT` with composite units.
+  - PostgreSQL: `age`, `to_date`/`to_timestamp`, `make_time`/`make_timestamp`/`make_interval`, `justify_*`, `date_bin`, `isfinite`, and `clock_timestamp` and its kin.
+  - Oracle: `NEXT_DAY`, and `TRUNC`/`ROUND` of dates.
+
+  The translator reads `EXTRACT(unit FROM e)`.
+
+  Not modelled:
+  - Zero dates.
+  - `justify_interval` sign normalization.
+  - `timeofday()`, which is nondeterministic.
 - **2.8 JSON and array functions**: see 1.6/1.7: `json_extract`, `json_set`, `json_array`, `json_object`, `json_contains`, `json_length`, `jsonb_*`, `array_*`, `unnest`, `ANY(array)`.
 - **2.9 System and information functions**: `version`, `current_user`, `database`, `current_schema`, `connection_id`, `found_rows`, `last_insert_id`, `row_count`: environment-supplied constants.
 - **2.10 Arity and type checking**: acceptance checks argument counts and (after 1.9) argument types per dialect, with the engine's error; unknown functions are errors, not NULL (today `vs_symb` gives NULL for unknown names).

@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -585,6 +585,105 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("quarter", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(_, m, _) := civil_from_days (ts_days t) in Value_Z (Some ((m - 1) / 3 + 1)) | None => Value_Z None end | _ => Value_Z None end)
   :: ("week", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (my_week0 (ts_days t))) | None => Value_Z None end | _ => Value_Z None end)
   :: ("last_day", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => let '(y, m, _) := civil_from_days (ts_days t) in VDate (days_from_civil y m (days_in_month y m)) | None => Value_T None end | _ => Value_T None end)
+  (* TODO 2.7 *)
+  :: ("str_to_date", fun l => match l with
+                              | s :: f :: nil => match text_of s, text_of f with
+                                                 | Some s, Some f => my_str_to_date s f | _, _ => Value_T None end
+                              | _ => Value_T None end)
+  :: ("makedate", fun l => match l with
+                           | y :: j :: nil => match z_arg y, z_arg j with
+                                              | Some y, Some j => if Z.leb j 0 then Value_T None
+                                                                  else VDate (days_from_civil (if Z.ltb y 70 then y + 2000 else if Z.ltb y 100 then y + 1900 else y) 1 1 + j - 1)
+                                              | _, _ => Value_T None end
+                           | _ => Value_T None end)
+  :: ("maketime", fun l => match l with
+                           | h :: m :: sec :: nil => match z_arg h, z_arg m, lenient sec with
+                                                     | Some h, Some m, Some se =>
+                                                       if (Z.ltb (m) 0) || (Z.ltb (59) m) then Value_T None
+                                                       else let sq := Qc_of_num se in
+                                                            let us := Qc_round (Qcmult sq (Qc_of_Z 1000000)) in
+                                                            let sgn := if Z.ltb h 0 then -1 else 1 in
+                                                            VTime (clamp_time (sgn * ((Z.abs h * 60 + m) * 60 * 1000000 + us))) (match se with Num_Z _ => 0%nat | Num_Q q => Nat.min 6 (qc_scale q) end)
+                                                     | _, _, _ => Value_T None end
+                           | _ => Value_T None end)
+  :: ("sec_to_time", fun l => match l with
+                              | v :: nil => match lenient v with
+                                            | Some n => let q := Qc_of_num n in
+                                                        VTime (clamp_time (Qc_round (Qcmult q (Qc_of_Z 1000000)))) (match n with Num_Z _ => 0%nat | Num_Q q => Nat.min 6 (qc_scale q) end)
+                                            | None => Value_T None end
+                              | _ => Value_T None end)
+  :: ("time_to_sec", fun l => match l with
+                              | v :: nil => match temporal_parts v with
+                                            | Some (1%nat, us, _) => Value_Z (Some (Z.quot us 1000000))
+                                            | _ => match my_ts_of v with Some (t, _) => Value_Z (Some (ts_usec t / 1000000)) | None => Value_Z None end end
+                              | _ => Value_Z None end)
+  :: ("from_days", fun l => match l with v :: nil => match z_arg v with Some n => my_from_days n | None => Value_T None end | _ => Value_T None end)
+  :: ("from_unixtime", fun l => match l with
+                                | v :: rest => match lenient v with
+                                               | Some n => let q := Qc_of_num n in
+                                                           if Qc_lt_bool q (Qc_of_Z 0) then Value_T None
+                                                           else let t := ts_of (days_from_civil 1970 1 1) 0 + Qc_round (Qcmult q (Qc_of_Z 1000000)) in
+                                                                match rest with
+                                                                | nil => VTs t (match n with Num_Z _ => 0%nat | Num_Q q => Nat.min 6 (qc_scale q) end)
+                                                                | f :: nil => match text_of f with
+                                                                              | Some f => Value_string (Some (my_format (S (String.length f)) t f))
+                                                                              | None => Value_string None end
+                                                                | _ => Value_T None end
+                                               | None => Value_T None end
+                                | _ => Value_T None end)
+  :: ("dayname", fun l => match l with v :: nil => match my_ts_of v with
+                                                   | Some (t, _) => Value_string (Some (day_name (day_of_week (ts_days t)))) | None => Value_string None end
+                                     | _ => Value_string None end)
+  :: ("monthname", fun l => match l with v :: nil => match my_ts_of v with
+                                                     | Some (t, _) => let '(_, m, _) := civil_from_days (ts_days t) in Value_string (Some (month_name m))
+                                                     | None => Value_string None end
+                                       | _ => Value_string None end)
+  :: ("period_add", fun l => match l with
+                             | p :: n :: nil => match z_arg p, z_arg n with
+                                                | Some p, Some n => Value_Z (Some (if Z.eqb p 0 then 0 else months_period (period_months p + n)))
+                                                | _, _ => Value_Z None end
+                             | _ => Value_Z None end)
+  :: ("period_diff", fun l => match l with
+                              | a :: b :: nil => match z_arg a, z_arg b with
+                                                 | Some a, Some b => Value_Z (Some (period_months a - period_months b))
+                                                 | _, _ => Value_Z None end
+                              | _ => Value_Z None end)
+  :: ("timediff", fun l => match l with
+                           | a :: b :: nil => match temporal_parts a, temporal_parts b with
+                                              | Some (1%nat, x, f1), Some (1%nat, y, f2) => VTime (clamp_time (x - y)) (Nat.max f1 f2)
+                                              | _, _ => match my_ts_of a, my_ts_of b with
+                                                        | Some (x, _), Some (y, _) => VTime (clamp_time (x - y)) 6
+                                                        | _, _ => Value_T None end end
+                           | _ => Value_T None end)
+  :: ("addtime", fun l => match l with
+                          | a :: b :: nil => match temporal_parts b with
+                                             | Some (1%nat, d, _) => match temporal_parts a with
+                                                                    | Some (1%nat, x, f) => VTime (clamp_time (x + d)) f
+                                                                    | _ => match my_ts_of a with Some (x, _) => VTs (x + d) 6 | None => Value_T None end end
+                                             | _ => Value_T None end
+                          | _ => Value_T None end)
+  :: ("subtime", fun l => match l with
+                          | a :: b :: nil => match temporal_parts b with
+                                             | Some (1%nat, d, _) => match temporal_parts a with
+                                                                    | Some (1%nat, x, f) => VTime (clamp_time (x - d)) f
+                                                                    | _ => match my_ts_of a with Some (x, _) => VTs (x - d) 6 | None => Value_T None end end
+                                             | _ => Value_T None end
+                          | _ => Value_T None end)
+  :: ("time_format", fun l => match l with
+                              | v :: f :: nil => match temporal_parts v, text_of f with
+                                                 | Some (1%nat, us, _), Some f => Value_string (Some (time_format us f))
+                                                 | _, Some f => match my_ts_of v with Some (t, _) => Value_string (Some (time_format (ts_usec t) f)) | None => Value_string None end
+                                                 | _, _ => Value_string None end
+                              | _ => Value_string None end)
+  :: ("utc_date", fun _ => VDate (ts_days statement_time))
+  :: ("utc_time", fun _ => VTime (ts_usec statement_time) 0)
+  :: ("utc_timestamp", fun _ => VTs statement_time 0)
+  :: ("extract", fun l => match l with
+                          | u :: v :: nil => match text_of u, my_ts_of v with
+                                             | Some u, Some (t, _) => match my_extract (Temporal.upper_string u) t with
+                                                                      | Some z => Value_Z (Some z) | None => Value_Z None end
+                                             | _, _ => Value_Z None end
+                          | _ => Value_Z None end)
   :: ("to_days", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => Value_Z (Some (ts_days t + 719528)) | None => Value_Z None end | _ => Value_Z None end)
   :: ("date", fun l => match l with v :: nil => match my_ts_of v with Some (t, _) => VDate (ts_days t) | None => Value_T None end | _ => Value_T None end)
   :: ("date_format", fun l => match l with

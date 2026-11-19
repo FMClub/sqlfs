@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -165,9 +165,78 @@ Definition pg_aggregates : list (string * (list value -> value)) :=
   :: ("jsonb_object_agg", json_object_agg 0 is_null text_of pg_json_of_value)
   :: ordered_set_table false is_null num_of_value sql_order.
 
+(** ** Date and time functions (TODO 2.7) *)
+Definition pg_time_funs : list (string * (list value -> value)) :=
+     ("age", fun l => match l with
+                      | a :: b :: nil => match to_ts a, to_ts b with Some x, Some y => pg_age x y | _, _ => Value_V None end
+                      (* [age (t)]: from midnight of the current date *)
+                      | a :: nil => match to_ts a with Some y => pg_age (ts_of (ts_days statement_time) 0) y | None => Value_V None end
+                      | _ => Value_Err "function does not exist" end)
+  :: ("to_date", fun l => match l with
+                          | s :: f :: nil => match text_of s, text_of f with
+                                             | Some s, Some f => match pg_to_timestamp s f with
+                                                                 | Some t => VDate (ts_days t)
+                                                                 | None => Value_Err "invalid value for to_date" end
+                                             | _, _ => Value_T None end
+                          | _ => Value_Err "function does not exist" end)
+  :: ("to_timestamp", fun l => match l with
+                               | s :: f :: nil => match text_of s, text_of f with
+                                                  | Some s, Some f => match pg_to_timestamp s f with
+                                                                      | Some t => VTsTz t 6
+                                                                      | None => Value_Err "invalid value for to_timestamp" end
+                                                  | _, _ => Value_T None end
+                               (* [to_timestamp (epoch)] *)
+                               | v :: nil => match num_of_value v with
+                                             | Some n => VTsTz (ts_of (days_from_civil 1970 1 1) 0 + Qc_round (Qcmult (Qc_of_num n) (Qc_of_Z 1000000))) 6
+                                             | None => Value_T None end
+                               | _ => Value_Err "function does not exist" end)
+  :: ("make_time", fun l => match l with
+                            | h :: m :: sec :: nil => match int_parts h, int_parts m, num_of_value sec with
+                                                      | Some (h, _), Some (m, _), Some se =>
+                                                        let us := Qc_round (Qcmult (Qc_of_num se) (Qc_of_Z 1000000)) in
+                                                        if (Z.ltb h 0) || (Z.ltb 23 h) || (Z.ltb m 0) || (Z.ltb 59 m) || (Z.ltb us 0) || (Z.leb 60000000 us)
+                                                        then Value_Err "time field value out of range"
+                                                        else VTime ((h * 60 + m) * 60000000 + us) 6
+                                                      | _, _, _ => Value_T None end
+                            | _ => Value_Err "function does not exist" end)
+  :: ("make_timestamp", fun l => match l with
+                                 | y :: mo :: d :: h :: mi :: sec :: nil =>
+                                   match int_parts y, int_parts mo, int_parts d, int_parts h, int_parts mi, num_of_value sec with
+                                   | Some (y, _), Some (mo, _), Some (d, _), Some (h, _), Some (mi, _), Some se =>
+                                     let us := Qc_round (Qcmult (Qc_of_num se) (Qc_of_Z 1000000)) in
+                                     if negb (valid_date y mo d) then Value_Err "date field value out of range"
+                                     else if (Z.ltb h 0) || (Z.ltb 23 h) || (Z.ltb mi 0) || (Z.ltb 59 mi) || (Z.ltb us 0) || (Z.leb 60000000 us)
+                                     then Value_Err "time field value out of range"
+                                     else VTs (ts_of (days_from_civil y mo d) ((h * 60 + mi) * 60000000 + us)) 6
+                                   | _, _, _, _, _, _ => Value_T None end
+                                 | _ => Value_Err "function does not exist" end)
+  (* [make_interval (years, months, weeks, days, hours, mins, secs)], missing arguments being 0 *)
+  :: ("make_interval", fun l =>
+        let z i := match nth_error l i with Some v => match int_parts v with Some (z, _) => z | None => 0 end | None => 0 end in
+        let secs := match nth_error l 6 with Some v => match num_of_value v with Some n => Qc_round (Qcmult (Qc_of_num n) (Qc_of_Z 1000000)) | None => 0 end | None => 0 end in
+        VIntv (z 0%nat * 12 + z 1%nat) (z 2%nat * 7 + z 3%nat) ((z 4%nat * 60 + z 5%nat) * 60000000 + secs))
+  :: ("justify_days", fun l => match l with Value_V (Some (mo, d, us)) :: nil => let '(a, b, c) := justify_days mo d us in VIntv a b c | _ => Value_V None end)
+  :: ("justify_hours", fun l => match l with Value_V (Some (mo, d, us)) :: nil => let '(a, b, c) := justify_hours mo d us in VIntv a b c | _ => Value_V None end)
+  :: ("justify_interval", fun l => match l with
+                                   | Value_V (Some (mo, d, us)) :: nil =>
+                                     let '(mo, d, us) := justify_hours mo d us in let '(a, b, c) := justify_days mo d us in VIntv a b c
+                                   | _ => Value_V None end)
+  :: ("date_bin", fun l => match l with
+                           | Value_V (Some (mo, d, us)) :: src :: org :: nil =>
+                             if negb (Z.eqb mo 0) then Value_Err "timestamps cannot be binned into intervals containing months or years"
+                             else match to_ts src, to_ts org with
+                                  | Some x, Some o => match date_bin (d * 86400000000 + us) x o with
+                                                      | Some r => VTs r 6 | None => Value_Err "stride must be greater than zero" end
+                                  | _, _ => Value_T None end
+                           | _ => Value_T None end)
+  :: ("isfinite", fun l => match l with v :: nil => if is_null v then Value_bool None else Value_bool (Some true) | _ => Value_bool None end)
+  :: ("clock_timestamp", fun _ => VTsTz statement_time 6) :: ("statement_timestamp", fun _ => VTsTz statement_time 6)
+  :: ("transaction_timestamp", fun _ => VTsTz statement_time 6)
+  :: nil.
+
 (** [substr] is a synonym of [substring] *)
 Definition pg_symbol_table : list (string * (list value -> value)) :=
-  pg_regex_funs ++ pg_string_table ++
+  pg_time_funs ++ pg_regex_funs ++ pg_string_table ++
   match string_assoc _ "substring" symbol_table with
   | Some f => ("substr", f) :: symbol_table
   | None => symbol_table

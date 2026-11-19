@@ -624,6 +624,15 @@ class P:
                     src = self.expr()
                     self.need_op(')')
                     return ('call', 'trim_' + where, [src] + ([r] if r is not None else []), False, False)
+                # EXTRACT (unit FROM e)
+                if lname == 'extract' and self.peek()[0] in ('id', 'kw') and \
+                        (self.peek(1) == ('kw', 'from') or (self.peek(1)[0] == 'kw' and self.peek(1)[1].lower() == 'from')):
+                    unit = self.peek()[1]
+                    self.i += 2
+                    src = self.expr()
+                    self.need_op(')')
+                    unit = unit.upper() if ENGINE == 'mysql' else unit.lower()
+                    return ('call', 'extract', [('str', unit), src], False, False)
                 if lname == 'position':
                     a = self.e_bitor()
                     self.need_kw('in')
@@ -903,7 +912,14 @@ FUNS = {'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power',
         'elt', 'field', 'find_in_set', 'to_hex', 'unicode', 'octet_length', 'bit_length',
         'iif', 'nvl', 'nvl2', 'decode', 'isnull', 'num_nulls', 'num_nonnulls', 'likely', 'unlikely', 'likelihood',
         'interval_index', 'regexp_like', 'regexp_instr', 'regexp_substr', 'regexp_replace', 'regexp_count',
-        'substring_regex'}
+        'substring_regex', 'extract', 'str_to_date', 'makedate', 'maketime', 'sec_to_time', 'time_to_sec',
+        'from_days', 'from_unixtime', 'dayname', 'monthname', 'period_add', 'period_diff', 'timediff', 'addtime',
+        'subtime', 'time_format', 'utc_date', 'utc_time', 'utc_timestamp', 'age', 'to_date', 'to_timestamp',
+        'make_time', 'make_timestamp', 'make_interval', 'justify_days', 'justify_hours', 'justify_interval',
+        'date_bin', 'isfinite', 'next_day', 'date_format', 'to_days', 'datediff', 'last_day', 'dayofweek',
+        'dayofmonth', 'dayofyear', 'weekday', 'week', 'quarter', 'year', 'month', 'day', 'hour', 'minute',
+        'second', 'microsecond', 'date', 'unix_timestamp', 'timestampdiff', 'curdate', 'now', 'sysdate',
+        'date_trunc', 'date_part', 'to_char', 'make_date'}
 ALIAS = {'ucase': 'upper', 'lcase': 'lower', 'character_length': 'char_length'}
 
 
