@@ -39,7 +39,7 @@ Definition TNull_PostgreSQL : dialect TNull :=
              (fun _ _ => true) (fun _ => true) (fun _ => true)
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
              NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v) (fun _ => false)
-             (fun _ => 0%nat) (fun _ _ l => l) (fun l => l).
+             (fun _ => 0%nat) (fun _ _ l => l) (fun l => l) (fun _ => None).
 
 Definition TNull_ops := TNull_PostgreSQL.
 
@@ -178,6 +178,9 @@ Definition join_lateral (jt : join_type) (f1 f2 : sfrom) (c : scond) : sfrom :=
 Definition straight_join (f1 f2 : sfrom) (c : scond) : sfrom := join J_Inner f1 f2 c.
 Definition cross_apply (f1 f2 : sfrom) : sfrom := join_lateral J_Inner f1 f2 (@C_True TNull relname).
 Definition outer_apply (f1 f2 : sfrom) : sfrom := join_lateral J_Left f1 f2 (@C_True TNull relname).
+(** a table function: [name (args) [WITH ORDINALITY] AS t(a1, ..., an)] *)
+Definition from_fun (name : string) (args : list sexpr) (ord : bool) (atts : list attribute) : sfrom :=
+  @Fr_Fun TNull relname name args ord atts.
 Definition g_fine := @G_Fine TNull relname.
 Definition g_by (l : list sexpr) := @G_By TNull relname l.
 Definition g_sets (l : list (list sexpr)) := @G_Sets TNull relname l.

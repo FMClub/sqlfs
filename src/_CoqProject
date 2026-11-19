@@ -116,10 +116,14 @@ testing/slt/SQLite/Slt_expr_slt_good_101.v
 testing/slt/SQLite/Slt_expr_slt_good_102.v
 testing/Test_Grouping.v
 testing/Test_Recursive.v
+testing/Test_Recursive2.v
 testing/Test_Range.v
 testing/Test_Window2.v
 testing/Test_Joins.v
 testing/Test_SetOps.v
+testing/Test_TableFuns.v
+testing/Test_Rows.v
+testing/Test_Subqueries.v
 testing/Test_Fetch.v
 testing/Test_MariaDB.v
 testing/Test_Session.v

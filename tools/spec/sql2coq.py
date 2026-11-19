@@ -245,7 +245,11 @@ class P:
                 break
         frm = []
         if self.eat_kw('from'):
-            frm = self.from_clause()
+            if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'dual':
+                # FROM DUAL (MySQL, Oracle): no table
+                self.i += 1
+            else:
+                frm = self.from_clause()
         where = self.expr() if self.eat_kw('where') else None
         group = None
         if self.kw('group'):
@@ -341,6 +345,63 @@ class P:
                 self.need_op(')')
             return ('derived', q, alias, cols)
         name = self.ident()
+        if self.op('(') and name.lower() == 'json_table' and ENGINE == 'mysql':
+            # JSON_TABLE (doc, rowpath COLUMNS (c type PATH p, ...)) [AS] alias
+            self.i += 1
+            doc = self.expr()
+            self.need_op(',')
+            rowpath = self.e_primary()
+            if not (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'columns'):
+                raise Skip('json_table')
+            self.i += 1
+            self.need_op('(')
+            cols, paths = [], []
+            while True:
+                cname = self.ident()
+                depth = 0
+                # the type, up to PATH
+                while not (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('path', 'for')):
+                    if self.peek()[0] == 'eof':
+                        raise Skip('json_table column')
+                    self.i += 1
+                if self.peek()[1].lower() == 'for':
+                    raise Skip('json_table ordinality')
+                self.i += 1
+                paths.append(self.e_primary())
+                cols.append(cname)
+                if self.kw('default', 'null', 'error'):
+                    raise Skip('json_table on empty')
+                if not self.eat_op(','):
+                    break
+            self.need_op(')')
+            self.need_op(')')
+            self.eat_kw('as')
+            alias = self.ident()
+            return ('tfun', 'json_table', [doc, rowpath] + paths, False, alias, cols)
+        if self.op('(') and ENGINE in ('postgresql', 'sqlite'):
+            # a table function: name (args) [WITH ORDINALITY] [AS] alias [(columns)]
+            self.i += 1
+            args = []
+            if not self.op(')'):
+                args.append(self.expr())
+                while self.eat_op(','):
+                    args.append(self.expr())
+            self.need_op(')')
+            ord_ = False
+            if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'with' and self.peek(1)[1].lower() == 'ordinality':
+                self.i += 2
+                ord_ = True
+            self.eat_kw('as')
+            alias = name
+            if self.peek()[0] == 'id' and not self.kw('join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'on', 'where', 'group', 'order', 'limit', 'having'):
+                alias = self.ident()
+            cols = None
+            if self.eat_op('('):
+                cols = [self.ident()]
+                while self.eat_op(','):
+                    cols.append(self.ident())
+                self.need_op(')')
+            return ('tfun', name.lower(), args, ord_, alias, cols)
         if self.op('.'):
             raise Skip('qualified table')
         alias = name
@@ -1145,7 +1206,8 @@ class Tr:
             op = {'=': '=', '<>': '<>', '!=': '<>', '<': '<', '<=': '<=', '>': '>', '>=': '>=', '<=>': '<=>',
                   '~': '~', '~*': '~*', '!~': '!~', '!~*': '!~*'}[e[1]]
             if e[2][0] == 'row' or e[3][0] == 'row':
-                if e[2][0] != 'row' or e[3][0] != 'row' or len(e[2][1]) != len(e[3][1]) or op not in ('=', '<>'):
+                if e[2][0] != 'row' or e[3][0] != 'row' or len(e[2][1]) != len(e[3][1]) or \
+                        op not in ('=', '<>', '<', '<=', '>', '>='):
                     raise Skip('row comparison')
                 return '(pred "row%s" [%s])' % (op, '; '.join(self.ex(x) for x in e[2][1] + e[3][1]))
             return '(pred "%s" [%s; %s])' % (op, self.ex(e[2]), self.ex(e[3]))
@@ -1289,6 +1351,24 @@ class QTr:
             ctx.scope.append((alias, t))
             ren = '; '.join('((Attr_Z "c%d"), %s)' % (i, attr('Z', alias + '.' + nm)) for i, nm in enumerate(names))
             return '(from_as %s [%s])' % (cq, ren)
+        if k == 'tfun':
+            name, args, ord_, alias, cols = f[1], f[2], f[3], f[4], f[5]
+            # the default columns of the functions
+            defaults = {'json_each': ['key', 'value', 'type', 'atom', 'id', 'parent', 'fullkey', 'path'],
+                        'jsonb_each': ['key', 'value'], 'json_each_text': ['key', 'value'],
+                        'jsonb_each_text': ['key', 'value']}
+            if cols is None:
+                cols = defaults.get(name, [alias])
+                if ord_:
+                    cols = cols + ['ordinality']
+            if any(a.lower() == alias.lower() for a, _ in ctx.scope):
+                raise Skip('duplicate alias')
+            tr = Tr(ctx, self)
+            cargs = '; '.join(tr.ex(a) for a in args)
+            t = Table(alias, [(c, 'Z') for c in cols])
+            ctx.scope.append((alias, t))
+            atts = '; '.join(attr('Z', alias + '.' + c) for c in cols)
+            return '(from_fun "%s" [%s] %s [%s])' % (name, cargs, 'true' if ord_ else 'false', atts)
         if k == 'join':
             jt, l, r, c = f[1], f[2], f[3], f[4]
             using = f[5] if len(f) > 5 else None
@@ -1342,7 +1422,8 @@ class QTr:
             cond = tr.cond(c) if c is not None else 'c_true'
             if ctx.star is not None:
                 ctx.star = ctx.star + [x for x in rstar]
-            return '(join %s %s %s %s)' % (ty, lt, rt, cond)
+            # a table function on the right is lateral: its arguments may read the left rows
+            return '(%s %s %s %s %s)' % ('join_lateral' if r[0] == 'tfun' else 'join', ty, lt, rt, cond)
         raise Skip('from')
 
     def query(self, q, parent=None):
@@ -1425,6 +1506,32 @@ class QTr:
             if e[0] == 'num' and '.' not in e[1] and 1 <= int(e[1]) <= n:
                 return exprs[int(e[1]) - 1][0]
             return e
+
+        def subst_deep(e, alias_first):
+            """an alias inside an expression of ORDER BY or HAVING: allowed by MySQL and SQLite (an alias which
+            is not a column of the tables, or any alias when [alias_first]); PostgreSQL only takes a bare alias
+            in ORDER BY, and none in HAVING"""
+            if isinstance(e, list):
+                return [subst_deep(x, alias_first) for x in e]
+            if not isinstance(e, tuple):
+                return e
+            if e[0] == 'col' and e[1] is None and e[2].lower() in names:
+                if alias_first:
+                    return exprs[names[e[2].lower()]][0]
+                try:
+                    ctx.resolve(None, e[2])
+                    return e
+                except Skip:
+                    if ENGINE in ('mysql', 'sqlite'):
+                        return exprs[names[e[2].lower()]][0]
+                    raise
+            if e[0] in ('subq', 'exists', 'insub', 'quant'):
+                return e
+            return tuple([e[0]] + [subst_deep(x, alias_first) for x in e[1:]])
+        if having is not None:
+            having = subst_deep(having, ENGINE in ('mysql',))
+        if order:
+            order = [(subst_deep(e, False) if e[0] != 'col' else e, d) for e, d in order]
         if limit is not None and not order:
             raise Skip('limit without order by (the rows are implementation defined)')
         if any(has_call(e, 'group_concat') for e, _ in exprs):

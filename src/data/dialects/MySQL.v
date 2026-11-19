@@ -931,11 +931,54 @@ Definition my_unify_column (l : list value) : list value :=
                   | _ => v end) l
   else l.
 
+(** [JSON_TABLE (doc, rowpath COLUMNS (c1 ... PATH p1, ...))] as [json_table (doc, rowpath, p1, ...)]: the
+    rows are the values at [rowpath], a path whose last step may be [[*]] (every element of an array);
+    a column is the value at its path from the row (a scalar, its SQL value; NULL when missing). The
+    declared types of the columns and the [ON EMPTY] / [ON ERROR] clauses are not modelled (TODO 3.4). *)
+Definition my_json_table (l : list value) : list (list value) :=
+  match l with
+  | d :: rp :: cols =>
+    match my_json_doc d, text_of rp with
+    | Some (Some j), Some rpath =>
+      let n := String.length rpath in
+      let (base, star) := if Nat.leb 3 n && String.eqb (substring (n - 3) 3 rpath) "[*]"
+                          then (substring 0 (n - 3) rpath, true) else (rpath, false) in
+      match parse_path base with
+      | Some st =>
+        let rows := match follow st j with
+                    | Some (JArr xs) => if star then xs else JArr xs :: nil
+                    | Some x => if star then nil else x :: nil
+                    | None => nil end in
+        let colv (r : json) (c : value) :=
+            match text_of c with
+            | Some cp => match parse_path cp with
+                         | Some cst => match follow cst r with
+                                       | Some JNull | None => Value_Z None
+                                       | Some (JStr t) => Value_string (Some t)
+                                       | Some x => json_scalar (VJ 0 x)
+                                       end
+                         | None => Value_Err "Invalid JSON path expression" end
+            | None => Value_Z None end in
+        map (fun r => map (colv r) cols) rows
+      | None => (Value_Err "Invalid JSON path expression" :: nil) :: nil
+      end
+    | Some None, _ => nil
+    | _, _ => (Value_Err "Invalid JSON text in argument 1" :: nil) :: nil
+    end
+  | _ => nil
+  end%string.
+
+Definition my_table_funs (name : string) : option (list value -> list (list value)) :=
+  match name with
+  | "json_table" => Some my_json_table
+  | _ => None
+  end%string.
+
 Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
   (* no [EXCLUDE] in frames; [RESPECT NULLS] and [FROM FIRST] only *)
-  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last => false
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false
   (* [ONLY_FULL_GROUP_BY] is in the default [sql_mode]; functional dependencies are not modelled *)
   | F_Fetch_Ties | F_Fetch_Percent => false
   (* only [WITH ROLLUP] *)
@@ -983,7 +1026,8 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
                     | _ => v end)
           (fun _ => false)
           (fun _ _ l => l)
-          my_unify_column.
+          my_unify_column
+          my_table_funs.
 
 End Session.
 

@@ -22,6 +22,9 @@ documented somewhere in this directory.
 |---|---|---|
 | `=` `<>` `!=` `<` `<=` `>` `>=` | comparisons in the order of each dialect: types, collations, temporal, JSON, arrays | TODO 1.3, 1.5, 1.6, 2.8 |
 | `row=` `row<>` | row comparison `(a, b) = (c, d)` | SQL standard 8.2 |
+| `row<` `row<=` `row>` `row>=` | row ordering: the first pair which is not equal decides; a NULL before the decision is UNKNOWN | SQL standard 8.2; TODO 3.7 |
+| `row is null`, `row is not null` | `(a, b) IS [NOT] NULL`: all NULL, none NULL | SQL standard 8.8 |
+| `overlaps` | PostgreSQL `(s1, e1) OVERLAPS (s2, e2)` (an end may be an interval) | manual 9.9, `overlaps_timestamp`; TODO 3.7 |
 | `is null`, `is not null`, `is true`, `is not true`, `is false`, `is not false`, `is unknown`, `is not unknown` | the `IS` predicates | SQL standard 8.8, 8.12 |
 | `is`, `is not` | SQLite's NULL-safe equality | SQLite `lang_expr.html` |
 | `is distinct from`, `is not distinct from` | NULL-safe comparison (PostgreSQL, SQLite) | conditional.md |

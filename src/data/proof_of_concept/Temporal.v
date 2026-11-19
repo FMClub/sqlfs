@@ -171,6 +171,11 @@ Definition parse_time (s : string) : option Z :=
       end
     | _, _, _ => None
     end
+  (* [HH:MM]: the seconds are 0 *)
+  | [h; mi] => match digits_of h, digits_of mi with
+               | Some h, Some mi => if mi <? 60 then Some ((h * 60 + mi) * 60 * 1000000) else None
+               | _, _ => None
+               end
   | _ => None
   end.
 

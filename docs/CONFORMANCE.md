@@ -42,13 +42,13 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 747 queries are translated and replayed. Dates, times
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 752 queries are translated and replayed. Dates, times
 and `datetime(6)` columns are translated since TODO 1.5. String functions, bit operators, `LIKE ... ESCAPE`
 and the standard syntaxes `TRIM(... FROM ...)`, `POSITION`, `SUBSTRING ... FROM` are translated since TODO
 2.1–2.3.
 
-Run 14 is the latest, made after TODO 3.2, which added `USING`, `NATURAL` and comma precedence in the translator.
-In it, **744** queries gave the recorded result: every query except the two tie orders and the time-limit
+Run 15 is the latest, made after TODO 3.4, when the translator started reading `FROM DUAL` and table functions.
+In it, **749** queries gave the recorded result: every query except the two tie orders and the time-limit
 case below. The remaining cases are:
 
 - `expr_floor:56` and `expr_floor:57` (`ORDER BY floor(i4)`) list the rows with equal keys in another order:

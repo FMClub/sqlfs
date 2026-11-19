@@ -193,7 +193,9 @@ Inductive feature : Type :=
   (** [IGNORE NULLS] in [FIRST_VALUE], [LAST_VALUE], [NTH_VALUE], [LAG], [LEAD] *)
   | F_Null_Treatment
   (** [NTH_VALUE (...) FROM LAST] *)
-  | F_From_Last.
+  | F_From_Last
+  (** an aggregate or a [GROUP BY] in the recursive term of a recursive [WITH]: no engine has it *)
+  | F_Rec_Aggregate.
 
 Record dialect : Type :=
   mk_dialect
@@ -266,7 +268,10 @@ Record dialect : Type :=
       (** the values of a column of the result of a set operation, converted to the type which the dialect
           gives to that column (TODO 3.3): MySQL gives a [DECIMAL] column the largest scale of its values
           ([SELECT 1 UNION SELECT 2.5] is [1.0], [2.5]); the identity for PostgreSQL and SQLite *)
-      unify_column : list value -> list value
+      unify_column : list value -> list value;
+      (** the table functions: the rows of a call, [None] for a function which the dialect does not have
+          (TODO 3.4) *)
+      table_fun : string -> option (list value -> list (list value))
     }.
 
 Hypothesis O : dialect.
@@ -355,6 +360,11 @@ with sfrom : Type :=
   (** [f1 JOIN f2 ON c]; when the boolean is [true], the join is LATERAL: [f2] may
       refer to the attributes of [f1]. *)
   | Fr_Join : join_type -> bool -> sfrom -> sfrom -> scond -> sfrom
+  (** a table function ([generate_series (1, 3)], [unnest (a)], [json_each (j)], [JSON_TABLE (...)]):
+      its name, its arguments, [WITH ORDINALITY] (the last attribute numbers the rows from 1), and the
+      attributes of its rows (TODO 3.4). Its arguments may refer to the rows of the operands on its left
+      in a lateral join. *)
+  | Fr_Fun : string -> list sexpr -> bool -> list attribute -> sfrom
 
 with sgroup : Type :=
   (** no GROUP BY. If the SELECT or the HAVING clause contains an aggregate of
@@ -514,6 +524,18 @@ with has_agg_c (c : scond) {struct c} : bool :=
   | _ => false
   end.
 
+(** the recursive term of a recursive [WITH] groups its rows: an aggregate or a [GROUP BY] in its blocks,
+    which no engine allows ([aggregate functions are not allowed in a recursive query's recursive term],
+    MySQL [ER_CTE_RECURSIVE_FORBIDS_AGGREGATION], SQLite [recursive aggregate queries not supported]) *)
+Fixpoint rec_term_groups (q : squery) : bool :=
+  match q with
+  | SQ_Select (Select _ s _ _ g h) =>
+    let items := match s with S_Star => nil | S_List l => map (fun x => match x with S_As e _ => e end) l end in
+    (match g with G_Fine => false | _ => true end) || existsb has_agg_syn items || has_agg_c h
+  | SQ_Set _ _ q1 q2 => rec_term_groups q1 || rec_term_groups q2
+  | _ => false
+  end.
+
 Definition block_has_bare_column (s : sselect) (g : sgroup) (h : scond) : bool :=
   let items := match s with S_Star => nil | S_List l => map (fun x => match x with S_As e _ => e end) l end in
   let aggregated := (match g with G_Fine => false | _ => true end) || existsb has_agg_syn items || has_agg_c h in
@@ -531,6 +553,7 @@ Definition block_has_bare_column (s : sselect) (g : sgroup) (h : scond) : bool :
 Inductive use : Type :=
   | U_Feature : feature -> use
   | U_Symbol : symb -> nat -> use
+  | U_Table_Fun : string -> use
   | U_Pred : predicate -> use
   | U_Agg : aggregate -> use.
 
@@ -622,7 +645,9 @@ with squery_uses (q : squery) {struct q} : list use :=
                 end) lw
   | SQ_With _ q1 q2 => (U_Feature F_With) :: squery_uses q1 ++ squery_uses q2
   | SQ_WithRec _ _ q1 q2 q3 =>
-    (U_Feature F_With) :: (U_Feature F_Recursive) :: squery_uses q1 ++ squery_uses q2 ++ squery_uses q3
+    (U_Feature F_With) :: (U_Feature F_Recursive) ::
+    (if rec_term_groups q2 then (U_Feature F_Rec_Aggregate) :: nil else nil) ++
+    squery_uses q1 ++ squery_uses q2 ++ squery_uses q3
   end
 
 with sspec_uses (sp : sspec) {struct sp} : list use :=
@@ -654,6 +679,7 @@ with sfrom_uses (f : sfrom) {struct f} : list use :=
     (match jt with J_Right => (U_Feature F_Right_Join) :: nil | J_Full => (U_Feature F_Full_Join) :: nil | _ => nil end) ++
     (if lateral then (U_Feature F_Lateral) :: nil else nil) ++
     sfrom_uses f1 ++ sfrom_uses f2 ++ scond_uses c
+  | Fr_Fun name args _ _ => U_Table_Fun name :: flat_map sexpr_uses args
   end.
 
 Definition use_ok (u : use) : bool :=
@@ -662,6 +688,7 @@ Definition use_ok (u : use) : bool :=
   | U_Symbol f n => known_symbol O f n
   | U_Pred p => known_predicate O p
   | U_Agg a => known_aggregate O a
+  | U_Table_Fun name => match table_fun O name with Some _ => true | None => false end
   end.
 
 (** The constructs which a query uses. *)
@@ -713,6 +740,7 @@ with sfrom_sort (ce : cte_env) (f : sfrom) {struct f} : setA :=
   | Fr_Query q Ren_Star => squery_sort ce q
   | Fr_Query _ (Ren_List l) => Fset.mk_set (A T) (map (@snd _ _) l)
   | Fr_Join _ _ f1 f2 _ => Fset.union (A T) (sfrom_sort ce f1) (sfrom_sort ce f2)
+  | Fr_Fun _ _ _ atts => Fset.mk_set (A T) atts
   end.
 
 (** * Environments
@@ -875,6 +903,7 @@ with sfrom_cols (ce : cte_env) (f : sfrom) {struct f} : list attribute :=
   match f with
   | Fr_Query q _ => squery_cols ce q
   | Fr_Join _ _ f1 f2 c => sfrom_cols ce f1 ++ sfrom_cols ce f2 ++ scond_cols ce c
+  | Fr_Fun _ args _ _ => flat_map (sexpr_cols ce) args
   end.
 
 (** An aggregate belongs to the innermost block which binds one of the columns
@@ -1876,6 +1905,26 @@ with eval_sfrom (ce : cte_env) (env : senv) (f : sfrom) {struct f} : list tuple 
                        (fun t => (errs && row_error t) || bad t || is_true3 (eval_scond ce (slice_t t :: env) c))
                        (fun t => if bad t then err_row t else t) in
     if errs then keep_errors r (l1 ++ l2) else r
+  | Fr_Fun name args ord atts =>
+    let vs := map (eval_sexpr ce env) args in
+    let row (l : list value) : tuple :=
+        mk_tuple T (Fset.mk_set (A T) atts)
+                 (fun a => match find (fun p => Oset.eq_bool (OAtt T) (fst p) a) (combine atts l) with
+                           | Some (_, v) => v
+                           | None => null_of a
+                           end) in
+    match first_error vs with
+    (* an argument which failed: one failed row *)
+    | Some e => err_row (row (map (fun _ => e) atts)) :: nil
+    | None =>
+      match table_fun O name with
+      | Some f => map (fun (it : nat * list value) =>
+                         let (i, l) := it in
+                         row (if ord then l ++ value_of_Z O (Z.of_nat (S i)) :: nil else l))
+                      (combine (seq 0 (List.length (f vs))) (f vs))
+      | None => err_row (row (map (fun _ => error O "function does not exist") atts)) :: nil
+      end
+    end
   end.
 
 (** * The semantics of a query
