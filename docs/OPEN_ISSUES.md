@@ -127,12 +127,14 @@ In the expected order of difficulty; priorities are to be decided:
 
 ## I8. Build and repository maintenance
 
-- The top-level `Makefile` runs `cd src; make`, but `src/Makefile` is ignored
-  by `.gitignore`, so a fresh clone cannot run `make` directly; the committed
-  `src/CoqMakeFile*` are generated files and contain machine-specific paths.
-- `coq-sqlformalsemantics.opam` requires Coq 8.11.2, the README says 8.15.0
-  (this work was checked with 8.15.2).
-- `src/data/proof_of_concept/FreshAttr.v` contains an `Admitted` and is not in
-  `_CoqProject`.
-- There is no CI; a workflow which compiles every file, tests included, is
-  suggested.
+**Status: resolved, except for `FreshAttr.v`.**
+
+- Resolved: `make` at the top level now generates `src/Makefile` from
+  `src/_CoqProject`; the generated `src/CoqMakeFile*` are no longer tracked.
+- Resolved: the opam file requires Coq 8.15, as the README says.
+- Resolved: a GitHub Actions workflow builds the library and checks the
+  examples on every push to `main` and on every pull request.
+- Open: `src/data/proof_of_concept/FreshAttr.v` contains an `Admitted`
+  (`fresh_attr_is_fresh`) and is not in `_CoqProject`. Proving it needs the
+  injectivity of the decimal printing of natural numbers and a pigeonhole
+  argument; nothing in the build depends on it.

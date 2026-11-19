@@ -4,7 +4,9 @@ A Coq mechanized executable formal semantics for realistic SQL queries.
 
 
 ## Compilation
-This work compiles with Coq 8.15.0:
+This work compiles with Coq 8.15 (checked with 8.15.2). `make` generates
+`src/Makefile` from `src/_CoqProject` with `coq_makefile`, then builds the
+library and checks the examples of `src/testing`:
 ```
 make
 make install
@@ -27,13 +29,6 @@ The values, predicates, functions and aggregates are in
 - [docs/OPEN_ISSUES.md](docs/OPEN_ISSUES.md): open design questions.
 - `src/testing/Test_SqlFull.v`, `src/testing/Test_Audit.v`: examples checked
   by computation during the build.
-
-To build from a fresh clone:
-```
-cd src
-coq_makefile -f _CoqProject -o Makefile
-make
-```
 
 
 ## License

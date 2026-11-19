@@ -1,0 +1,26 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: coq-community/docker-coq-action@v1
+        with:
+          coq_version: '8.15'
+          ocaml_version: 'default'
+          custom_script: |
+            startGroup "Workaround permission issue"
+              sudo chown -R coq:coq .
+            endGroup
+            startGroup "Build the library and check the examples"
+              make -j2
+            endGroup
+      - name: Revert permissions
+        if: always()
+        run: sudo chown -R 1001:116 .
