@@ -46,8 +46,11 @@ Section Collation.
 
 Variable pad : bool.
 
+(** is the collation case insensitive? (false for a binary collation, as TiDB's default [utf8mb4_bin]) *)
+Variable ci : bool.
+
 (** The key of a string for a comparison *)
-Definition coll_key (s : string) : string := lower_s (if pad then string_rtrim s else s).
+Definition coll_key (s : string) : string := (if ci then lower_s else fun x => x) (if pad then string_rtrim s else s).
 
 (** the system variable [div_precision_increment], whose default value is 4 in MySQL and in OceanBase *)
 Definition div_precision_increment : nat := 4%nat.
@@ -374,4 +377,4 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
 End Collation.
 
 (** MySQL 8 with its default collation [utf8mb4_0900_ai_ci] (no padding). *)
-Definition MySQL : vsem := mysql_vs false "MySQL" my_supports.
+Definition MySQL : vsem := mysql_vs false true "MySQL" my_supports.

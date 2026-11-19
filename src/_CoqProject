@@ -56,6 +56,10 @@ data/dialects/PostgreSQL.v
 data/dialects/MySQL.v
 data/dialects/SQLite.v
 data/dialects/OceanBase.v
+data/dialects/MariaDB.v
+data/dialects/TiDB.v
+data/dialects/Percona.v
+data/dialects/PolarDB.v
 testing/Test_Dialects.v
 testing/SpecRunner.v
 testing/SltRunner.v
@@ -100,3 +104,4 @@ testing/Test_Grouping.v
 testing/Test_Recursive.v
 testing/Test_Range.v
 testing/Test_Fetch.v
+testing/Test_MariaDB.v
