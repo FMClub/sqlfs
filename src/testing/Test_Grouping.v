@@ -120,13 +120,28 @@ Definition acceptance (q : squery) :=
       [PostgreSQL; MySQL; SQLite; OceanBaseMySQL; OceanBaseOracle].
 
 Example accepted_grouping_sets : 
-  acceptance (sel_grouped (g_sets [[b]; []])) = [true; false; false; true; true].
+  acceptance (sel_grouped (g_sets [[b; z]; [b]; []])) = [true; false; false; true; true].
 Proof. check. Qed.
 
 Example accepted_rollup : 
-  acceptance (sel_grouped (g_rollup [b])) = [true; true; false; true; true].
+  acceptance (sel_grouped (g_rollup [b; z])) = [true; true; false; true; true].
 Proof. check. Qed.
 
 Example accepted_cube : 
-  acceptance (sel_grouped (g_cube [b])) = [true; false; false; true; true].
+  acceptance (sel_grouped (g_cube [b; z])) = [true; false; false; true; true].
+Proof. check. Qed.
+
+(** * Bare columns: [SELECT brand, size, sum(sales) FROM items_sold GROUP BY brand] *)
+
+Example accepted_bare_column :
+  acceptance (sel_grouped (g_by [b])) = [false; false; true; true; false].
+Proof. check. Qed.
+
+Example accepted_no_bare_column :
+  acceptance (sel_grouped (g_by [b; z])) = [true; true; true; true; true].
+Proof. check. Qed.
+
+(** an expression of grouped columns is not bare *)
+Example accepted_grouped_expression :
+  acceptance (select_grouped [as_ (fn "+" [b; z]) c0] items (g_by [b; z])) = [true; true; true; true; true].
 Proof. check. Qed.

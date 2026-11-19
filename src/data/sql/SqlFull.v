@@ -163,6 +163,9 @@ Inductive feature : Type :=
   | F_Grouping_Sets
   | F_Rollup
   | F_Cube
+  (** a column which is neither grouped nor in an aggregate, in a block with aggregates or a [GROUP BY]
+      (rejected by [ONLY_FULL_GROUP_BY], by PostgreSQL and by Oracle; SQLite takes the value of a row) *)
+  | F_Bare_Column
   (** a condition used as a value, or a value used as a condition (booleans) *)
   | F_Cond_Value
   (** [(e1, ..., en) IN (q)] with [n > 1] *)
@@ -389,6 +392,56 @@ Fixpoint sexpr_eqb (e1 e2 : sexpr) {struct e1} : bool :=
   | _, _ => false
   end.
 
+(** * Bare columns
+
+    A column of a block with aggregates which is neither one of the grouping expressions nor
+    inside an aggregate has no single value in a group. Subqueries are not inspected, and
+    functional dependencies (keys) are not modelled: the check is the syntactic one. *)
+Fixpoint bare_e (gs : list sexpr) (e : sexpr) {struct e} : bool :=
+  if existsb (sexpr_eqb e) gs then false else
+  match e with
+  | E_Col _ => true
+  | E_Fun _ l => (fix go (l : list sexpr) : bool := match l with nil => false | x :: r => bare_e gs x || go r end) l
+  | E_Case c e1 e2 => bare_c gs c || bare_e gs e1 || bare_e gs e2
+  | E_Cond c => bare_c gs c
+  | _ => false
+  end
+
+with bare_c (gs : list sexpr) (c : scond) {struct c} : bool :=
+  match c with
+  | C_Conj _ c1 c2 => bare_c gs c1 || bare_c gs c2
+  | C_Not c => bare_c gs c
+  | C_Pred _ l => (fix go (l : list sexpr) : bool := match l with nil => false | x :: r => bare_e gs x || go r end) l
+  | C_Expr e => bare_e gs e
+  | _ => false
+  end.
+
+(** Does the expression contain an aggregate of the block (not inside a subquery)? *)
+Fixpoint has_agg_syn (e : sexpr) {struct e} : bool :=
+  match e with
+  | E_Agg _ _ _ _ => true
+  | E_Fun _ l => (fix go (l : list sexpr) : bool := match l with nil => false | x :: r => has_agg_syn x || go r end) l
+  | E_Case c e1 e2 => has_agg_c c || has_agg_syn e1 || has_agg_syn e2
+  | E_Cond c => has_agg_c c
+  | _ => false
+  end
+
+with has_agg_c (c : scond) {struct c} : bool :=
+  match c with
+  | C_Conj _ c1 c2 => has_agg_c c1 || has_agg_c c2
+  | C_Not c => has_agg_c c
+  | C_Pred _ l => (fix go (l : list sexpr) : bool := match l with nil => false | x :: r => has_agg_syn x || go r end) l
+  | C_Expr e => has_agg_syn e
+  | _ => false
+  end.
+
+Definition block_has_bare_column (s : sselect) (g : sgroup) (h : scond) : bool :=
+  let items := match s with S_Star => nil | S_List l => map (fun x => match x with S_As e _ => e end) l end in
+  let aggregated := (match g with G_Fine => false | _ => true end) || existsb has_agg_syn items || has_agg_c h in
+  aggregated &&
+  ((match s with S_Star => true | _ => false end) || 
+   existsb (bare_e (group_exprs g)) items || bare_c (group_exprs g) h).
+
 (** * The constructs which a query uses
 
     [squery_uses q] lists the constructs of [q] which are not supported by all the
@@ -493,7 +546,8 @@ with sspec_uses (sp : sspec) {struct sp} : list use :=
      | G_Sets ss => (fix go (ss : list (list sexpr)) : list use := 
                        match ss with nil => nil | l :: r => flat_map sexpr_uses l ++ go r end) ss
      end) ++ 
-    scond_uses h
+    scond_uses h ++
+    (if block_has_bare_column s g h then (U_Feature F_Bare_Column) :: nil else nil)
   end
 
 with sfrom_uses (f : sfrom) {struct f} : list use :=

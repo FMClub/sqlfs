@@ -126,8 +126,13 @@ Still open:
   `Value_Q` is a rational and forgets it; a value which carries its scale would also fix the
   display of `4/3` and the type of `sum` and `avg`.
 - **Acceptance of a query**: the constructs and the names of functions, predicates and aggregates are
-  checked (`accepted_by`); `ONLY_FULL_GROUP_BY` and the bare columns of SQLite (the value of an
-  arbitrary row, or the row of the `min`/`max`) are not.
+  checked (`accepted_by`). A bare column (neither grouped nor aggregated, in a block with
+  aggregates or `GROUP BY`) is the feature `F_Bare_Column`: rejected by PostgreSQL, MySQL
+  (default `ONLY_FULL_GROUP_BY`) and Oracle mode, accepted by SQLite and OceanBase MySQL mode. The check is
+  syntactic: functional dependencies (keys) are not modelled, so a query which groups by a
+  primary key and selects other columns is rejected although PostgreSQL and MySQL accept it;
+  subqueries are not inspected; the value of a bare column in SQLite (an arbitrary row, or the
+  row of the `min`/`max`) is still not modelled.
 - **Constructs of the dialects which `SqlFull` does not have**: `RANGE` window frames with an
   offset,
   `FETCH FIRST ... WITH TIES` and `PERCENT` (Oracle mode), `ORDER BY` inside `string_agg`.
