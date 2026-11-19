@@ -64,7 +64,7 @@ Definition CI : dialect TNull :=
                        end)
              (fun _ => true) (fun _ => true) (fun _ => true)
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
-             NullValues.is_lazy_symbol (fun _ _ => false) false.
+             NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v).
 
 Definition run (d : dialect TNull) q := 
   List.map (show_tuple TNull) 

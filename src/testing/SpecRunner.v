@@ -46,8 +46,9 @@ Definition build_db (tabs : list table_spec) : db_state :=
                  end)
     tabs init_db.
 
-(** A value, and the text of a result: NULLs are the same; two numbers are compared as numbers;
-    the other values are compared as texts. *)
+(** A value, and the text of a result: NULLs are the same; an integer or a rational is compared as a
+    number; a decimal, whose text has the scale of the engine, and the other values are compared as
+    texts. *)
 Definition cell_ok (v : NullValues.value) (s : string) : bool :=
   if String.eqb s "NULL" then NullValues.is_null v
   else match v with
@@ -55,6 +56,8 @@ Definition cell_ok (v : NullValues.value) (s : string) : bool :=
          match parse_number s with (n, true) => match num_cmp (NullValues.Num_Z z) n with Eq => true | _ => false end | _ => false end
        | NullValues.Value_Q (Some q) => 
          match parse_number s with (n, true) => match num_cmp (NullValues.Num_Q q) n with Eq => true | _ => false end | _ => false end
+       (* a decimal is compared by its text: the engine prints its scale *)
+       | NullValues.Value_D (Some (q, _, sc)) => String.eqb s (NullValues.dec_text q sc)
        | NullValues.Value_bool (Some b) => String.eqb s (if b then "1" else "0")
        | NullValues.Value_string (Some t) => String.eqb s t
        | _ => false

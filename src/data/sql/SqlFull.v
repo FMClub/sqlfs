@@ -236,7 +236,10 @@ Record dialect : Type :=
       pred_error : predicate -> list value -> bool;
       (** a scalar subquery which returns several rows: the value of the first row (SQLite)
           rather than an error (the other dialects) *)
-      scalar_first_row : bool
+      scalar_first_row : bool;
+      (** the value of a literal: a decimal literal [1.50] is a [REAL] in SQLite and a [NUMBER]
+          without scale in Oracle *)
+      const_of : value -> value
     }.
 
 Hypothesis O : dialect.
@@ -1388,7 +1391,7 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
                   | (_, _, hid) :: _ => if existsb (sexpr_eqb x) hid then 1%Z else 0%Z
                   | nil => 0%Z
                   end)
-  | E_Const v => v
+  | E_Const v => const_of O v
   | E_Col a => lookup env a
   | E_Fun f l => 
     let vs := map (eval_sexpr ce env) l in

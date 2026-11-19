@@ -60,6 +60,7 @@ Definition lenient (v : value) : option num :=
   match v with
   | Value_Z (Some z) => Some (Num_Z z)
   | Value_Q (Some q) => Some (Num_Q q)
+  | Value_D (Some (q, _, _)) => Some (Num_Q q)
   | Value_bool (Some b) => Some (Num_Z (if b then 1%Z else 0%Z))
   | Value_string (Some s) => Some (parse_prefix s)
   | _ => None
@@ -71,6 +72,7 @@ Definition strict_conv (v : value) : option num :=
   match v with
   | Value_Z (Some z) => Some (Num_Z z)
   | Value_Q (Some q) => Some (Num_Q q)
+  | Value_D (Some (q, _, _)) => Some (Num_Q q)
   | Value_string (Some s) => 
     let (n, ok) := parse_number s in if ok then Some n else None
   | _ => None
@@ -229,6 +231,7 @@ Definition text_of (v : value) : option string :=
   | Value_string s => s
   | Value_Z (Some z) => Some (string_of_Z z)
   | Value_Q (Some q) => Some (string_of_dec q)
+  | Value_D (Some (q, _, s)) => Some (dec_text q s)
   | Value_bool (Some b) => Some (if b then "1" else "0")
   | _ => None
   end.
@@ -399,6 +402,116 @@ Definition truncate_text (n : N) (v : value) : value :=
     if N.leb (N.of_nat (String.length s)) n then v else Value_string (Some (String.substring 0 (N.to_nat n) s))
   | _ => v
   end.
+
+(** * The decimal arithmetic of the MySQL family
+
+    MySQL, MariaDB, TiDB, Percona, PolarDB and OceanBase share the decimal library of MySQL
+    ([strings/decimal.c]): a decimal holds its digits by units of 9 ([DIG_PER_DEC1]). An operand
+    is an integer, a decimal, or a string, which an arithmetic operation converts to a
+    floating-point number (the former [lenient] path is kept for it). *)
+Inductive mnum : Type :=
+  | MI : Z -> mnum
+  | MD : Qc -> nat -> nat -> mnum
+  | MO : mnum.
+
+Definition mclass (v : value) : option mnum :=
+  match v with
+  | Value_Z (Some z) => Some (MI z)
+  | Value_bool (Some b) => Some (MI (if b then 1%Z else 0%Z))
+  | Value_D (Some (q, f, s)) => Some (MD q f s)
+  | Value_Q (Some q) => Some (MD q (dec_scale q) (dec_scale q))
+  | Value_string (Some _) => Some MO
+  | _ => None
+  end.
+
+Definition mdec (m : mnum) : Qc * nat * nat :=
+  match m with
+  | MI z => (Qc_of_Z z, 0%nat, 0%nat)
+  | MD q f s => (q, f, s)
+  | MO => (Qc_of_Z 0, 0%nat, 0%nat)
+  end.
+
+(** [DECIMAL_MAX_SCALE] of MySQL *)
+Definition my_max_scale : nat := 30.
+
+Definition roundup9 (n : nat) : nat := (Nat.div (n + 8) 9 * 9)%nat.
+
+(** [+], [-]: the digits held and the scale are the larger ones ([do_add], [Item_func_additive_op]) *)
+Definition my_dplus (a b : Qc * nat * nat) : value :=
+  let '(q1, f1, s1) := a in let '(q2, f2, s2) := b in VDec (Qcplus q1 q2) (Nat.max f1 f2) (Nat.max s1 s2).
+Definition my_dminus (a b : Qc * nat * nat) : value :=
+  let '(q1, f1, s1) := a in let '(q2, f2, s2) := b in VDec (Qcminus q1 q2) (Nat.max f1 f2) (Nat.max s1 s2).
+(** [*]: the sums ([decimal_mul], [Item_func_mul::result_precision]) *)
+Definition my_dmult (a b : Qc * nat * nat) : value :=
+  let '(q1, f1, s1) := a in let '(q2, f2, s2) := b in 
+  VDec (Qcmult q1 q2) (f1 + f2) (Nat.min (s1 + s2) my_max_scale).
+
+(** [/] ([do_div_mod]): the quotient holds [ROUND_UP(frac1 + frac2 + scale_incr)] units of 9 digits,
+    where [frac1], [frac2] are the digits of the operands rounded up to units and [scale_incr] is
+    [div_precision_increment] less the digits added by this rounding; the digits are those of the
+    long division, truncated. It is displayed with the scale of the dividend plus
+    [div_precision_increment] ([Item_func_div::fix_length_and_dec_decimal]), rounded. A division
+    by zero is NULL. *)
+Definition my_ddiv (incr : nat) (a b : Qc * nat * nat) : value :=
+  let '(q1, f1, s1) := a in let '(q2, f2, s2) := b in
+  if Qc_is_zero q2 then Value_D None
+  else 
+    let r1 := roundup9 f1 in
+    let r2 := roundup9 f2 in
+    let inc := Z.to_nat (Z.max 0 (Z.of_nat incr - Z.of_nat (r1 - f1) - Z.of_nat (r2 - f2))) in
+    let f := roundup9 (r1 + r2 + inc) in
+    VDec (dec_trunc (Qcdiv q1 q2) f) f (Nat.min (s1 + incr) my_max_scale).
+
+(** [fi] is the operation on integers, if the result of two integers is an integer *)
+Definition my_arith2 (fi : option (Z -> Z -> Z)) (fd : Qc * nat * nat -> Qc * nat * nat -> value)
+           (other : list value -> value) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    match mclass v1, mclass v2, fi with
+    | Some (MI a), Some (MI b), Some f => Value_Z (Some (f a b))
+    | _, _, _ =>
+    match mclass v1, mclass v2 with
+    | Some MO, Some _ | Some _, Some MO => other l
+    | Some m1, Some m2 => fd (mdec m1) (mdec m2)
+    | _, _ => other l
+    end
+    end
+  | _ => other l
+  end.
+
+(** [ROUND(x, d)], [TRUNCATE(x, d)] of a decimal: a decimal of scale [d] *)
+Definition my_dround (trunc : bool) (q : Qc) (d : Z) : value :=
+  if Z.leb 0 d 
+  then VDec ((if trunc then dec_trunc else dec_round) q (Z.to_nat d)) (Z.to_nat d) (Z.to_nat d)
+  else let m := Qc_of_Z (pow10 (Z.to_nat (Z.opp d))) in
+       VDec (Qcmult (Qc_of_Z ((if trunc then Qc_trunc else Qc_round) (Qcdiv q m))) m) 0 0.
+
+(** [SUM] of decimals: the larger scale; [AVG]: the division of the sum by the count *)
+Definition my_dsum (isnull : value -> bool) (l : list value) : option (Qc * nat * nat) :=
+  let ms := flat_map (fun v => match mclass v with Some (MI z) => MI z :: nil | Some (MD q f s) => MD q f s :: nil | _ => nil end)
+                     (non_nulls_by isnull l) in
+  match ms with
+  | nil => None
+  | m :: r => Some (fold_left (fun acc x => let '(q1, f1, s1) := acc in let '(q2, f2, s2) := mdec x in
+                                          (Qcplus q1 q2, Nat.max f1 f2, Nat.max s1 s2)) r (mdec m))
+  end.
+
+Definition has_decimal (isnull : value -> bool) (l : list value) : bool :=
+  existsb (fun v => match v with Value_D (Some _) | Value_Q (Some _) => true | _ => false end) (non_nulls_by isnull l).
+
+Definition has_text (isnull : value -> bool) (l : list value) : bool :=
+  existsb (fun v => match v with Value_string (Some _) => true | _ => false end) (non_nulls_by isnull l).
+
+Definition my_agg_sum (isnull : value -> bool) (l : list value) : value :=
+  if has_text isnull l || negb (has_decimal isnull l) then agg_sum_by isnull lenient l
+  else match my_dsum isnull l with Some (q, f, s) => VDec q f s | None => Value_D None end.
+
+Definition my_agg_avg (incr : nat) (isnull : value -> bool) (l : list value) : value :=
+  if has_text isnull l then agg_avg_dec incr isnull lenient l
+  else match my_dsum isnull l with
+       | Some d => my_ddiv incr d (Qc_of_Z (Z.of_nat (List.length (non_nulls_by isnull l))), 0%nat, 0%nat)
+       | None => Value_D None
+       end.
 
 (** variance, population or sample *)
 Definition agg_var_by (isnull : value -> bool) (conv : value -> option num) (sample : bool) (l : list value) :=

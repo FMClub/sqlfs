@@ -257,11 +257,15 @@ Definition my_locate (l : list value) : value :=
 
 Definition my_symbol_table : list (string * (list value -> value)) :=
   let conv := lenient in
-  let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
-  let minus := num_fun2 conv (fun a b => Some (num_minus a b)) in
-  let mult := num_fun2 conv (fun a b => Some (num_mult a b)) in
-  let opp := num_fun1 conv num_opp in
-  let div := num_fun2 conv (num_div_dec div_precision_increment) in
+  let plus := my_arith2 (Some Z.add) my_dplus (num_fun2 conv (fun a b => Some (num_plus a b))) in
+  let minus := my_arith2 (Some Z.sub) my_dminus (num_fun2 conv (fun a b => Some (num_minus a b))) in
+  let mult := my_arith2 (Some Z.mul) my_dmult (num_fun2 conv (fun a b => Some (num_mult a b))) in
+  let opp l := match l with
+               | Value_D (Some (q, f, s)) :: nil => VDec (Qcopp q) f s
+               | _ => num_fun1 conv num_opp l
+               end in
+  let div := my_arith2 None (my_ddiv div_precision_increment) 
+                       (num_fun2 conv (num_div_dec div_precision_increment)) in
   let idiv := num_fun2 conv num_div_trunc in
   let modulo := num_fun2 conv num_rem in
   let logic_and := fun l => my_of_truth (fold_truth my_truth andb3 true3 l) in
@@ -272,17 +276,25 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
   :: ("opp", opp) :: ("neg", opp)
   :: ("/", div) :: ("div", idiv) 
   :: ("%", modulo) :: ("mod", modulo)
-  :: ("abs", num_fun1 conv num_abs)
+  :: ("abs", fun l => match l with
+                      | Value_D (Some (q, f, s)) :: nil => 
+                        VDec (match Qccompare q (Qc_of_Z 0) with Lt => Qcopp q | _ => q end) f s
+                      | _ => num_fun1 conv num_abs l end)
   :: ("sign", num_fun1 conv num_sign)
   :: ("floor", num_fun1 conv num_floor)
   :: ("ceil", num_fun1 conv num_ceil) :: ("ceiling", num_fun1 conv num_ceil)
   :: ("round", fun l => match l with
+                        | Value_D (Some (q, _, _)) :: nil => my_dround false q 0
+                        | Value_D (Some (q, _, _)) :: d :: nil => 
+                          match z_arg d with Some d => my_dround false q d | None => Value_Z None end
                         | v :: nil => num_fun1 conv (fun a => num_round a 0) l
                         | v :: d :: nil => match conv v, z_arg d with
                                            | Some a, Some d => value_of_num (num_round a d) 
                                            | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   :: ("truncate", fun l => match l with
+                           | Value_D (Some (q, _, _)) :: d :: nil => 
+                             match z_arg d with Some d => my_dround true q d | None => Value_Z None end
                            | v :: d :: nil => match conv v, z_arg d with
                                               | Some a, Some d => value_of_num (num_trunc a d) 
                                               | _, _ => Value_Z None end
@@ -356,8 +368,8 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
 Definition my_aggregate_table : list (string * (list value -> value)) :=
      ("count", agg_count_by is_null)
   :: ("count(*)", fun l => Value_Z (Some (Z.of_nat (List.length l))))
-  :: ("sum", agg_sum_by is_null lenient)
-  :: ("avg", agg_avg_dec div_precision_increment is_null lenient)
+  :: ("sum", my_agg_sum is_null)
+  :: ("avg", my_agg_avg div_precision_increment is_null)
   :: ("min", agg_extremum_by is_null my_order is_Lt)
   :: ("max", agg_extremum_by is_null my_order is_Gt)
   :: ("group_concat", fun l => truncate_text (ms_group_concat_max_len ss) (agg_concat_by is_null "," l))
@@ -401,7 +413,8 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           true
           (fun f => match f with F_Bare_Column => negb (ms_only_full_group_by ss) | _ => supports f end)
           false
-          (fun _ _ => false).
+          (fun _ _ => false)
+          (fun v => v).
 
 End Collation.
 

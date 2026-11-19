@@ -322,4 +322,6 @@ Definition OceanBaseOracle : vsem :=
           false
           ora_supports
           false
-          ora_pred_error.
+          ora_pred_error
+          (* a [NUMBER] has no display scale: [1.50] is [1.5] *)
+          (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end).

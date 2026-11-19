@@ -38,7 +38,7 @@ Definition TNull_PostgreSQL : dialect TNull :=
              (fun _ => true)
              (fun _ => true) (fun _ => true) (fun _ => true)
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
-             NullValues.is_lazy_symbol (fun _ _ => false) false.
+             NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v).
 
 Definition TNull_ops := TNull_PostgreSQL.
 
@@ -113,6 +113,10 @@ Definition VZ (z : Z) := NullValues.Value_Z (Some z).
 Definition VS (s : string) := NullValues.Value_string (Some s).
 Definition VB (b : bool) := NullValues.Value_bool (Some b).
 Definition VQ (n : Z) (d : positive) := NullValues.Value_Q (Some (Q2Qc (Qmake n d))).
+(** a decimal literal: [VD 150 2] is [1.50] *)
+Definition VD (n : Z) (s : nat) := NullValues.dec_lit n s.
+(** an integer displayed with [s] decimals: [VDi 4000 16] is [4000.0000000000000000] *)
+Definition VDi (z : Z) (s : nat) := NullValues.VDec (NullValues.Qc_of_Z z) s s.
 Definition NullZ := NullValues.Value_Z None.
 Definition NullS := NullValues.Value_string None.
 Definition NullB := NullValues.Value_bool None.

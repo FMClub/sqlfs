@@ -35,7 +35,13 @@ These change the type of values or of results, so they come first: every functio
 
 ### 1.2 Numeric tower
 Split `value` into exact decimal with scale, binary floating point, and fixed-width integers, per dialect.
-- **1.2.1 Decimal scale and precision.** Add `Value_D : option (Z * nat)` (unscaled value and scale) or equivalent; reprove the ordered-type instance `OVal`
+- **1.2.1 Decimal scale and precision. — DONE** (`Value_D (q, f, s)`: exact value, digits held, scale;
+  PostgreSQL `numeric` rules with `select_div_scale`; MySQL-family `decimal.c` rules, 9-digit units, quotient truncated and
+  displayed with the dividend's scale plus `div_precision_increment`; literals keep their scale, are `REAL` in SQLite and
+  scale-less `NUMBER` in Oracle mode; `DECIMAL(p,s)` columns store values rounded to `s`; tests `Test_Decimal.v`;
+  OceanBase cases `length(0.00)` and `4/3 = 1.333333333` now pass. Not covered: the caps of precision (65 digits in MySQL,
+  1000 in PostgreSQL) and overflow, which come with 1.2.3.)
+  Original plan: Add `Value_D : option (Z * nat)` (unscaled value and scale) or equivalent; reprove the ordered-type instance `OVal`
   (`value_compare`, equality is by numeric value, scale is not part of identity for `GROUP BY`/`DISTINCT` but is for display and `length`). Rules: `+`, `-` scale = max; `*` scale = sum;
   `/` scale per dialect (MySQL/MariaDB/TiDB/Percona/PolarDB: scale of dividend + `div_precision_increment`; OceanBase: see source `ob_number`/`ObNumber` internal precision, which explains `4/3 = 1.333333333`;
   PostgreSQL: `numeric` division scale rule `select_div_scale`; Oracle mode: 38 significant digits); `ROUND`, `TRUNCATE`, `CAST(.. AS DECIMAL(p,s))` with overflow and rounding rule; `SUM`/`AVG` scale rules.
