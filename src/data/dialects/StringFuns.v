@@ -78,8 +78,10 @@ Definition substring_index_cp (s d : list Z) (n : Z) : list Z :=
     let parts := split_cp d s in
     let k := Z.of_nat (List.length parts) in
     if n =? 0 then nil
-    else if 0 <? n then join_cp d (firstn (Z.to_nat n) parts)
-    else join_cp d (skipn (Z.to_nat (Z.max 0 (k + n))) parts)
+    else if 0 <? n then join_cp d (firstn (Z.to_nat (Z.min n k)) parts)
+    else (* from the right: the occurrences are found from the end (they differ when they overlap) *)
+         let rparts := split_cp (rev d) (rev s) in
+         rev (join_cp (rev d) (firstn (Z.to_nat (Z.min (- n) (Z.of_nat (List.length rparts)))) rparts))
   end.
 
 (** PostgreSQL [split_part (s, d, n)]: the [n]-th piece (from the end if [n < 0]); [''] beyond *)
@@ -87,7 +89,7 @@ Definition split_part_cp (s d : list Z) (n : Z) : list Z :=
   let parts := match d with nil => s :: nil | _ => split_cp d s end in
   let parts := match s with nil => nil | _ => parts end in
   let k := Z.of_nat (List.length parts) in
-  if 0 <? n then nth (Z.to_nat (n - 1)) parts nil
+  if 0 <? n then (if k <? n then nil else nth (Z.to_nat (n - 1)) parts nil)
   else if (- n) <=? k then nth (Z.to_nat (k + n)) parts nil else nil.
 
 (** the position (from 1) of the first occurrence of [sub] in [s], 0 if none *)
@@ -110,7 +112,8 @@ Definition translate_cp (s from to : list Z) : list Z :=
 
 (** PostgreSQL [overlay (s placing r from n for k)] *)
 Definition overlay_cp (s r : list Z) (n k : Z) : list Z :=
-  firstn (Z.to_nat (n - 1)) s ++ r ++ skipn (Z.to_nat (n - 1 + k)) s.
+  let len := Z.of_nat (List.length s) in
+  firstn (Z.to_nat (Z.min len (n - 1))) s ++ r ++ skipn (Z.to_nat (Z.min len (n - 1 + k))) s.
 
 (** MySQL [INSERT (s, pos, len, new)]: [s] when [pos] is out of the string *)
 Definition insert_cp (s r : list Z) (p n : Z) : list Z :=
@@ -427,7 +430,7 @@ Definition f_elt (k : skit) (l : list value) : value :=
   match l with
   | n :: rest => match sk_int k n with
                  | Some n => if n <? 1 then sk_null k
-                             else match nth_error rest (Z.to_nat (n - 1)) with
+                             else match (if Z.of_nat (List.length rest) <? n then None else nth_error rest (Z.to_nat (n - 1))) with
                                   | Some v => match sk_txt k v with Some s => sk_ret k s | None => sk_null k end
                                   | None => sk_null k end
                  | None => sk_null k end

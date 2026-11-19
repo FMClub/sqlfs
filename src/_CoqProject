@@ -50,6 +50,7 @@ data/proof_of_concept/GenericInstance.v
 data/proof_of_concept/SqlSyntax.v
 data/proof_of_concept/Movie.v
 data/proof_of_concept/SqlFullSyntax.v
+data/proof_of_concept/Naming.v
 testing/Test_SqlFull.v
 testing/Test_Audit.v
 testing/Test_Dialect.v
@@ -124,6 +125,8 @@ testing/Test_SetOps.v
 testing/Test_TableFuns.v
 testing/Test_Rows.v
 testing/Test_Subqueries.v
+testing/Test_Naming.v
+testing/Test_OracleForms.v
 testing/Test_Fetch.v
 testing/Test_MariaDB.v
 testing/Test_Session.v

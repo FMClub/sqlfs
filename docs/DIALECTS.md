@@ -106,6 +106,43 @@ the value of a bare column in MariaDB, and the optimizer-visible differences (wh
 Percona's source and the PolarDB engine are not open for the SQL layer in the same way: for these two the model
 relies on the documentation (`docs.percona.com` could not be fetched; the feature comparison was read through a mirror).
 
+## OceanBase Oracle mode (closeout, TODO 4.9)
+
+The parser of the Oracle mode (`sql_parser_oracle_mode.y`) is in the closed enterprise source of OceanBase, and
+no expected results are recorded for it. Every behaviour of the model is therefore taken either from the **shared
+engine source** (`src/sql/engine/expr/`, which both modes run: marked *source*) or from the **Oracle-mode SQL
+reference** of `oceanbase-doc` (marked *doc*). Nothing is taken from Oracle Database itself without saying so.
+
+| Construct | Model | From |
+|---|---|---|
+| `''` is NULL; `\|\|` with NULL as `''`; `CONCAT` | `ora_isnull`, `ora_concat` in `OceanBase.v` | source (`is_null_oracle`, `ob_expr_concat.cpp`) |
+| `DECODE`, `NVL`, `NVL2`, `MINUS` | functions `decode`, `nvl`, `nvl2`; `SQ_Set Except` | doc; `decode` NULL = NULL is true (doc) |
+| Division by zero, `MOD(x, 0)`, invalid number | `ORA-01476` error, `x`, `ORA-01722` error | source |
+| Date arithmetic (`date ± n`, `date - date`) | `ora_date_arith`: days as numbers | source, doc |
+| `TO_CHAR`, `TO_DATE`, `TO_NUMBER` | the datetime format elements (`YYYY`, `RR`, `MON`, `MM`, `DD`, `HH24`, `MI`, `SS`, ...; default `DD-MON-RR`); `TO_CHAR` of a number ignores the format model; `TO_NUMBER` converts strictly, and drops the `,` and `$` of a format model | doc |
+| `LISTAGG ... WITHIN GROUP` | `listagg`, `listagg_sep` (NULLs ignored) | doc |
+| `DUAL` | a one-row table, as in the MySQL mode | doc |
+| `CONNECT BY`, `START WITH`, `PRIOR`, `LEVEL` | derived form `connect_by` (`SqlFullSyntax.v`): a recursive CTE whose anchor is the `START WITH` rows at level 1 and whose recursive step joins a row whose `PRIOR` columns match; `test Test_OracleForms.hierarchy` | doc |
+| `ROWNUM <= n` | derived form `rownum_le`: `LIMIT n` with no order (any `n` rows: `limit_any` in the runner) | doc |
+| `PIVOT (agg (v) FOR k IN (k1 AS a1, ...))` | derived form `pivot`: `agg (CASE WHEN k = ki THEN v END)` grouped by the other columns | doc |
+| `UNPIVOT (v FOR k IN (c1 AS 'k1', ...))` | derived form `unpivot`: a `UNION ALL` of one `SELECT` per column, `WHERE ci IS NOT NULL` (the default `EXCLUDE NULLS`) | doc |
+| `OFFSET ... FETCH FIRST ... ROWS ONLY \| WITH TIES` | `order_limit` and the ties of `F_Fetch_Ties` | doc |
+| `LATERAL`, `CROSS APPLY`, `OUTER APPLY` | `Fr_Join` with `lateral` | doc (since 4.3.1) |
+| Analytic functions, `ROWS`/`RANGE` frames | the windows of `SqlFull.v` | doc |
+| `ROLLUP`, `CUBE`, `GROUPING SETS`, `GROUPING()` | the grouping sets of `SqlFull.v` | doc |
+
+Excluded, with the reason:
+
+- `(+)` outer-join markers: an older notation of `LEFT`/`RIGHT JOIN`, which the translator would rewrite; a
+  `WHERE` with `(+)` on both sides of an `OR` is rejected by the engine, a rule the model does not need.
+- `ROWID`: a physical address; its value is not determined by the query.
+- `SAMPLE`: random (the result is any sub-bag of the rows, like `TABLESAMPLE`): not a function of the database.
+- `MODEL` clause: not supported by OceanBase (absent from the Oracle-mode SQL reference).
+- `KEEP (DENSE_RANK FIRST ORDER BY k)`: expressible as the aggregate over the rows whose `k` is the minimum of
+  the group (a correlated subquery); not a separate construct of the model.
+- `CONNECT BY NOCYCLE`, `CONNECT_BY_ROOT`, `SYS_CONNECT_BY_PATH`, `ORDER SIBLINGS BY`: not modelled. A cyclic
+  hierarchy without `NOCYCLE` is an error (`ORA-01436`); the model stops at `rec_fuel` instead.
+
 ## Sources and how they were checked
 
 For PostgreSQL, the manual. For MySQL, the 8.0/8.4 reference manual

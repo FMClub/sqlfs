@@ -467,8 +467,43 @@ Targets: every function of the table is either modelled or has an explicit exclu
   - A correlated subquery in `HAVING` reads the group's column.
   - A `LATERAL` reference to a window output is a lateral join over `SQ_Window`, which needs nothing new.
 - **3.9 Output naming and column identity**: the names of output columns for unnamed expressions (`?column?`, `count(*)`), duplicate names in derived tables (error in PostgreSQL/MySQL `Duplicate column name` when referenced, allowed in outputs), positional semantics (I4), `SELECT *` over joins and `USING`, qualified names `t.*`, ambiguous column errors.
+  **Status: DONE** (`src/data/proof_of_concept/Naming.v`, `src/testing/Test_Naming.v`).
+  - `pg_colname` is PostgreSQL's `FigureColname`: a column gives its name, a function or an aggregate
+    its name (`count(*)` gives `count`), a cast the type name, `CASE` gives `case`, and anything else
+    `?column?`.
+  - MySQL and SQLite name such a column by the text of the expression; the translator keeps the text.
+  - Name resolution (the translator) handles the rest:
+    - duplicate names are allowed in a result, and a derived table with duplicate names is not
+      translated (the engines raise an error when it is referred to by name);
+    - `SELECT *` over joins and `USING` (3.2);
+    - an ambiguous or unknown column is the engine's error, and the query is not translated;
+    - `t.*` is still skipped by the translator.
+  - The positional semantics (I4) is unchanged: the outputs are the attributes `c0, c1, ...`.
 - **3.10 Non-determinism and environment**: model the choice of rows as a set of allowed results: `LIMIT` without `ORDER BY`, ties, bare columns, `RANDOM`, `NOW`, `UUID()`; a semantic function `eval_query_set : ... -> list tuple -> Prop` (is this multiset a possible result) alongside the executable one; use it in the conformance harness instead of skipping those queries.
+  **Status: DONE for ties and `LIMIT` without `ORDER BY`.**
+  - In the core (`SqlFull.v`):
+    - `order_groups` gives the groups of peers of an ordered query, with its `LIMIT`.
+    - `allowed_ordered` is a `Prop`: a result is allowed if it orders the rows of each group in any way
+      (`Forall2 Permutation`) and, at the `LIMIT`, keeps any of the boundary peers.
+    - `allowed_ordered_refl` proves that the evaluation's own order is allowed.
+  - In the runner (`SpecRunner.v`):
+    - `ties_ok` is the executable test of `allowed_ordered`;
+    - `mk_case_limit` checks that a `LIMIT n` without `ORDER BY` gives any `n` rows of the result
+      (`sub_bag`).
+    - The two former OceanBase tie failures (`expr_floor:56/57`) now pass, and the queries with a
+      `LIMIT` but no `ORDER BY` are translated.
+  - The other sources of nondeterminism:
+    - `NOW` is the fixed statement time.
+    - `RANDOM`/`UUID` are excluded (2.1, 2.9).
+    - The value of a bare column (any row of its group) is not modelled: those queries are still not
+      translated.
 - **3.11 Statements accepted and ignored**: `FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`, `SKIP LOCKED`, optimizer hints, `SELECT ... INTO`, `EXPLAIN` (no result semantics): parsed and accepted with no effect, recorded per dialect.
+  **Status: DONE** (translator).
+  - `FOR UPDATE [OF t] [NOWAIT | SKIP LOCKED | WAIT n]`, `FOR SHARE` and `LOCK IN SHARE MODE` are read
+    and have no effect on the rows of the query.
+  - Optimizer hints (`/*+ ... */`) are comments.
+  - `SELECT ... INTO` (variables, files) and `EXPLAIN` return no rows of the query: they are not
+    queries of the model, and the translator skips them.
 
 ---------------------------------------------------------------------------------------------------------
 
@@ -485,6 +520,10 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
 - **4.7 SQLite** (3.45 and the current version): full function list (`func.c`, `date.c`, `json.c`, `math` extension, `window.c`), `string_agg`/`group_concat` ordered form, `ORDER BY ... NULLS`, `RETURNING`-free, `WITHOUT ROWID`-free, `INDEXED BY` (no result effect), generated columns-free, `ROWID` and `_rowid_` pseudo-columns, `typeof`, `LIMIT` expressions, `VALUES` forms, the `bare column` rule for `min`/`max`, `pragma` effects (`case_sensitive_like`, `reverse_unordered_selects`, `legacy_alter_table`: document which change results).
 - **4.8 OceanBase MySQL mode** (4.2 LTS, 4.3, 4.4): function list from `src/sql/engine/expr/ob_expr_*.cpp` and the expression registry (`ob_expr_operator_factory.cpp`), type system `ObObjType`, `ob_*` variables, hints with semantic effect (`/*+ NO_REWRITE */` has none), `LIMIT`, recursive CTEs, `GROUPING SETS` in MySQL mode, JSON, partition-pruning free; refine its remaining 6 conformance failures.
 - **4.9 OceanBase Oracle mode**: the Oracle SQL language reference as OceanBase implements it (`docs`: Oracle mode SQL reference, `sql_parser_oracle_mode.y` is in the closed enterprise source: from documentation only: record that and list every behaviour taken from documentation vs from shared source); `ROWNUM`, `ROWID`, `CONNECT BY`/`START WITH`/`PRIOR`/`LEVEL` (hierarchical queries: model), `DECODE`, `NVL*`, `MINUS`, `(+)`, `DUAL`, `TO_CHAR`/`TO_DATE`/`TO_NUMBER` with format models, `||` with NULL as empty, `''` as NULL, `LISTAGG`, `PIVOT`/`UNPIVOT` (model as derived forms), `MODEL` clause (decide scope), `SAMPLE`, `FETCH FIRST`, `LATERAL`/`CROSS APPLY`, analytic functions with `KEEP (DENSE_RANK FIRST)`.
+  **Status: DONE.** `docs/DIALECTS.md` "OceanBase Oracle mode" lists every construct with its source (shared engine
+  source or documentation) and the exclusions with their reasons (`(+)`, `ROWID`, `SAMPLE`, `MODEL`, `KEEP`, `NOCYCLE`).
+  `CONNECT BY`, `ROWNUM <=`, `PIVOT`, `UNPIVOT` are derived forms in `SqlFullSyntax.v` (`connect_by`, `rownum_le`,
+  `pivot`, `unpivot`); `TO_NUMBER` added; tests in `src/testing/Test_OracleForms.v`.
 - **4.10 Per-version flags**: a `version` parameter on each dialect record, and `supports d v feature`; tests that a construct introduced in version N is rejected before it.
 - **4.11 Decide the scope of further engines** (Oracle Database, SQL Server, DuckDB, ClickHouse, CockroachDB, Snowflake, BigQuery): a short decision record in `docs/OPEN_ISSUES.md` for the user; do not start them before it is answered.
 

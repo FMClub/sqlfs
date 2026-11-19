@@ -1533,7 +1533,12 @@ class QTr:
         if order:
             order = [(subst_deep(e, False) if e[0] != 'col' else e, d) for e, d in order]
         if limit is not None and not order:
-            raise Skip('limit without order by (the rows are implementation defined)')
+            # LIMIT without ORDER BY: any n rows of the result (TODO 3.10); only at the top of the query
+            if s is getattr(self, 'top_select', None) and limit[0] == 0 and limit[1] is not None:
+                self.limit_any = limit[1]
+                limit = None
+            else:
+                raise Skip('limit without order by (the rows are implementation defined)')
         if any(has_call(e, 'group_concat') for e, _ in exprs):
             raise Skip('group_concat (the order of the elements is implementation defined)')
         w = tr.cond(where) if where is not None else 'c_true'
@@ -1886,10 +1891,16 @@ def parse_insert(toks, tables):
 def parse_results(res_lines, ncols):
     """Rows of a result in the tab format: the first line is the header."""
     lines = [l for l in res_lines]
+    blank = 0
     while lines and lines[-1].strip() == '':
         lines.pop()
+        blank += 1
     if not lines:
         return None
+    if len(lines) == 1 and ncols == 1 and not lines[0].startswith(('ERROR', '+')):
+        # a header alone is an empty result; followed by one blank line, a row holding ''
+        # (several blank lines are ambiguous with the separators, and skipped)
+        return [] if blank == 0 else [['']] if blank == 1 else None
     if lines[0].startswith('ERROR'):
         return None
     if lines[0].startswith('+'):
@@ -1963,6 +1974,8 @@ def process(path, out, stats):
         stats['skipped_files'] += 1
         return
     lines = open(path, encoding='utf-8', errors='replace').read().split('\n')
+    if lines and lines[-1] == '':
+        lines.pop()  # the end of the last line, not an empty line
     tables = {}
     blocks = split_blocks(lines)
     base = path.split('/')[-1].replace('.result', '')
@@ -2087,10 +2100,33 @@ def process(path, out, stats):
                 stats['selects'] += 1
                 p = P(toks)
                 q = p.query()
+                # locking clauses (TODO 3.11): FOR UPDATE [OF t] [NOWAIT | SKIP LOCKED], FOR SHARE,
+                # LOCK IN SHARE MODE: no effect on the rows of a query
+                while p.peek()[0] in ('id', 'kw') and p.peek()[1].lower() in ('for', 'lock'):
+                    w = [p.peek(k)[1].lower() if p.peek(k)[0] in ('id', 'kw') else '' for k in range(4)]
+                    if w[0] == 'for' and w[1] in ('update', 'share'):
+                        p.i += 2
+                        if p.peek()[0] in ('id', 'kw') and p.peek()[1].lower() == 'of':
+                            p.i += 1
+                            p.ident()
+                            while p.eat_op(','):
+                                p.ident()
+                        if p.peek()[0] in ('id', 'kw') and p.peek()[1].lower() == 'nowait':
+                            p.i += 1
+                        elif p.peek()[0] in ('id', 'kw') and p.peek()[1].lower() == 'skip':
+                            p.i += 2
+                        elif p.peek()[0] in ('id', 'kw') and p.peek()[1].lower() == 'wait':
+                            p.i += 2
+                    elif w[0] == 'lock' and w[1] == 'in' and w[2] == 'share' and w[3] == 'mode':
+                        p.i += 4
+                    else:
+                        break
                 p.eat_op(';')
                 if p.peek()[0] != 'eof':
                     raise Skip('trailing')
                 qt = QTr(tables)
+                qt.top_select = q[1] if q[0] == 'orderq' and not q[2] else q
+                qt.limit_any = None
                 cq, ncols, ordered, _ = qt.query(q)
                 rows = parse_results(res, ncols)
                 if rows is None:
@@ -2107,8 +2143,13 @@ def process(path, out, stats):
                     sql_txt = coq_str(' '.join(s.split())[:400])
                 except Skip:
                     sql_txt = '""'
-                cases.append('  mk_case %s %s [%s] %s %s %s' % (
-                    coq_str('%s:%d' % (base, bi)), 'true' if ordered else 'false', '; '.join(tabs), cq, exp, sql_txt))
+                if qt.limit_any is not None:
+                    # any [n] rows of the result
+                    cases.append('  mk_case_limit %s %d [%s] %s %s %s' % (
+                        coq_str('%s:%d' % (base, bi)), qt.limit_any, '; '.join(tabs), cq, exp, sql_txt))
+                else:
+                    cases.append('  mk_case %s %s [%s] %s %s %s' % (
+                        coq_str('%s:%d' % (base, bi)), 'true' if ordered else 'false', '; '.join(tabs), cq, exp, sql_txt))
                 stats['translated'] += 1
         except Skip as e:
             if head == 'select':

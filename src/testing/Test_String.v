@@ -55,6 +55,14 @@ Proof. check. Qed.
 
 Example str_6 : text MySQL (fn "substring_index" [s "www.mysql.com"; s "."; int (-2)]) = "mysql.com".
 Proof. check. Qed.
+(** a negative count searches from the right, which differs when the occurrences overlap (OceanBase
+    [substring_index.result]); a huge count is bounded by the number of pieces *)
+Example str_6b : text MySQL (fn "substring_index" [s "aaaaaaaaa1"; s "aa"; int (-1)]) = "1".
+Proof. check. Qed.
+Example str_6c : text MySQL (fn "substring_index" [s "aaaaaaaaa1"; s "aa"; int (-2)]) = "aa1".
+Proof. check. Qed.
+Example str_6d : text MySQL (fn "substring_index" [s "a.b"; s "."; int 9223372036854775807]) = "a.b".
+Proof. check. Qed.
 
 Example str_7 : text PostgreSQL (fn "split_part" [s "abc~@~def~@~ghi"; s "~@~"; int 2]) = "def".
 Proof. check. Qed.

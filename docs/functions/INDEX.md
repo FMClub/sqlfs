@@ -391,6 +391,7 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `to_char` | OceanBase.v, Values.v | datetime.md |
 | `to_date` | OceanBase.v, PostgreSQL.v | datetime.md |
 | `to_days` | MySQL.v | datetime.md |
+| `to_number` | OceanBase.v | math.md |
 | `to_hex` | PostgreSQL.v | strings.md |
 | `to_json` | Values.v | core.md |
 | `to_jsonb` | Values.v | core.md |
