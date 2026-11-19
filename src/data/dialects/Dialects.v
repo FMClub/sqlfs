@@ -136,6 +136,7 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (vs_eq3 d)
              (vs_order d)
              (fun z => NullValues.Value_Z (Some z))
+             NullValues.rat_of_value
              (vs_canon d)
              (vs_nulls_smallest d)
              (vs_supports d)

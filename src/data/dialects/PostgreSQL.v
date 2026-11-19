@@ -56,4 +56,4 @@ Definition PostgreSQL : vsem :=
           sql_order
           canon_numeric
           false
-          (fun _ => true).
+          (fun f => match f with F_Bare_Column => false | _ => true end).

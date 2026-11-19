@@ -261,6 +261,8 @@ Definition ora_aggregate_table : list (string * (list value -> value)) :=
 Definition ora_supports (f : feature) : bool :=
   match f with
   | F_Intersect_All | F_Except_All | F_Frame_Groups | F_Filter_Agg | F_Cond_Value => false
+  (* ORA-00979: not a GROUP BY expression *)
+  | F_Bare_Column => false
   | _ => true
   end.
 

@@ -31,6 +31,7 @@ Definition TNull_PostgreSQL : dialect TNull :=
              NullValues.sql_eq3
              NullValues.sql_order
              (fun z => NullValues.Value_Z (Some z))
+             NullValues.rat_of_value
              (fun v => v)
              false
              (fun _ => true)
