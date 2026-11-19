@@ -581,13 +581,78 @@ Definition pg_table_funs (name : string) : option (list value -> list (list valu
   | _ => None
   end%string.
 
+(** Functions added by the closeout of PostgreSQL (TODO 4.1) *)
+Fixpoint min_scale_aux (fuel : nat) (q : Qc) (s : nat) : nat :=
+  match fuel with
+  | O => s
+  | S f => if Pos.eqb (Qden (Qcmult q (Qc_pow10 s))) 1 then s else min_scale_aux f q (S s)
+  end.
+Definition pg_min_scale (q : Qc) : nat := min_scale_aux 400 q 0.
+
+Definition pg_base_digits (b : Z) (n : nat) (z : Z) : string :=
+  let fix go (fuel : nat) (z : Z) (acc : string) :=
+      match fuel with
+      | O => acc
+      | S f => let d := Z.modulo z b in
+               let acc := String (Ascii.ascii_of_nat (Z.to_nat (if Z.ltb d 10 then 48 + d else 87 + d))) acc in
+               if Z.ltb z b then acc else go f (Z.div z b) acc
+      end in
+  go (S n) (Z.modulo z (2 ^ Z.of_nat n)) EmptyString.
+
+Definition pg_closeout_funs : list (string * (list value -> value)) :=
+  ("scale", fun l => match l with
+                     | Value_D (Some (_, _, s)) :: nil => VInt 32 (Z.of_nat s)
+                     | v :: nil => match int_parts v with Some _ => VInt 32 0 | None => Value_I None end
+                     | _ => Value_Err "function does not exist" end)
+  :: ("min_scale", fun l => match l with
+                     | Value_D (Some (q, _, _)) :: nil => VInt 32 (Z.of_nat (pg_min_scale q))
+                     | v :: nil => match int_parts v with Some _ => VInt 32 0 | None => Value_I None end
+                     | _ => Value_Err "function does not exist" end)
+  :: ("trim_scale", fun l => match l with
+                     | Value_D (Some (q, f, _)) :: nil => VDec q f (pg_min_scale q)
+                     | v :: nil => match int_parts v with Some (z, _) => VDec (Qc_of_Z z) 0 0 | None => Value_D None end
+                     | _ => Value_Err "function does not exist" end)
+  :: ("to_bin", fun l => match l with
+                     | v :: nil => match int_parts v with
+                                   | Some (z, w) => Value_string (Some (pg_base_digits 2 (if Nat.eqb w 64 then 64 else 32) z))
+                                   | None => Value_string None end
+                     | _ => Value_Err "function does not exist" end)
+  :: ("to_oct", fun l => match l with
+                     | v :: nil => match int_parts v with
+                                   | Some (z, w) => Value_string (Some (pg_base_digits 8 (if Nat.eqb w 64 then 64 else 32) z))
+                                   | None => Value_string None end
+                     | _ => Value_Err "function does not exist" end)
+  :: ("array_reverse", fun l => match l with a :: nil => with_arr (Value_J None) a (fun xs => VArr (rev xs))
+                                           | _ => Value_Err "function does not exist" end)
+  :: ("trim_array", fun l => match l with
+                     | a :: n :: nil => match int_parts n with
+                                        | Some (k, _) => with_arr (Value_J None) a (fun xs =>
+                                            if Z.ltb k 0 || Z.ltb (Z.of_nat (List.length xs)) k
+                                            then Value_Err "number of elements to trim must be between 0 and the array length"
+                                            else VArr (firstn (List.length xs - Z.to_nat k) xs))
+                                        | None => Value_J None end
+                     | _ => Value_Err "function does not exist" end)
+  :: nil.
+
+(** synonyms: the SQL name and the internal name of the same function in [pg_proc.dat] *)
+Definition pg_aliases : list (string * string) :=
+  ("character_length", "char_length") :: ("textlen", "length") :: ("dexp", "exp") :: ("dlog10", "log10")
+  :: ("dlog1", "ln") :: ("dround", "round") :: ("dtrunc", "trunc") :: ("dsqrt", "sqrt") :: ("dcbrt", "cbrt")
+  :: ("dpow", "power") :: ("pow", "power") :: ("numeric_exp", "exp") :: ("numeric_ln", "ln")
+  :: ("numeric_log", "log") :: ("numeric_sqrt", "sqrt") :: ("numeric_div_trunc", "div") :: nil.
+
+Definition with_aliases (t : list (string * (list value -> value))) : list (string * (list value -> value)) :=
+  t ++ flat_map (fun p => match string_assoc _ (snd p) t with Some f => (fst p, f) :: nil | None => nil end) pg_aliases.
+
 (** [substr] is a synonym of [substring] *)
-Definition pg_symbol_table : list (string * (list value -> value)) :=
+Definition pg_symbol_table_base : list (string * (list value -> value)) :=
   sys_table default_env "PostgreSQL" ++ pg_array_funs ++ pg_json_funs ++ pg_time_funs ++ pg_regex_funs ++ pg_string_table ++
   match string_assoc _ "substring" symbol_table with
   | Some f => ("substr", f) :: symbol_table
   | None => symbol_table
   end.
+Definition pg_symbol_table : list (string * (list value -> value)) :=
+  with_aliases (pg_closeout_funs ++ pg_symbol_table_base).
 
 Definition PostgreSQL : vsem :=
   mk_vsem "PostgreSQL"

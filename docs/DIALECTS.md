@@ -106,6 +106,37 @@ the value of a bare column in MariaDB, and the optimizer-visible differences (wh
 Percona's source and the PolarDB engine are not open for the SQL layer in the same way: for these two the model
 relies on the documentation (`docs.percona.com` could not be fetched; the feature comparison was read through a mirror).
 
+## Closeouts of the dialects (TODO 4.1-4.8)
+
+A closeout has two parts. The **functions**: `tools/functions/closeout.sh ENGINE SOURCE` reads the names which the
+engine registers from its source, asks Coq which of them the tables of the dialect have, and classifies the others
+(construct of the grammar, operator or `CAST`, excluded with a reason, not modelled yet); the result is
+`docs/closeouts/ENGINE.md`. The **constructs** of the `SELECT` statement: one table per dialect below.
+
+### PostgreSQL (4.1)
+
+Functions: `docs/closeouts/PostgreSQL.md` (`pg_proc.dat` at `b443bc7`: 2,816 names; 33 not modelled yet, each
+group with what it needs). Constructs (PostgreSQL 17, with `Versions.v` for 12-16):
+
+| Construct | Status |
+|---|---|
+| Types: integers (2/4/8 bytes), `numeric` with scale, `float4`/`float8`, `text`/`varchar`/`char`, `bool`, `date`, `time`, `timestamp[tz]`, `interval`, `json`, `jsonb`, arrays | modelled (`Values.v`, `PostgreSQL.v`) |
+| Geometric, network, range, text-search, XML, `money`, bit strings, `uuid`, `bytea` encodings | excluded: types outside the value domain (`docs/closeouts/PostgreSQL.md` lists their functions) |
+| `search_path`, `pg_catalog` | excluded: names are resolved before the query; the model's tables are named directly |
+| `TABLESAMPLE` | excluded: random (the result is any sub-bag); the runner's `sub_bag` can check it |
+| `FETCH FIRST ... ROWS ONLY \| WITH TIES`, `OFFSET` | modelled (`SQ_Fetch`, `F_Fetch_Ties`, PostgreSQL 13) |
+| `GROUPING SETS`, `ROLLUP`, `CUBE`, `GROUPING()` | modelled |
+| `LATERAL`, table functions, `WITH ORDINALITY` | modelled (`Fr_Fun`, `pg_table_funs`) |
+| `ROWS FROM (f(...), g(...))` | not modelled: the zip of several table functions (each one alone is modelled) |
+| `DISTINCT ON` | modelled as a derived form (`distinct_on`) |
+| `WITH ... [NOT] MATERIALIZED` | modelled: no effect on the result (a CTE without side effects) |
+| `WITH RECURSIVE ... SEARCH ... SET`, `CYCLE ... SET` | not modelled: the ordering column and the cycle mark (the recursion itself is modelled, bounded by `rec_fuel`) |
+| `ORDER BY ... USING <` / `>` | the same as `ASC` / `DESC` (the operators of the default B-tree class); other operators are excluded (user-defined operator classes) |
+| `NULLS FIRST/LAST`, `FILTER`, `GROUPS` frames, frame exclusion | modelled |
+| Collations | the model compares by code points (the `C` collation); ICU/libc collations are excluded (open issue: the tables of the collations) |
+| `interval` output styles (`IntervalStyle`) | the default `postgres` style only |
+| `INSERT ... RETURNING`, generated columns | outside the query language (no effect on `SELECT`) |
+
 ## Versions (TODO 4.10)
 
 `src/data/dialects/Versions.v` gives the release which introduced each construct (`introduced`), per family

@@ -56,6 +56,7 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `array_prepend` | PostgreSQL.v | json_arrays.md |
 | `array_remove` | PostgreSQL.v | json_arrays.md |
 | `array_replace` | PostgreSQL.v | json_arrays.md |
+| `array_reverse` | PostgreSQL.v | closeout.md |
 | `array_to_string` | PostgreSQL.v | json_arrays.md |
 | `array_upper` | PostgreSQL.v | json_arrays.md |
 | `ascii` | MySQL.v, OceanBase.v, PostgreSQL.v | strings.md |
@@ -99,6 +100,7 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `changes` | SystemFuns.v | system.md |
 | `char` | MySQL.v, SQLite.v | strings.md |
 | `char_length` | MySQL.v, Values.v | core.md |
+| `character_length` | PostgreSQL.v | closeout.md |
 | `chr` | OceanBase.v, PostgreSQL.v | strings.md |
 | `clock_timestamp` | PostgreSQL.v | datetime.md |
 | `coalesce` | MySQL.v, OceanBase.v, SQLite.v, Values.v | conditional.md |
@@ -136,9 +138,17 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `dayofmonth` | MySQL.v | core.md |
 | `dayofweek` | MySQL.v | core.md |
 | `dayofyear` | MySQL.v | core.md |
+| `dcbrt` | PostgreSQL.v | closeout.md |
 | `decode` | OceanBase.v | conditional.md |
 | `degrees` | ValueKit.v, Values.v | math.md |
+| `dexp` | PostgreSQL.v | closeout.md |
 | `div` | MySQL.v, SQLite.v, Values.v | core.md |
+| `dlog1` | PostgreSQL.v | closeout.md |
+| `dlog10` | PostgreSQL.v | closeout.md |
+| `dpow` | PostgreSQL.v | closeout.md |
+| `dround` | PostgreSQL.v | closeout.md |
+| `dsqrt` | PostgreSQL.v | closeout.md |
+| `dtrunc` | PostgreSQL.v | closeout.md |
 | `elt` | MySQL.v | strings.md |
 | `exp` | ValueKit.v, Values.v | math.md |
 | `extract` | MySQL.v, OceanBase.v, Values.v | datetime.md |
@@ -268,6 +278,7 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `mid` | MySQL.v | core.md |
 | `min` | SQLite.v | aggregates.md |
 | `min_scalar` | SQLite.v | core.md |
+| `min_scale` | PostgreSQL.v | closeout.md |
 | `minus` | MySQL.v, OceanBase.v, SQLite.v, Values.v | core.md |
 | `minute` | MySQL.v | core.md |
 | `mod` | MySQL.v, OceanBase.v, SQLite.v, Values.v | core.md |
@@ -293,6 +304,11 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `nullif` | MySQL.v, OceanBase.v, SQLite.v, Values.v | conditional.md |
 | `num_nonnulls` | PostgreSQL.v | conditional.md |
 | `num_nulls` | PostgreSQL.v | conditional.md |
+| `numeric_div_trunc` | PostgreSQL.v | closeout.md |
+| `numeric_exp` | PostgreSQL.v | closeout.md |
+| `numeric_ln` | PostgreSQL.v | closeout.md |
+| `numeric_log` | PostgreSQL.v | closeout.md |
+| `numeric_sqrt` | PostgreSQL.v | closeout.md |
 | `nvl` | OceanBase.v | conditional.md |
 | `nvl2` | OceanBase.v | conditional.md |
 | `octet_length` | MySQL.v, PostgreSQL.v, SQLite.v | strings.md |
@@ -309,7 +325,7 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `pi` | ValueKit.v, Values.v | math.md |
 | `plus` | MySQL.v, OceanBase.v, SQLite.v, Values.v | core.md |
 | `position` | MySQL.v, PostgreSQL.v, Values.v | strings.md |
-| `pow` | MySQL.v, SQLite.v, ValueKit.v | math.md |
+| `pow` | MySQL.v, PostgreSQL.v, SQLite.v, ValueKit.v | closeout.md |
 | `power` | MySQL.v, OceanBase.v, SQLite.v, ValueKit.v, Values.v | math.md |
 | `quarter` | MySQL.v | core.md |
 | `quote` | SQLite.v | strings.md |
@@ -340,6 +356,7 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `row_count` | SystemFuns.v | system.md |
 | `rpad` | MySQL.v, OceanBase.v, PostgreSQL.v | strings.md |
 | `rtrim` | MySQL.v, OceanBase.v, PostgreSQL.v, SQLite.v, Values.v | core.md |
+| `scale` | PostgreSQL.v | closeout.md |
 | `schema` | SystemFuns.v | system.md |
 | `sec_to_time` | MySQL.v | datetime.md |
 | `second` | MySQL.v | core.md |
@@ -382,27 +399,32 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `systimestamp` | OceanBase.v | core.md |
 | `tan` | ValueKit.v, Values.v | math.md |
 | `tanh` | ValueKit.v, Values.v | math.md |
+| `textlen` | PostgreSQL.v | closeout.md |
 | `time` | SQLite.v | datetime.md |
 | `time_format` | MySQL.v | datetime.md |
 | `time_to_sec` | MySQL.v | datetime.md |
 | `timediff` | MySQL.v | datetime.md |
 | `timestampdiff` | MySQL.v | datetime.md |
 | `to_base64` | MySQL.v | strings.md |
+| `to_bin` | PostgreSQL.v | closeout.md |
 | `to_char` | OceanBase.v, Values.v | datetime.md |
 | `to_date` | OceanBase.v, PostgreSQL.v | datetime.md |
 | `to_days` | MySQL.v | datetime.md |
-| `to_number` | OceanBase.v | math.md |
-| `to_hex` | PostgreSQL.v | strings.md |
+| `to_hex` | PostgreSQL.v | closeout.md |
 | `to_json` | Values.v | core.md |
 | `to_jsonb` | Values.v | core.md |
+| `to_number` | OceanBase.v | math.md |
+| `to_oct` | PostgreSQL.v | closeout.md |
 | `to_timestamp` | PostgreSQL.v | datetime.md |
 | `total` | SQLite.v | aggregates.md |
 | `total_changes` | SystemFuns.v | system.md |
 | `transaction_timestamp` | PostgreSQL.v | core.md |
 | `translate` | OceanBase.v, PostgreSQL.v | strings.md |
 | `trim` | MySQL.v, OceanBase.v, SQLite.v, Values.v | core.md |
+| `trim_array` | PostgreSQL.v | closeout.md |
 | `trim_both` | MySQL.v, OceanBase.v, PostgreSQL.v, SQLite.v | core.md |
 | `trim_leading` | MySQL.v, OceanBase.v, PostgreSQL.v, SQLite.v | core.md |
+| `trim_scale` | PostgreSQL.v | closeout.md |
 | `trim_trailing` | MySQL.v, OceanBase.v, PostgreSQL.v, SQLite.v | core.md |
 | `true` | MySQL.v, Values.v | core.md |
 | `trunc` | OceanBase.v, ValueKit.v, Values.v | datetime.md |
