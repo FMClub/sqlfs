@@ -268,3 +268,44 @@ Definition distinct_on (q : squery) (cols : list attribute) (keys : list sexpr) 
                (from_query (window q (w_as w_row_number keys lo rn :: nil)) :: nil)
                (pred "=" (col rn :: int 1 :: nil)).
 
+(** ** Oracle's hierarchical queries, [ROWNUM], [PIVOT] and [UNPIVOT] as derived forms (TODO 4.9)
+
+    [SELECT ... FROM t START WITH s CONNECT BY c]: the roots are the rows of [t] which satisfy [s], at
+    level 1; the children of a row are the rows of [t] which satisfy [c], where [PRIOR x] is the column
+    [x] of the parent, renamed [prior_x] ([prior] gives these names); [level] numbers the levels. This is
+    the recursive query which Oracle's documentation gives as the meaning of [CONNECT BY]; the rows are
+    a bag (Oracle lists them depth first: [ORDER SIBLINGS BY] is not modelled), and a cycle is not
+    detected ([NOCYCLE], [CONNECT_BY_ISCYCLE]: the recursion stops at [rec_fuel] with a failure, where
+    Oracle raises ORA-01436). *)
+Definition connect_by (r : string) (t : squery) (cols : list attribute) (prior : list (attribute * attribute))
+           (level : attribute) (start : scond) (c : scond) : squery :=
+  @SQ_WithRec TNull relname Set_All (Rel r)
+    (select_where (map (fun a => as_ (col a) a) cols ++ as_ (int 1) level :: nil) (from_query t :: nil) start)
+    (select_where (map (fun a => as_ (col a) a) cols ++ as_ (fn "+" (col (Attr_Z "#prior_level") :: int 1 :: nil)) level :: nil)
+       (join J_Inner (from_as (table r) (prior ++ (level, Attr_Z "#prior_level") :: nil)) (from_query t) c :: nil) c_true)
+    (select_where (map (fun a => as_ (col a) a) cols ++ as_ (col level) level :: nil) (from_table r :: nil) c_true).
+
+(** [WHERE ROWNUM <= n] without [ORDER BY]: any [n] rows (as [LIMIT n]) *)
+Definition rownum_le (q : squery) (n : N) : squery := order_limit q nil None (Some n).
+
+(** [PIVOT (agg (v) FOR k IN (k1 AS a1, ...))] over the grouping columns [gs]: each output column [ai] is the
+    aggregate of [v] over the rows whose [k] is [ki] ([CASE WHEN k = ki THEN v END]) *)
+Definition pivot (t : squery) (gs : list attribute) (ag : string) (v k : sexpr) (cases : list (sexpr * attribute)) : squery :=
+  select_full Set_All
+    (s_list (map (fun a => as_ (col a) a) gs ++
+             map (fun ka => as_ (agg ag (e_case (pred "=" (k :: fst ka :: nil)) v (cst NullZ))) (snd ka)) cases))
+    (from_query t :: nil) c_true (g_by (map col gs)) c_true.
+
+(** [UNPIVOT (v FOR k IN (c1 AS 'x1', ...))]: one row per column [ci] whose value is not NULL, with the kept
+    columns [keep], [k = xi] and [v] its value ([EXCLUDE NULLS], the default) *)
+Fixpoint unpivot (t : squery) (keep : list attribute) (k v : attribute) (cases : list (attribute * sexpr)) : squery :=
+  match cases with
+  | nil => select_where (map (fun a => as_ (col a) a) keep ++ as_ (cst NullZ) k :: as_ (cst NullZ) v :: nil)
+                        (from_query t :: nil) (c_not c_true)
+  | (c, x) :: rest =>
+    set_op_ Union Set_All
+      (select_where (map (fun a => as_ (col a) a) keep ++ as_ x k :: as_ (col c) v :: nil) (from_query t :: nil)
+                    (pred "is not null" (col c :: nil)))
+      (unpivot t keep k v rest)
+  end.
+

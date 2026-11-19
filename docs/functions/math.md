@@ -52,6 +52,7 @@ its table unless a note says otherwise. Tests: `src/testing/Test_Math.v`, `Test_
 | `factorial` | M (`numeric`; error < 0) | — | — | `numeric_fac` |
 | `width_bucket` | M (exact arithmetic) | — | — | `width_bucket_numeric`, `width_bucket_float8` |
 | `rand(N)` | — | M (first number of the sequence seeded with N) | — | `my_rnd_init`, `my_rnd` |
+| `to_number` (Oracle mode) | — | — | — | M in `OceanBaseOracle`: the strict conversion (`ORA-01722` otherwise); with a format model, `,` and `$` are removed first (`Test_OracleForms.v`) |
 | `rand()`, `random()` | X | X | X | not deterministic: the result is a set of values, which the deterministic model does not represent; an error "nondeterministic function" |
 | `setseed` | X | — | — | session state |
 

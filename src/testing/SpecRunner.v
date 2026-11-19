@@ -33,10 +33,13 @@ Record spec_case : Type :=
       sc_tables : list table_spec;
       sc_query : squery;
       sc_expected : list (list string);
-      sc_sql : string
+      sc_sql : string;
+      (** [LIMIT n] without [ORDER BY]: any [n] rows of the result of [sc_query] (TODO 3.10) *)
+      sc_limit : option nat
     }.
 
-Definition mk_case id ordered tabs q expected sql := mk_spec_case id ordered tabs q expected sql.
+Definition mk_case id ordered tabs q expected sql := mk_spec_case id ordered tabs q expected sql None.
+Definition mk_case_limit id (n : nat) tabs q expected sql := mk_spec_case id false tabs q expected sql (Some n).
 
 (** The database of a case *)
 Definition build_db (tabs : list table_spec) : db_state :=
@@ -102,11 +105,50 @@ Definition run_rows (d : vsem) (c : spec_case) (ncols : nat) : list (list NullVa
   map (fun t => map (fun i => dot (TD d) t (out_attr i)) (seq 0 ncols))
       (eval_query_list ORN (dialect_of d) (_basesort _ db) (_instance _ db) (to_dialect d (sc_query c))).
 
+(** the expected rows [e] are rows of [rs], each a different one *)
+Fixpoint sub_bag (rs : list (list NullValues.value)) (e : list (list string)) : bool :=
+  match e with
+  | nil => true
+  | x :: e' => match remove_matching x rs with Some rs' => sub_bag rs' e' | None => false end
+  end.
+
+(** The allowed orders of an ordered query ([allowed_ordered] of [SqlFull.v]): the expected rows are the
+    groups of peers in their order, the rows of a group in any order; with a [LIMIT], the last group may
+    be taken in part. *)
+Fixpoint groups_ok (gs : list (list (list NullValues.value))) (e : list (list string)) : bool :=
+  match gs with
+  | nil => match e with nil => true | _ => false end
+  | g :: gs' =>
+    let k := Nat.min (List.length g) (List.length e) in
+    sub_bag g (firstn k e) &&
+    (if Nat.ltb k (List.length g) then Nat.eqb (List.length e) k else groups_ok gs' (skipn k e))
+  end.
+
+Definition ties_ok (d : vsem) (c : spec_case) (ncols : nat) : bool :=
+  let db := build_db (sc_tables c) in
+  match order_groups ORN (dialect_of d) (_basesort _ db) (_instance _ db) (to_dialect d (sc_query c)) with
+  | Some (gs, lim) =>
+    let vgs := map (map (fun t => map (fun i => dot (TD d) t (out_attr i)) (seq 0 ncols))) gs in
+    let total := List.length (List.concat vgs) in
+    let n := match lim with Some n => Nat.min (N.to_nat n) total | None => total end in
+    Nat.eqb (List.length (sc_expected c)) n && groups_ok vgs (sc_expected c)
+  | None => false
+  end.
+
 Definition check_case (d : vsem) (c : spec_case) : bool :=
   let ncols := match sc_expected c with e :: _ => List.length e | nil => 0%nat end in
-  match sc_expected c with
-  | nil => Nat.eqb (List.length (run_rows d c 1)) 0%nat
-  | _ => (if sc_ordered c then match_ordered else match_unordered) (run_rows d c ncols) (sc_expected c)
+  match sc_limit c with
+  | Some n =>
+    (* any [n] rows of the result *)
+    let rs := run_rows d c (match ncols with O => 1 | _ => ncols end) in
+    Nat.eqb (List.length (sc_expected c)) (Nat.min n (List.length rs)) && sub_bag rs (sc_expected c)
+  | None =>
+    match sc_expected c with
+    | nil => Nat.eqb (List.length (run_rows d c 1)) 0%nat
+    | _ => if sc_ordered c
+           then match_ordered (run_rows d c ncols) (sc_expected c) || ties_ok d c ncols
+           else match_unordered (run_rows d c ncols) (sc_expected c)
+    end
   end.
 
 Definition failures (d : vsem) (cs : list spec_case) : list string :=

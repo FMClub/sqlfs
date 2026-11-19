@@ -397,6 +397,21 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
                                              | _, _ => Value_string None end
                           | v :: nil => match to_ts v with Some t => Value_string (Some (ora_date_text t)) | None => Value_string (text_of v) end
                           | _ => Value_string None end)
+  :: ("to_number", fun l =>
+        let conv v := if ora_isnull v then Value_D None
+                      else match strict_conv v with Some n => value_of_num n
+                           | None => Value_Err "ORA-01722: invalid number" end in
+        match l with
+        | v :: nil => conv v
+        (* a format model: its group separators and currency signs ([,] [G] [$] [L]) are not part of the
+           number; the digits [9] [0] and the point [.] [D] only bound the digits (documentation) *)
+        | v :: f :: nil => if ora_isnull f then Value_D None
+                           else match text_of v with
+                                | Some s => conv (Value_string (Some (string_of_list_ascii
+                                              (filter (fun c => negb (existsb (Ascii.eqb c) (list_ascii_of_string ",$")))
+                                                      (list_ascii_of_string s)))))
+                                | None => conv v end
+        | _ => Value_Err "wrong number of arguments" end)
   :: ("sysdate", fun _ => VTs statement_time 0)
   :: ("systimestamp", fun _ => VTsTz statement_time 6)
   :: ("add_months", fun l => match l with

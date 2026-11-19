@@ -56,7 +56,7 @@
 
 Set Implicit Arguments.
 
-Require Import Relations SetoidList List String Ascii Bool ZArith NArith QArith Qround.
+Require Import Relations SetoidList List String Ascii Bool ZArith NArith QArith Qround Permutation.
 
 Require Import BasicFacts ListFacts ListPermut ListSort OrderedSet
         FiniteSet FiniteBag FiniteCollection Join FlatData Tree Bool3 Formula
@@ -1946,5 +1946,58 @@ Definition eval_query_result (q : squery) : query_result :=
   if existsb row_error l then QR_Error else QR_Rows l.
 
 Definition sort_of_query (q : squery) : setA := squery_sort nil q.
+
+(** * The results which a query may give (TODO 3.10)
+
+    [ORDER BY] orders the rows by their keys: rows with equal keys (peers) may come in any order, and a
+    [LIMIT] may keep any of the peers at its boundary. [order_groups q] gives the groups of peers of an
+    ordered query (at the top, without [OFFSET]), in their order, and its [LIMIT]; [allowed_ordered] says
+    whether a list of rows is one of the results which the engines may give. *)
+Fixpoint group_peers (specs : list order_spec) (cur : option (list value)) (acc : list tuple)
+         (l : list (list value * tuple)) : list (list tuple) :=
+  match l with
+  | nil => match acc with nil => nil | _ => rev acc :: nil end
+  | (k, t) :: r =>
+    match cur with
+    | Some c => match compare_keys specs c k with
+                | Eq => group_peers specs cur (t :: acc) r
+                | _ => rev acc :: group_peers specs (Some k) (t :: nil) r
+                end
+    | None => group_peers specs (Some k) (t :: nil) r
+    end
+  end.
+
+Definition order_groups (q : squery) : option (list (list tuple) * option N) :=
+  match q with
+  | SQ_Order q' lo None lim =>
+    let rows :=
+        match q' with
+        | SQ_Select sp => eval_sspec nil nil sp (map (fun o => match o with O_By e _ _ => e end) lo)
+        | _ => map (fun t => (t, slice_t t :: nil)) (eval_squery nil nil q')
+        end in
+    let keys (x : tuple * senv) :=
+        map (fun o => match o with
+                      | O_By e _ _ => match is_output_col (fst x) e with
+                                      | Some v => v
+                                      | None => eval_sexpr nil (snd x) e
+                                      end
+                      end) lo in
+    let specs := map sorder_spec lo in
+    Some (group_peers specs None nil (map (fun x => (keys x, fst x)) (sort_on specs keys rows)), lim)
+  | _ => None
+  end.
+
+Definition allowed_ordered (groups : list (list tuple)) (lim : option N) (result : list tuple) : Prop :=
+  exists gs, Forall2 (@Permutation tuple) groups gs /\
+             result = match lim with Some n => firstn (N.to_nat n) (List.concat gs) | None => List.concat gs end.
+
+(** the order of the evaluation is one of the allowed results *)
+Lemma allowed_ordered_refl :
+  forall groups lim, allowed_ordered groups lim (match lim with Some n => firstn (N.to_nat n) (List.concat groups) | None => List.concat groups end).
+Proof.
+intros groups lim; exists groups; split.
+- induction groups as [ | g groups IH]; constructor; [apply Permutation_refl | apply IH].
+- apply refl_equal.
+Qed.
 
 End Sec.

@@ -42,22 +42,29 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 752 queries are translated and replayed. Dates, times
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 769 queries are translated and replayed. Dates, times
 and `datetime(6)` columns are translated since TODO 1.5. String functions, bit operators, `LIKE ... ESCAPE`
 and the standard syntaxes `TRIM(... FROM ...)`, `POSITION`, `SUBSTRING ... FROM` are translated since TODO
 2.1–2.3.
 
-Run 15 is the latest, made after TODO 3.4, when the translator started reading `FROM DUAL` and table functions.
-In it, **749** queries gave the recorded result: every query except the two tie orders and the time-limit
-case below. The remaining cases are:
+Run 16 is the latest, made after TODO 3.9–3.11. Since then the runner checks a query whose order is not fully determined
+against the groups of rows with equal sort keys (`ties_ok`), and a `LIMIT` without `ORDER BY` as any sub-bag of
+the right size (`limit_any`). The translator also reads aliases in `HAVING` and `ORDER BY`, locking clauses
+(`FOR UPDATE`, `LOCK IN SHARE MODE`: no effect on the rows), and a single-column result whose only row is
+`''`. In that run **768** queries gave the recorded result: every query except the time-limit case below.
 
-- `expr_floor:56` and `expr_floor:57` (`ORDER BY floor(i4)`) list the rows with equal keys in another order:
-  the order of rows with equal sort keys is not specified by SQL, and the model keeps the order of the
-  table where OceanBase keeps the order of its plan. Not a deviation of the semantics.
 - `rqg_subquery_semijoin_nested_timeout` (one query) exceeds the time limit of the runner (`FILE_TIMEOUT`,
   900 s): the tuples of the model are lists, so a row of many columns is slow to build.
   `join_many_table` (32 left joins) passes since the labels of a joined row are computed once
   (`join_tuple`) and the rows of a join are checked for errors only when an operand holds a failed row.
+
+Two deviations of the model were found by run 16 and fixed. `SUBSTRING_INDEX` with a negative count searches
+for the delimiter from the right, which differs when the occurrences overlap
+(`substring_index('aaaaaaaaa1', 'aa', -1)` is `'1'`). And a count of `9223372036854775807` no longer builds a
+unary number (the counts are bounded by the number of pieces).
+
+Run 15 (749/752) left the two tie orders of `expr_floor:56` and `expr_floor:57` (`ORDER BY floor(i4)`).
+They pass with `ties_ok`: the order of rows with equal sort keys is not specified by SQL.
 
 The queries on a table whose rows a foreign key may change by a cascade (`ON DELETE CASCADE`, `SET NULL`)
 after a statement on its parent are not translated: the translator does not replay the cascades.
