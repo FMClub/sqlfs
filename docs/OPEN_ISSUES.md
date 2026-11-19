@@ -129,7 +129,7 @@ Still open:
   checked (`accepted_by`); `ONLY_FULL_GROUP_BY` and the bare columns of SQLite (the value of an
   arbitrary row, or the row of the `min`/`max`) are not.
 - **Constructs of the dialects which `SqlFull` does not have**: `RANGE` window frames with an
-  offset, `WITH RECURSIVE`,
+  offset,
   `FETCH FIRST ... WITH TIES` and `PERCENT` (Oracle mode), `ORDER BY` inside `string_agg`.
 - **Oracle mode** is checked against the documentation and the shared engine code, because the
   open-source repository of OceanBase has neither its parser nor recorded results for it.
@@ -138,8 +138,7 @@ Still open:
 ## I7. SQL features which are not covered
 
 In the expected order of difficulty; priorities are to be decided:
-- recursive CTEs (`WITH RECURSIVE`): termination is not guaranteed, so this
-  needs a fuel parameter or a condition for the existence of a fixpoint;
+- (done) recursive CTEs: `SQ_WithRec` iterates the step on the working table (`UNION ALL` appends, `UNION` keeps only new rows and stops on a fixpoint); the number of steps is bounded by `rec_fuel` (1000, as MySQL's `cte_max_recursion_depth`), so a non-terminating recursion returns the rows of the first 1000 steps instead of an error; mutual and multiple recursion are not modelled;
 - (done) `GROUPING SETS` / `ROLLUP` / `CUBE` / `GROUPING()`: grouping expressions that a set does not group read as NULL; limitation: `ORDER BY` keys are not masked;
 - `RANGE` window frames with a numeric offset, frame exclusion;
 - date/time types, floating-point numbers, collations;

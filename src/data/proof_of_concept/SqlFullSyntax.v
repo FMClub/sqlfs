@@ -195,6 +195,7 @@ Definition order_by (q : squery) lo : squery := @SQ_Order TNull relname q lo Non
 Definition order_limit (q : squery) lo (off lim : option N) : squery := 
   @SQ_Order TNull relname q lo off lim.
 Definition with_ (r : string) (q1 q2 : squery) : squery := @SQ_With TNull relname (Rel r) q1 q2.
+Definition with_rec (sq : set_quantifier) (r : string) (q1 q2 q3 : squery) : squery := @SQ_WithRec TNull relname sq (Rel r) q1 q2 q3.
 Definition window (q : squery) lw : squery := @SQ_Window TNull relname q lw.
 Definition w_as f (lp : list sexpr) lo (a : attribute) := @W_As TNull relname f lp lo a.
 Definition w_agg (f : string) (e : sexpr) (fr : frame) := 

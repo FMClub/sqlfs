@@ -157,6 +157,8 @@ Inductive feature : Type :=
   (** [e op ANY (q)], [e op ALL (q)] *)
   | F_Any_All
   | F_With
+  (** [WITH RECURSIVE] *)
+  | F_Recursive
   (** [GROUPING SETS], [ROLLUP], [CUBE] *)
   | F_Grouping_Sets
   | F_Rollup
@@ -253,6 +255,8 @@ with squery : Type :=
   | SQ_Window : squery -> list swindow -> squery
   (** [WITH r AS (q1) q2] *)
   | SQ_With : relname -> squery -> squery -> squery
+  (** [WITH RECURSIVE r AS (base UNION [ALL] step) body]: [step] reads [r] *)
+  | SQ_WithRec : set_quantifier -> relname -> squery -> squery -> squery -> squery
 
 (** A query specification, that is a SELECT block. *)
 with sspec : Type :=
@@ -467,6 +471,8 @@ with squery_uses (q : squery) {struct q} : list use :=
                   end
                 end) lw
   | SQ_With _ q1 q2 => (U_Feature F_With) :: squery_uses q1 ++ squery_uses q2
+  | SQ_WithRec _ _ q1 q2 q3 =>
+    (U_Feature F_With) :: (U_Feature F_Recursive) :: squery_uses q1 ++ squery_uses q2 ++ squery_uses q3
   end
 
 with sspec_uses (sp : sspec) {struct sp} : list use :=
@@ -541,6 +547,7 @@ Fixpoint squery_sort (ce : cte_env) (q : squery) {struct q} : setA :=
   | SQ_Window q lw =>
     Fset.union (A T) (squery_sort ce q) (Fset.mk_set (A T) (map swindow_att lw))
   | SQ_With r q1 q2 => squery_sort ((r, (squery_sort ce q1, nil)) :: ce) q2
+  | SQ_WithRec _ r q1 _ q3 => squery_sort ((r, (squery_sort ce q1, nil)) :: ce) q3
   end
 
 with sspec_sort (ce : cte_env) (sp : sspec) {struct sp} : setA :=
@@ -571,6 +578,12 @@ Definition slice := (setA * list tuple * list sexpr)%type.
 Definition senv := list slice.
 
 Definition slice_t (t : tuple) : slice := (labels T t, t :: nil, nil).
+
+(** The number of iterations of a recursive CTE which are computed (the engines bound it too:
+    [cte_max_recursion_depth] is 1000 in MySQL). *)
+Definition rec_fuel : nat := 1000.
+
+Definition is_distinct (sq : set_quantifier) : bool := match sq with Set_Distinct => true | Set_All => false end.
 
 Definition slice_gs (sa : setA) (g : list tuple) (hid : list sexpr) : slice :=
   (match g with t :: _ => labels T t | nil => sa end, g, hid).
@@ -643,6 +656,9 @@ with squery_cols (ce : cte_env) (q : squery) {struct q} : list attribute :=
   | SQ_Window q _ => squery_cols ce q
   | SQ_With r q1 q2 => 
     squery_cols ce q1 ++ squery_cols ((r, (squery_sort ce q1, nil)) :: ce) q2
+  | SQ_WithRec _ r q1 q2 q3 => 
+    let ce' := (r, (squery_sort ce q1, nil)) :: ce in
+    squery_cols ce q1 ++ squery_cols ce' q2 ++ squery_cols ce' q3
   end
 
 with sspec_cols (ce : cte_env) (sp : sspec) {struct sp} : list attribute :=
@@ -737,6 +753,9 @@ with squery_foreign (ce : cte_env) (sa : setA) (q : squery) {struct q} : bool :=
   | SQ_Window q _ => squery_foreign ce sa q
   | SQ_With r q1 q2 => 
     squery_foreign ce sa q1 || squery_foreign ((r, (squery_sort ce q1, nil)) :: ce) sa q2
+  | SQ_WithRec _ r q1 q2 q3 => 
+    let ce' := (r, (squery_sort ce q1, nil)) :: ce in
+    squery_foreign ce sa q1 || squery_foreign ce' sa q2 || squery_foreign ce' sa q3
   end.
 
 (** Does this expression contain an aggregate of the block, the FROM clause of
@@ -1247,6 +1266,25 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
     fold_left (fun rows w => w rows) compiled (eval_squery ce env q)
   | SQ_With r q1 q2 =>
     eval_squery ((r, (squery_sort ce q1, eval_squery ce env q1)) :: ce) env q2
+  | SQ_WithRec sq r q1 q2 q3 =>
+    let sa := squery_sort ce q1 in
+    let dedup (l : list tuple) := eval_set_op Union Set_Distinct l nil in
+    let base := if is_distinct sq then dedup (eval_squery ce env q1) else eval_squery ce env q1 in
+    (* the working table is replaced at each step; [rec_fuel] bounds the number of steps *)
+    let res :=
+        (fix loop (n : nat) (acc work : list tuple) {struct n} : list tuple :=
+           match n with
+           | S n' =>
+             match work with
+             | nil => acc
+             | _ =>
+               let new := eval_squery ((r, (sa, work)) :: ce) env q2 in
+               let new' := if is_distinct sq then eval_set_op Diff Set_Distinct new acc else new in
+               loop n' (acc ++ new') new'
+             end
+           | _ => acc
+           end) rec_fuel base base in
+    eval_squery ((r, (sa, res)) :: ce) env q3
   end
 
 (** The rows of a SELECT block, each of them together with the environment in
