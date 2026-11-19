@@ -198,6 +198,8 @@ Definition order_limit (q : squery) lo (off lim : option N) : squery :=
   @SQ_Order TNull relname q lo off lim.
 Definition fetch_first (q : squery) lo (off : option N) (ties percent : bool) (n : N) : squery :=
   @SQ_Fetch TNull relname q lo off ties percent n.
+Definition agg_x (f : string) (e : sexpr) (sep : option sexpr) lo : sexpr :=
+  @E_AggX TNull relname (Aggregate f) Set_All e sep lo c_true.
 Definition with_ (r : string) (q1 q2 : squery) : squery := @SQ_With TNull relname (Rel r) q1 q2.
 Definition with_rec (sq : set_quantifier) (r : string) (q1 q2 q3 : squery) : squery := @SQ_WithRec TNull relname sq (Rel r) q1 q2 q3.
 Definition window (q : squery) lw : squery := @SQ_Window TNull relname q lw.
@@ -229,3 +231,13 @@ Definition from_natural_join (f1 : sfrom) (q2 : squery)
           (from_as q2 (List.combine la lb ++ List.map (fun a => (a, a)) rest))
           (C_And_N (List.map (fun ab => pred "=" (col (fst ab) :: col (snd ab) :: nil))
                              (List.combine la lb))).
+
+(** [SELECT DISTINCT ON (keys) cols FROM q ORDER BY lo]: the first row of each group of [keys]
+    in the order [lo], computed with [ROW_NUMBER] ([rn] must be a fresh attribute).
+    The result of [DISTINCT ON] without a final [ORDER BY] is not ordered; the ties of [lo] are
+    resolved as in the sort of the window, as in the engines (which leave the choice open). *)
+Definition distinct_on (q : squery) (cols : list attribute) (keys : list sexpr) lo (rn : attribute) : squery :=
+  select_where (map (fun a => as_ (col a) a) cols)
+               (from_query (window q (w_as w_row_number keys lo rn :: nil)) :: nil)
+               (pred "=" (col rn :: int 1 :: nil)).
+

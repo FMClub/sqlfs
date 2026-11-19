@@ -238,6 +238,8 @@ Definition lite_aggregate_table : list (string * (list value -> value)) :=
   :: ("min", agg_extremum_by is_null lite_order is_Lt)
   :: ("max", agg_extremum_by is_null lite_order is_Gt)
   :: ("group_concat", agg_concat_by is_null ",")
+  :: ("group_concat_sep", agg_concat_sep_by is_null ",")
+  :: ("string_agg_sep", agg_concat_sep_by is_null ",")
   :: nil.
 
 (** The constructs of SQLite 3.39 and later: no [LATERAL], no [INTERSECT ALL] nor 
