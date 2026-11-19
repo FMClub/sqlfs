@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns Aggregates TemporalFuns.
+Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns Aggregates TemporalFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -508,7 +508,7 @@ Definition OceanBaseOracle : vsem :=
           (table_of_list (like_table ora_skit false (fun c => c) (fun c => c) None
                           ++ ("regexp_like", rx_like ora_rx false) :: ("not regexp_like", fun l => negb3 (rx_like ora_rx false l))
                           :: ora_pred_table))
-          (table_of_list ora_symbol_table)
+          (table_of_list (sys_table default_env "OceanBase (Oracle mode)" ++ ora_symbol_table))
           (table_of_list ora_aggregate_table)
           ora_isnull
           ora_truth

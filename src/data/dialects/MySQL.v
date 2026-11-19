@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -944,7 +944,7 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           (table_of_list (like_table my_skit true (rep_of (ms_coll ss)) (rep_of (ms_coll ss)) (Some 92)
                           ++ ("regexp", rx_like my_rx false) :: ("not regexp", fun l => negb3 (rx_like my_rx false l))
                           :: my_pred_table))
-          (table_of_list my_symbol_table)
+          (table_of_list (sys_table default_env name ++ my_symbol_table))
           (table_of_list my_aggregate_table)
           is_null
           my_truth

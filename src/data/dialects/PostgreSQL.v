@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -449,7 +449,7 @@ Definition pg_json_preds : list (string * (list value -> bool3)) :=
 
 (** [substr] is a synonym of [substring] *)
 Definition pg_symbol_table : list (string * (list value -> value)) :=
-  pg_array_funs ++ pg_json_funs ++ pg_time_funs ++ pg_regex_funs ++ pg_string_table ++
+  sys_table default_env "PostgreSQL" ++ pg_array_funs ++ pg_json_funs ++ pg_time_funs ++ pg_regex_funs ++ pg_string_table ++
   match string_assoc _ "substring" symbol_table with
   | Some f => ("substr", f) :: symbol_table
   | None => symbol_table

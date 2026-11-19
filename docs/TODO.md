@@ -308,6 +308,10 @@ Targets: every function of the table is either modelled or has an explicit exclu
     element. The array functions, `ANY`/`ALL` over arrays, `@>`, `<@` and `&&` are modelled.
   - The translator reads `ARRAY[...]`, `a[i]`, `a[i:j]` and `op ANY (array)`.
 - **2.9 System and information functions**: `version`, `current_user`, `database`, `current_schema`, `connection_id`, `found_rows`, `last_insert_id`, `row_count`: environment-supplied constants.
+  **Status: DONE**. The functions read the record `sys_env` of `SystemFuns.v`, whose value `default_env` describes a
+  fresh `root` session on database `test`. The table is in `docs/functions/system.md` and the tests in
+  `src/testing/Test_System.v`. The translator reads the niladic forms without parentheses (`current_user` …).
+  Excluded: nondeterministic or side-effecting functions (`uuid`, `sleep`, `benchmark`) and the catalog functions.
 - **2.10 Arity and type checking**: acceptance checks argument counts and (after 1.9) argument types per dialect, with the engine's error; unknown functions are errors, not NULL (today `vs_symb` gives NULL for unknown names).
 - **2.11 Provenance table**: every entry of every table has a `source` field (file/page) kept in a generated markdown (`docs/functions/*.md`); a script checks that no entry lacks one.
 

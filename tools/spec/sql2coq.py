@@ -628,6 +628,12 @@ class P:
                     items.append(self.expr())
             self.need_op(']')
             return self.postfix(('call', 'array', items, False, False))
+        # the niladic functions written without parentheses
+        if t[0] in ('id', 'kw') and self.peek(1) != ('op', '(') and \
+                t[1].lower() in (('current_user', 'session_user', 'current_role', 'current_catalog', 'current_schema', 'user')
+                                 if ENGINE == 'postgresql' else ('current_user',) if ENGINE == 'mysql' else ()):
+            self.i += 1
+            return ('call', t[1].lower(), [], False, False)
         if self.kw('binary'):
             raise Skip('construct')
         if t[0] in ('id', 'kw'):
@@ -953,7 +959,10 @@ FUNS = {'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power',
         'jsonb_set', 'jsonb_insert', 'jsonb_strip_nulls', 'json_strip_nulls', 'jsonb_pretty', 'array_length',
         'cardinality', 'array_append', 'array_prepend', 'array_cat', 'array_position', 'array_positions',
         'array_remove', 'array_replace', 'array_to_string', 'string_to_array', 'array_lower', 'array_upper',
-        'array_ndims', 'array_dims'}
+        'array_ndims', 'array_dims', 'version', 'database', 'schema', 'user', 'current_user', 'session_user',
+        'system_user', 'connection_id', 'last_insert_id', 'row_count', 'found_rows', 'current_database',
+        'current_schema', 'current_catalog', 'current_role', 'pg_backend_pid', 'sqlite_version', 'last_insert_rowid',
+        'changes', 'total_changes'}
 ALIAS = {'ucase': 'upper', 'lcase': 'lower', 'character_length': 'char_length'}
 
 
