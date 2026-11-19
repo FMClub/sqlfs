@@ -53,6 +53,7 @@ data/proof_of_concept/SqlFullSyntax.v
 testing/Test_SqlFull.v
 testing/Test_Audit.v
 testing/Test_Dialect.v
+data/dialects/Arity.v
 data/dialects/Dialects.v
 data/dialects/CollationData.v
 data/dialects/Collation.v
@@ -130,6 +131,7 @@ testing/Test_OrderedSet.v
 testing/Test_DateTime.v
 testing/Test_JsonFuns.v
 testing/Test_System.v
+testing/Test_Arity.v
 testing/Test_Integer.v
 testing/Test_Collation.v
 testing/Test_Truth.v

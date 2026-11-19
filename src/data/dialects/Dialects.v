@@ -24,7 +24,7 @@ Require Import Bool3 FlatData ListFacts OrderedSet
         FiniteSet FiniteBag FiniteCollection Tree Formula SqlFull.
 
 Import Tuple.
-Require Import Values TuplesImpl GenericInstance.
+Require Import Values TuplesImpl GenericInstance Arity.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -82,13 +82,18 @@ Definition vs_interp_predicate (d : vsem) (p : Values.predicate) : list value ->
 Definition vs_interp_symbol (d : vsem) (f : Values.symbol value) : list value -> value :=
   match f with
   | Values.Symbol _ s =>
+    (* an unknown function, or a call with a number of arguments which the function does not take, is an
+       error (the engines reject the query; [accepted_by] does too) *)
+    fun l =>
+    if negb (arity_ok (vs_name d) s (List.length l)) then NullValues.Value_Err "wrong number of arguments"
+    else
     match vs_symb d s with
-    | Some g => g
+    | Some g => g l
     | None =>
       (* a predicate used as a function *)
       match vs_pred d s with
-      | Some p => fun l => vs_of_truth d (p l)
-      | None => fun _ => NullValues.Value_Z None
+      | Some p => vs_of_truth d (p l)
+      | None => NullValues.Value_Err "function does not exist"
       end
     end
   | Values.CstVal _ v =>
@@ -123,9 +128,9 @@ Definition is_some {A : Type} (o : option A) : bool := match o with Some _ => tr
 
 (** A function symbol is known if it is a function of the dialect or one of its predicates
     (which a dialect can use as a boolean function). *)
-Definition vs_known_symbol (d : vsem) (f : Values.symbol value) : bool :=
+Definition vs_known_symbol (d : vsem) (f : Values.symbol value) (n : nat) : bool :=
   match f with
-  | Values.Symbol _ s => orb (is_some (vs_symb d s)) (is_some (vs_pred d s))
+  | Values.Symbol _ s => andb (orb (is_some (vs_symb d s)) (is_some (vs_pred d s))) (arity_ok (vs_name d) s n)
   | Values.CstVal _ _ => true
   end.
 

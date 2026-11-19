@@ -24,3 +24,5 @@ jobs:
       - name: Revert permissions
         if: always()
         run: sudo chown -R 1001:116 .
+      - name: Check the provenance of the function tables
+        run: python3 tools/functions/check_provenance.py

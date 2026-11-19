@@ -184,7 +184,7 @@ known gap and its status; it is updated by every pull request which touches one 
 | # | Gap | Status |
 |---|---|---|
 | 1 | Aggregate home block, correlated subqueries | resolved (PR #7) |
-| 2 | Names of functions, predicates and aggregates are checked per dialect | resolved (PR #7) |
+| 2 | Names of functions, predicates and aggregates are checked per dialect | resolved (PR #7); arities of functions checked, unknown functions are errors (TODO 2.10) |
 | 3 | `GROUPING SETS`, `ROLLUP`, `CUBE`, `GROUPING()`, `ORDER BY` under grouping sets | resolved (PR #8, tests of `ORDER BY` added later) |
 | 4 | `WITH RECURSIVE` | resolved, bounded by `rec_fuel` (PR #9); mutual recursion not modelled |
 | 5 | Bare columns (`ONLY_FULL_GROUP_BY`) | resolved for acceptance (PR #10); the value of a bare column in SQLite/MariaDB/OceanBase is not modelled; no functional dependencies |

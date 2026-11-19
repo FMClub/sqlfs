@@ -62,7 +62,7 @@ Definition CI : dialect TNull :=
                        | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false 
                        | _ => true 
                        end)
-             (fun _ => true) (fun _ => true) (fun _ => true)
+             (fun _ _ => true) (fun _ => true) (fun _ => true)
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
              NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v) (fun _ => false)
              (fun _ => 0%nat) (fun _ _ l => l).
