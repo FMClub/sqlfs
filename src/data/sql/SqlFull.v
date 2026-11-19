@@ -215,7 +215,7 @@ Record dialect : Type :=
       (** the constructs which the dialect supports *)
       supports : feature -> bool;
       (** the function symbols, the predicates and the aggregates which the dialect has *)
-      known_symbol : symb -> bool;
+      known_symbol : symb -> nat -> bool;
       known_predicate : predicate -> bool;
       known_aggregate : aggregate -> bool;
       (** * Errors
@@ -508,7 +508,7 @@ Definition block_has_bare_column (s : sselect) (g : sgroup) (h : scond) : bool :
     symbol, a predicate or an aggregate. *)
 Inductive use : Type :=
   | U_Feature : feature -> use
-  | U_Symbol : symb -> use
+  | U_Symbol : symb -> nat -> use
   | U_Pred : predicate -> use
   | U_Agg : aggregate -> use.
 
@@ -525,7 +525,7 @@ Definition frame_bound_is_groups (f : frame) : list use :=
 Fixpoint sexpr_uses (e : sexpr) {struct e} : list use :=
   match e with
   | E_Const _ | E_Col _ => nil
-  | E_Fun f l => U_Symbol f :: flat_map sexpr_uses l
+  | E_Fun f l => U_Symbol f (List.length l) :: flat_map sexpr_uses l
   | E_Agg ag _ e c => 
     U_Agg ag :: sexpr_uses e ++ scond_uses c ++
     match c with C_True => nil | _ => (U_Feature F_Filter_Agg) :: nil end
@@ -629,7 +629,7 @@ with sfrom_uses (f : sfrom) {struct f} : list use :=
 Definition use_ok (u : use) : bool :=
   match u with
   | U_Feature f => supports O f
-  | U_Symbol f => known_symbol O f
+  | U_Symbol f n => known_symbol O f n
   | U_Pred p => known_predicate O p
   | U_Agg a => known_aggregate O a
   end.

@@ -313,7 +313,24 @@ Targets: every function of the table is either modelled or has an explicit exclu
   `src/testing/Test_System.v`. The translator reads the niladic forms without parentheses (`current_user` …).
   Excluded: nondeterministic or side-effecting functions (`uuid`, `sleep`, `benchmark`) and the catalog functions.
 - **2.10 Arity and type checking**: acceptance checks argument counts and (after 1.9) argument types per dialect, with the engine's error; unknown functions are errors, not NULL (today `vs_symb` gives NULL for unknown names).
+  **Status: DONE for arity and unknown functions; argument types are part of the static typing of 1.9 / 6.2.**
+  - `U_Symbol` carries the number of arguments of a call. `known_symbol` of a dialect checks it against
+    the dialect's ranges in `Arity.v`, which are taken from the manuals. Some families differ: MySQL
+    `LPAD` takes 3 arguments, MariaDB 2 or 3; SQLite `coalesce` needs 2 arguments; MySQL `GREATEST` needs 2.
+  - A call of the wrong arity is rejected by `accepted_by`, and its evaluation is an error.
+  - An unknown function is an error at evaluation (`vs_interp_symbol`), not NULL.
+  - Tests are in `src/testing/Test_Arity.v`.
 - **2.11 Provenance table**: every entry of every table has a `source` field (file/page) kept in a generated markdown (`docs/functions/*.md`); a script checks that no entry lacks one.
+  **Status: DONE**. Every entry of the function, predicate and aggregate tables is documented, with its sources, in one of the
+  tables of `docs/functions/` (`math`, `strings`, `conditional`, `regex`, `aggregates`, `datetime`,
+  `json_arrays`, `system`, and `core` for the operators, casts, Phase 1 functions and internal names).
+  - `tools/functions/check_provenance.py` extracts the names from the Coq sources and checks that each one
+    is documented.
+  - With `--write`, it regenerates `docs/functions/INDEX.md`: every name, the files which define it and the
+    document which describes it. The table has 421 names and none is missing.
+  - The check runs in CI (`.github/workflows/build.yml`).
+  - The source is a row of a document, not a field of the Coq tables: the tables stay plain lists of
+    functions.
 
 ---------------------------------------------------------------------------------------------------------
 
