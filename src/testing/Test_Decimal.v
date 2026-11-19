@@ -108,3 +108,24 @@ Proof. check. Qed.
 
 Example ora_literal : text OceanBaseOracle d150 = "1.5".
 Proof. check. Qed.
+
+(** * [CAST(x AS DECIMAL(p, s))] *)
+
+Example my_cast_decimal : text MySQL (fn "cast_decimal" [cst (VD 12345 3); int 5; int 2]) = "12.35".
+Proof. check. Qed.
+
+(** out of range: the largest value of the type (with a warning) *)
+Example my_cast_decimal_clip : text MySQL (fn "cast_decimal" [int 1000; int 3; int 1]) = "99.9".
+Proof. check. Qed.
+
+Example pg_cast_numeric : text PostgreSQL (fn "cast_decimal" [cst (VD 12345 3); int 5; int 2]) = "12.35".
+Proof. check. Qed.
+
+(** out of range: an error *)
+Example pg_cast_numeric_overflow : 
+  match eval_query_result ORN (dialect_of PostgreSQL) (_basesort _ init_db) (_instance _ init_db) 
+          (to_dialect PostgreSQL (select_where [as_ (fn "cast_decimal" [int 1000; int 3; int 1]) c0] [] c_true)) with
+  | QR_Error _ => true
+  | _ => false
+  end = true.
+Proof. check. Qed.

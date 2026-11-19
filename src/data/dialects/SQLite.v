@@ -252,6 +252,8 @@ Definition lite_aggregate_table_raw : list (string * (list value -> value)) :=
     on texts see that text. *)
 Definition lite_real (v : value) : value :=
   match v with
+  (* an integer result which overflows 64 bits is a [REAL] ([sqlite3AddInt64] fails) *)
+  | Value_Z (Some z) => if int_range_ok 64 z then v else to_float false (Qc_of_Z z)
   | Value_Q (Some q) => to_float false q
   | Value_Q None => Value_F None
   | Value_D (Some (q, _, _)) => to_float false q
@@ -276,6 +278,11 @@ Definition lite_symbol_table : list (string * (list value -> value)) :=
 Definition lite_aggregate_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) ("group_concat" :: "group_concat_sep" :: "string_agg_sep" :: nil)
                 then (fst p, fun l => (snd p) (lite_textual l))
+                (* [sum] of integers which overflows is an error ([integer overflow], [sumStep]); [total] is a REAL *)
+                else if String.eqb (fst p) "sum"
+                then (fst p, fun l => match (snd p) l with
+                                      | Value_Z (Some z) => if int_range_ok 64 z then Value_Z (Some z) else Value_Err "integer overflow"
+                                      | r => lite_real r end)
                 else (fst p, fun l => lite_real ((snd p) l))) lite_aggregate_table_raw.
 
 Definition lite_supports (f : feature) : bool :=

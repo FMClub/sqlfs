@@ -54,6 +54,8 @@ Definition cell_ok (v : NullValues.value) (s : string) : bool :=
   else match v with
        | NullValues.Value_Z (Some z) => 
          match parse_number s with (n, true) => match num_cmp (NullValues.Num_Z z) n with Eq => true | _ => false end | _ => false end
+       | NullValues.Value_I (Some (z, _)) => 
+         match parse_number s with (n, true) => match num_cmp (NullValues.Num_Z z) n with Eq => true | _ => false end | _ => false end
        | NullValues.Value_Q (Some q) => 
          match parse_number s with (n, true) => match num_cmp (NullValues.Num_Q q) n with Eq => true | _ => false end | _ => false end
        (* a decimal is compared by its text: the engine prints its scale *)
