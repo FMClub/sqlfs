@@ -94,7 +94,7 @@ def tokenize(s):
         elif s[i:i + 2] in ('<=', '>=', '<>', '!=', '||', '&&', ':=', '<<', '>>'):
             toks.append(('op', s[i:i + 2]))
             i += 2
-        elif c in '+-*/%=<>(),.;@&|^~':
+        elif c in '+-*/%=<>(),.;@&|^~!':
             toks.append(('op', c))
             i += 1
         else:
@@ -357,7 +357,7 @@ class P:
         while True:
             neg = False
             save = self.i
-            if self.kw('not') and self.peek(1)[1].lower() in ('in', 'like', 'ilike', 'between', 'regexp', 'rlike'):
+            if self.kw('not') and self.peek(1)[1].lower() in ('in', 'like', 'ilike', 'between', 'regexp', 'rlike', 'similar'):
                 self.i += 1
                 neg = True
             if self.eat_kw('is'):
@@ -404,13 +404,32 @@ class P:
                 self.need_kw('and')
                 hi = self.e_bitor()
                 l = ('between', neg, l, lo, hi, sym)
-            elif self.kw('regexp', 'rlike'):
-                raise Skip('regexp')
+            elif self.kw('regexp', 'rlike') or (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('regexp', 'rlike')):
+                self.i += 1
+                r = self.e_bitor()
+                l = ('regexp', neg, l, r)
+            elif ENGINE == 'postgresql' and self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'similar' \
+                    and self.peek(1)[1].lower() == 'to':
+                self.i += 2
+                r = self.e_bitor()
+                esc = None
+                if self.eat_kw('escape'):
+                    esc = self.e_bitor()
+                l = ('similar', neg, l, r, esc)
             else:
                 if neg:
                     self.i = save
                     break
                 t = self.peek()
+                if ENGINE == 'postgresql' and t == ('op', '~') or (t == ('op', '!') and self.peek(1) == ('op', '~')):
+                    negm = t == ('op', '!')
+                    self.i += 2 if negm else 1
+                    ci = self.peek() == ('op', '*')
+                    if ci:
+                        self.i += 1
+                    r = self.e_bitor()
+                    l = ('cmp', ('!' if negm else '') + '~' + ('*' if ci else ''), l, r)
+                    continue
                 if t[0] == 'op' and t[1] in ('=', '<>', '!=', '<', '<=', '>', '>=', '<=>'):
                     self.i += 1
                     if self.kw('any', 'some', 'all'):
@@ -629,6 +648,8 @@ class P:
                                 m = self.expr()
                             self.need_op(')')
                             args = [src] + ([placing] if placing is not None else []) + [n] + ([m] if m is not None else [])
+                            if lname == 'substring' and ENGINE == 'postgresql' and n[0] == 'str' and m is None:
+                                return ('call', 'substring_regex', [src, n], False, False)
                             return ('call', lname, args, False, False)
                     except Skip:
                         if lname == 'overlay':
@@ -846,7 +867,14 @@ class Ctx:
 # Translation of expressions and queries to Coq
 # ----------------------------------------------------------------------------------------
 
-AGGS = {'count', 'sum', 'avg', 'min', 'max', 'group_concat', 'bit_and', 'bit_or', 'var_pop', 'var_samp', 'variance'}
+AGGS = {'count', 'sum', 'avg', 'min', 'max', 'group_concat', 'bit_and', 'bit_or', 'var_pop', 'var_samp', 'variance',
+        'bit_xor', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'any_value', 'json_arrayagg', 'json_agg', 'jsonb_agg',
+        'bool_and', 'bool_or', 'every', 'covar_pop', 'covar_samp', 'corr', 'regr_count', 'regr_slope',
+        'regr_intercept', 'regr_r2', 'regr_sxx', 'regr_syy', 'regr_sxy', 'regr_avgx', 'regr_avgy',
+        'json_objectagg', 'json_object_agg', 'jsonb_object_agg'}
+# the aggregates of two arguments
+AGGS2 = {'covar_pop', 'covar_samp', 'corr', 'regr_count', 'regr_slope', 'regr_intercept', 'regr_r2', 'regr_sxx',
+         'regr_syy', 'regr_sxy', 'regr_avgx', 'regr_avgy', 'json_objectagg', 'json_object_agg', 'jsonb_object_agg'}
 FUNS = {'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power', 'pow', 'mod', 'greatest', 'least',
         'coalesce', 'ifnull', 'nullif', 'concat', 'concat_ws', 'length', 'char_length', 'upper', 'lower', 'trim',
         'ltrim', 'rtrim', 'reverse', 'substring', 'substr', 'mid', 'left', 'right', 'replace', 'repeat', 'locate',
@@ -856,7 +884,8 @@ FUNS = {'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power',
         'quote', 'md5', 'sha1', 'sha', 'sha2', 'hex', 'unhex', 'to_base64', 'from_base64', 'soundex', 'insert',
         'elt', 'field', 'find_in_set', 'to_hex', 'unicode', 'octet_length', 'bit_length',
         'iif', 'nvl', 'nvl2', 'decode', 'isnull', 'num_nulls', 'num_nonnulls', 'likely', 'unlikely', 'likelihood',
-        'interval_index'}
+        'interval_index', 'regexp_like', 'regexp_instr', 'regexp_substr', 'regexp_replace', 'regexp_count',
+        'substring_regex'}
 ALIAS = {'ucase': 'upper', 'lcase': 'lower', 'character_length': 'char_length'}
 
 
@@ -907,7 +936,7 @@ class Tr:
             if op == '^' and ENGINE == 'postgresql':
                 name = 'power'
             return '(fn "%s" [%s; %s])' % (name, self.ex(e[2]), self.ex(e[3]))
-        if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant'):
+        if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant', 'regexp', 'similar'):
             return '(e_cond %s)' % self.cond(e)
         if k == 'subq':
             cq, n = self.sub(e[1], 1)
@@ -951,7 +980,11 @@ class Tr:
                     if name != 'count':
                         raise Skip('star')
                     return 'count_star'
-                if len(args) != 1:
+                if name in AGGS2 and len(args) == 2 and not distinct:
+                    return '(agg_x "%s" %s (Some %s) [])' % (name, self.ex(args[0]), self.ex(args[1]))
+                if name == 'count' and distinct and len(args) == 2 and ENGINE == 'mysql':
+                    return '(agg_x "count_distinct2" %s (Some %s) [])' % (self.ex(args[0]), self.ex(args[1]))
+                if len(args) != 1 or name in AGGS2:
                     raise Skip('aggregate arity')
                 nm = 'group_concat' if name == 'group_concat' else name
                 if distinct:
@@ -976,7 +1009,8 @@ class Tr:
         if k == 'not':
             return '(c_not %s)' % self.cond(e[1])
         if k == 'cmp':
-            op = {'=': '=', '<>': '<>', '!=': '<>', '<': '<', '<=': '<=', '>': '>', '>=': '>=', '<=>': '<=>'}[e[1]]
+            op = {'=': '=', '<>': '<>', '!=': '<>', '<': '<', '<=': '<=', '>': '>', '>=': '>=', '<=>': '<=>',
+                  '~': '~', '~*': '~*', '!~': '!~', '!~*': '!~*'}[e[1]]
             if e[2][0] == 'row' or e[3][0] == 'row':
                 if e[2][0] != 'row' or e[3][0] != 'row' or len(e[2][1]) != len(e[3][1]) or op not in ('=', '<>'):
                     raise Skip('row comparison')
@@ -1014,6 +1048,11 @@ class Tr:
             name = ('not ' if e[1] else '') + name
             args = [self.ex(e[2]), self.ex(e[3])] + ([self.ex(esc)] if esc is not None else [])
             return '(pred "%s" [%s])' % (name, '; '.join(args))
+        if k == 'regexp':
+            return '(pred "%s" [%s; %s])' % ('not regexp' if e[1] else 'regexp', self.ex(e[2]), self.ex(e[3]))
+        if k == 'similar':
+            args = [self.ex(e[2]), self.ex(e[3])] + ([self.ex(e[4])] if e[4] is not None else [])
+            return '(pred "%s" [%s])' % ('not similar to' if e[1] else 'similar to', '; '.join(args))
         if k == 'between':
             name = ('not between' if e[1] else 'between') + (' symmetric' if len(e) > 5 and e[5] else '')
             return '(pred "%s" [%s; %s; %s])' % (name, self.ex(e[2]), self.ex(e[3]), self.ex(e[4]))

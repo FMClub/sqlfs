@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Values Dialects ValueKit Collation Hash StringFuns.
+Require Import Bool3 OrderedSet SqlFull Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -122,9 +122,52 @@ Definition pg_extra_preds : list (string * (list value -> bool3)) :=
                                         | _ => unknown3 end)
   :: nil.
 
+(** ** Regular expressions (TODO 2.4): Advanced Regular Expressions ([src/backend/regex]): the longest or the
+    shortest match by the greediness of the expression; [.] matches a line break by default; the
+    replacement refers to the groups by [\n] and to the match by [\&]; [regexp_replace] replaces the first
+    match unless the flag [g] *)
+Definition pg_rx : rx_env := mk_rx_env pg_skit fl_pg true false true false "invalid regular expression".
+
+Definition pg_regex_preds : list (string * (list value -> bool3)) :=
+     ("~", rx_like pg_rx false) :: ("~*", rx_like pg_rx true)
+  :: ("!~", fun l => negb3 (rx_like pg_rx false l)) :: ("!~*", fun l => negb3 (rx_like pg_rx true l))
+  :: ("similar to", pg_similar pg_rx) :: ("not similar to", fun l => negb3 (pg_similar pg_rx l))
+  :: nil.
+
+Definition pg_regex_funs : list (string * (list value -> value)) :=
+     ("regexp_replace", pg_regexp_replace pg_rx)
+  :: ("regexp_count", rx_count pg_rx)
+  :: ("regexp_instr", rx_instr pg_rx)
+  :: ("regexp_substr", rx_substr pg_rx)
+  :: ("regexp_like", fun l => match rx_like pg_rx false l with
+                              | true3 => Value_bool (Some true) | false3 => Value_bool (Some false)
+                              | _ => match l with
+                                     | s :: p :: rest => match rx_setup pg_rx s p (opt_val rest 0) with
+                                                         | Some None => Value_Err "invalid regular expression"
+                                                         | _ => Value_bool None end
+                                     | _ => Value_bool None end end)
+  :: ("substring_regex", pg_substring_regex pg_rx)
+  :: nil.
+
+(** ** Aggregates (TODO 2.5): the variance and the standard deviation are [numeric] (of integers and [numeric]
+    values) or [double precision]; [variance] and [stddev] are the sample ones; the statistics of two
+    variables are [double precision] *)
+Definition pg_aggregates : list (string * (list value -> value)) :=
+     ("var_pop", pg_var_agg false false) :: ("var_samp", pg_var_agg true false) :: ("variance", pg_var_agg true false)
+  :: ("stddev_pop", pg_var_agg false true) :: ("stddev_samp", pg_var_agg true true) :: ("stddev", pg_var_agg true true)
+  :: ("bit_xor", bit_xor_agg false is_null num_of_value)
+  :: ("any_value", any_value_agg is_null)
+  :: map (fun w => (w, stat2_agg w is_null num_of_value))
+         ("covar_pop" :: "covar_samp" :: "corr" :: "regr_count" :: "regr_slope" :: "regr_intercept" :: "regr_r2"
+          :: "regr_sxx" :: "regr_syy" :: "regr_sxy" :: "regr_avgx" :: "regr_avgy" :: nil)%string
+  ++ ("json_agg", json_array_agg 1 pg_json_of_value) :: ("jsonb_agg", json_array_agg 0 pg_json_of_value)
+  :: ("json_object_agg", json_object_agg 1 is_null text_of pg_json_of_value)
+  :: ("jsonb_object_agg", json_object_agg 0 is_null text_of pg_json_of_value)
+  :: nil.
+
 (** [substr] is a synonym of [substring] *)
 Definition pg_symbol_table : list (string * (list value -> value)) :=
-  pg_string_table ++
+  pg_regex_funs ++ pg_string_table ++
   match string_assoc _ "substring" symbol_table with
   | Some f => ("substr", f) :: symbol_table
   | None => symbol_table
@@ -132,9 +175,9 @@ Definition pg_symbol_table : list (string * (list value -> value)) :=
 
 Definition PostgreSQL : vsem :=
   mk_vsem "PostgreSQL"
-          (table_of_list (like_table pg_skit false (fun c => c) low_cp (Some 92) ++ pg_extra_preds ++ predicate_table))
+          (table_of_list (like_table pg_skit false (fun c => c) low_cp (Some 92) ++ pg_regex_preds ++ pg_extra_preds ++ predicate_table))
           (table_of_list pg_symbol_table)
-          (table_of_list (filter (fun p => negb (String.eqb (fst p) "group_concat")) aggregate_table
+          (table_of_list (pg_aggregates ++ filter (fun p => negb (String.eqb (fst p) "group_concat")) aggregate_table
                           ++ ("string_agg_sep", agg_concat_sep_by is_null "") :: nil))
           is_null
           (fun v => match v with
@@ -148,7 +191,7 @@ Definition PostgreSQL : vsem :=
           (fun f => match f with F_Bare_Column | F_Fetch_Percent => false | _ => true end)
           false
           (* an escape of more than one character: [invalid escape string] *)
-          (bad_escape pg_skit)
+          (fun p l => bad_escape pg_skit p l || rx_bad pg_rx ("~" :: "~*" :: "!~" :: "!~*" :: nil)%string p l)
           (* an integer literal is an [integer] if it fits, a [bigint] if it fits, a [numeric] otherwise
              ([make_const] in [src/backend/parser/parse_node.c]) *)
           (fun v => match v with

@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -63,7 +63,9 @@ Record my_session : Type :=
       (** [sql_mode] contains [ONLY_FULL_GROUP_BY] *)
       ms_only_full_group_by : bool;
       (** [group_concat_max_len]: the result of [GROUP_CONCAT] is truncated to this length *)
-      ms_group_concat_max_len : N
+      ms_group_concat_max_len : N;
+      (** the library of the regular expressions: 0 ICU (MySQL 8), 1 PCRE (MariaDB), 2 RE2 (TiDB) *)
+      ms_regex : nat
     }.
 
 Section Session.
@@ -243,6 +245,18 @@ Definition my_concat (l : list value) : value :=
 
 Definition my_skit : skit := mk_skit text_of z_arg (fun s => Value_string (Some s)) (Value_string None).
 
+(** the regular expressions of the session: ICU (MySQL: groups [$n] in a replacement), PCRE (MariaDB: [\n])
+    or RE2 (TiDB: no back reference); case-insensitive under a case-insensitive collation; [.] does not
+    match a line break unless the flag [n] *)
+Definition my_rx : rx_env :=
+  mk_rx_env my_skit
+            (match ms_regex ss with 1%nat => fl_pcre | 2%nat => fl_re2 | _ => fl_icu end)
+            false
+            (match coll with Coll_Binary => false | _ => true end)
+            false
+            (negb (Nat.eqb (ms_regex ss) 1))
+            "Illegal argument to a regular expression".
+
 Definition my_concat_ws (l : list value) : value :=
   match l with
   | sep :: rest => 
@@ -378,6 +392,15 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("or", logic_or) :: ("||", if ms_pipes_as_concat ss then my_concat else logic_or)
   :: ("xor", fun l => my_of_truth (fold_truth my_truth xor3 false3 l))
   :: ("not", fun l => match l with v :: nil => my_of_truth (negb3 (my_truth v)) | _ => Value_Z None end)
+  (* regular expressions (TODO 2.4) *)
+  :: ("regexp_like", fun l => match rx_like my_rx false l with
+                              | true3 => Value_Z (Some 1) | false3 => Value_Z (Some 0)
+                              | _ => match l with
+                                     | s :: p :: rest => match rx_setup my_rx s p (opt_val rest 0) with
+                                                         | Some None => Value_Err "Illegal argument to a regular expression"
+                                                         | _ => Value_Z None end
+                                     | _ => Value_Z None end end)
+  :: ("regexp_instr", rx_instr my_rx) :: ("regexp_substr", rx_substr my_rx) :: ("regexp_replace", rx_replace my_rx)
   (* strings ([sql/item_strfunc.cc]; TODO 2.2): positions and lengths in characters, [LENGTH] in bytes *)
   :: ("lpad", f_pad my_skit true true) :: ("rpad", f_pad my_skit false true)
   :: ("substring_index", f_substring_index my_skit)
@@ -642,11 +665,26 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
   :: ("max", agg_extremum_by is_null my_order is_Gt)
   :: ("group_concat", fun l => truncate_text (ms_group_concat_max_len ss) (agg_concat_by is_null "," l))
   :: ("group_concat_sep", fun l => truncate_text (ms_group_concat_max_len ss) (agg_concat_sep_by is_null "," l))
-  :: ("bit_and", agg_bit_by is_null Z.land)
-  :: ("bit_or", agg_bit_by is_null Z.lor)
-  :: ("var_pop", agg_var_by is_null lenient false)
-  :: ("variance", agg_var_by is_null lenient false)
-  :: ("var_samp", agg_var_by is_null lenient true)
+  (* [BIT_AND], [BIT_OR], [BIT_XOR]: [BIGINT UNSIGNED]; on the empty group, all ones for [BIT_AND] and 0
+     for the others ([Item_sum_bit]) *)
+  :: ("bit_and", fun l => match agg_bit_by is_null (fun a b => Z.land (Z.modulo a (2 ^ 64)) (Z.modulo b (2 ^ 64))) l with
+                          | Value_Z (Some z) => Value_I (Some (Z.modulo z (2 ^ 64), 1%nat))
+                          | _ => Value_I (Some (2 ^ 64 - 1, 1%nat)) end)
+  :: ("bit_or", fun l => match agg_bit_by is_null (fun a b => Z.lor (Z.modulo a (2 ^ 64)) (Z.modulo b (2 ^ 64))) l with
+                         | Value_Z (Some z) => Value_I (Some (Z.modulo z (2 ^ 64), 1%nat))
+                         | _ => Value_I (Some (0, 1%nat)) end)
+  :: ("bit_xor", bit_xor_agg true is_null lenient)
+  (* the variance and the standard deviation are [DOUBLE]; [VARIANCE], [STD] and [STDDEV] are the
+     population ones *)
+  :: ("var_pop", my_var_agg false false is_null lenient)
+  :: ("variance", my_var_agg false false is_null lenient)
+  :: ("var_samp", my_var_agg true false is_null lenient)
+  :: ("std", my_var_agg false true is_null lenient) :: ("stddev", my_var_agg false true is_null lenient)
+  :: ("stddev_pop", my_var_agg false true is_null lenient)
+  :: ("stddev_samp", my_var_agg true true is_null lenient)
+  :: ("json_arrayagg", json_array_agg 0 my_json_of_value)
+  :: ("json_objectagg", json_object_agg 0 is_null text_of my_json_of_value)
+  :: ("count_distinct2", count_distinct2 is_null (fun a b => match my_compare_base a b with Some Eq => true | _ => false end))
   :: nil.
 
 (** The constructs of MySQL 8.0 (8.0.31 and later for [INTERSECT] and [EXCEPT]). *)
@@ -673,7 +711,9 @@ Definition canon_my (v : value) : value :=
 
 Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
   mk_vsem name
-          (table_of_list (like_table my_skit true (rep_of (ms_coll ss)) (rep_of (ms_coll ss)) (Some 92) ++ my_pred_table))
+          (table_of_list (like_table my_skit true (rep_of (ms_coll ss)) (rep_of (ms_coll ss)) (Some 92)
+                          ++ ("regexp", rx_like my_rx false) :: ("not regexp", fun l => negb3 (rx_like my_rx false l))
+                          :: my_pred_table))
           (table_of_list my_symbol_table)
           (table_of_list my_aggregate_table)
           is_null
@@ -689,7 +729,7 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           (fun p l => match l with
                       | Value_C (Some (_, n1)) :: Value_C (Some (_, n2)) :: _ => 
                         negb (String.eqb n1 n2) && existsb (String.eqb p) ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: "<=>" :: nil)
-                      | _ => bad_escape my_skit p l end)
+                      | _ => bad_escape my_skit p l || rx_bad my_rx ("regexp" :: "not regexp" :: nil)%string p l end)
           (* an integer literal is a [BIGINT], a [BIGINT UNSIGNED] above 2^63 - 1, a [DECIMAL] above 2^64 - 1 *)
           (fun v => match v with
                     | Value_Z (Some z) => if int_range_ok 64 z then v 
@@ -705,6 +745,6 @@ End Session.
 (** The default session of MySQL 8.0 and 8.4: [sql_mode] is [ONLY_FULL_GROUP_BY, STRICT_TRANS_TABLES,
     NO_ZERO_IN_DATE, NO_ZERO_DATE, ERROR_FOR_DIVISION_BY_ZERO, NO_ENGINE_SUBSTITUTION],
     [group_concat_max_len] is 1024. *)
-Definition my_default_session : my_session := mk_my_session false Coll_UCA900_AI_CI 4 false true 1024%N.
+Definition my_default_session : my_session := mk_my_session false Coll_UCA900_AI_CI 4 false true 1024%N 0.
 
 Definition MySQL : vsem := mysql_vs my_default_session "MySQL" my_supports.

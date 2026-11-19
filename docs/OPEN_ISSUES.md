@@ -197,7 +197,7 @@ known gap and its status; it is updated by every pull request which touches one 
 | 12 | Dates, times, timestamps, intervals, time zones | resolved except time zones other than UTC (TODO 1.5) |
 | 13 | Integer ranges, overflow, `BIGINT UNSIGNED` | resolved (TODO 1.2.3) |
 | 14 | Runtime errors (division by zero in PostgreSQL, invalid casts) are NULL here (I3) | resolved (TODO 1.1) |
-| 15 | Regular expressions (`~`, `REGEXP`, `REGEXP_LIKE`, `REGEXP_REPLACE`) | open |
+| 15 | Regular expressions (`~`, `REGEXP`, `REGEXP_LIKE`, `REGEXP_REPLACE`) | resolved (TODO 2.4, `docs/functions/regex.md`); groups of PostgreSQL's equal-length alternatives, `regexp_match(es)` (arrays), the `x` flag open |
 | 16 | JSON and arrays | JSON resolved for the core functions (TODO 1.6); arrays open |
 | 17 | Collations beyond case folding and padding (accent folding, `utf8mb4_unicode_ci`, locale collations of PostgreSQL) | resolved for the MySQL family and SQLite (TODO 1.3); unresolved: `uca1400` tables (not in MariaDB's source), PostgreSQL ICU/libc collations, column-level collations |
 | 18 | `ORDER BY` and separator inside `group_concat` / `string_agg` / `listagg` (`E_AggX`; aggregates `group_concat_sep`, `string_agg_sep`, `listagg_sep`) | resolved |
