@@ -921,6 +921,8 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
 Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
+  (* no [EXCLUDE] in frames; [RESPECT NULLS] and [FROM FIRST] only *)
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last => false
   (* [ONLY_FULL_GROUP_BY] is in the default [sql_mode]; functional dependencies are not modelled *)
   | F_Fetch_Ties | F_Fetch_Percent => false
   (* only [WITH ROLLUP] *)

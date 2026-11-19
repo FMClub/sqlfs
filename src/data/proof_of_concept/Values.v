@@ -460,6 +460,9 @@ Definition rat_of_value (v : value) : option Q :=
   | Value_D (Some (q, _, _)) => Some (this q)
   | Value_I (Some (z, _)) => Some (inject_Z z)
   | Value_F (Some (q, k)) => if Nat.leb (Nat.div (Nat.modulo k 10) 2) 1 then Some (this q) else None
+  (* a date is its number of days, a time or a timestamp its number of microseconds: the key of a [RANGE]
+     frame whose offset is an interval expressed in that unit (TODO 3.1) *)
+  | Value_T (Some (n, _)) => Some (inject_Z n)
   | _ => None
   end.
 

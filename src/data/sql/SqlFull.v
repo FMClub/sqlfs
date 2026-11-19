@@ -56,7 +56,7 @@
 
 Set Implicit Arguments.
 
-Require Import Relations SetoidList List String Ascii Bool ZArith NArith QArith.
+Require Import Relations SetoidList List String Ascii Bool ZArith NArith QArith Qround.
 
 Require Import BasicFacts ListFacts ListPermut ListSort OrderedSet
         FiniteSet FiniteBag FiniteCollection Join FlatData Tree Bool3 Formula
@@ -92,7 +92,14 @@ Inductive frame_bound : Type :=
   | Preceding : nat -> frame_bound
   | Current_Row
   | Following : nat -> frame_bound
-  | Unbounded_Following.
+  | Unbounded_Following
+  (** an offset which is not an integer, for a [RANGE] frame (TODO 3.1): a decimal or a double, or the
+      number of days (of a [DATE] key) or of microseconds (of a [TIMESTAMP] key) of an [INTERVAL] *)
+  | Preceding_Q : Q -> frame_bound
+  | Following_Q : Q -> frame_bound.
+
+(** [EXCLUDE CURRENT ROW | GROUP | TIES | NO OTHERS] *)
+Inductive exclusion : Type := Excl_Current_Row | Excl_Group | Excl_Ties | Excl_No_Others.
 
 (** Window frames. In [ROWS] mode, offsets count rows; in [GROUPS] mode they
     count groups of peers (rows which are equal w.r.t. the ORDER BY of the
@@ -104,7 +111,9 @@ Inductive frame_bound : Type :=
 Inductive frame : Type :=
   | Frame_Rows : frame_bound -> frame_bound -> frame
   | Frame_Groups : frame_bound -> frame_bound -> frame
-  | Frame_Range : frame_bound -> frame_bound -> frame.
+  | Frame_Range : frame_bound -> frame_bound -> frame
+  (** a frame without the current row, its group of peers, or its peers (TODO 3.1) *)
+  | Frame_Excl : frame -> exclusion -> frame.
 
 (** The frame which SQL uses when none is given:
     [RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]. Without ORDER BY, all
@@ -178,7 +187,13 @@ Inductive feature : Type :=
   (** a condition used as a value, or a value used as a condition (booleans) *)
   | F_Cond_Value
   (** [(e1, ..., en) IN (q)] with [n > 1] *)
-  | F_Row_In.
+  | F_Row_In
+  (** [EXCLUDE ...] in a window frame *)
+  | F_Frame_Exclusion
+  (** [IGNORE NULLS] in [FIRST_VALUE], [LAST_VALUE], [NTH_VALUE], [LAG], [LEAD] *)
+  | F_Null_Treatment
+  (** [NTH_VALUE (...) FROM LAST] *)
+  | F_From_Last.
 
 Record dialect : Type :=
   mk_dialect
@@ -375,7 +390,10 @@ with swfun : Type :=
   | W_First_Value : sexpr -> frame -> swfun
   | W_Last_Value : sexpr -> frame -> swfun
   (** [NTH_VALUE (e, n)], the first row of the frame being the row number 1 *)
-  | W_Nth_Value : sexpr -> nat -> frame -> swfun.
+  | W_Nth_Value : sexpr -> nat -> frame -> swfun
+  (** [f IGNORE NULLS] ([true]) and [f FROM LAST] ([true]), for [FIRST_VALUE], [LAST_VALUE], [NTH_VALUE],
+      [LAG], [LEAD] (TODO 3.1) *)
+  | W_Opts : swfun -> bool -> bool -> swfun.
 
 (** * Some derived forms *)
 
@@ -519,8 +537,12 @@ Definition nulls_features (o : sorder) : list use :=
   | O_By _ _ _ => (U_Feature F_Nulls_Order) :: nil
   end.
 
-Definition frame_bound_is_groups (f : frame) : list use :=
-  match f with Frame_Groups _ _ => (U_Feature F_Frame_Groups) :: nil | _ => nil end.
+Fixpoint frame_bound_is_groups (f : frame) : list use :=
+  match f with
+  | Frame_Groups _ _ => (U_Feature F_Frame_Groups) :: nil
+  | Frame_Excl f' _ => (U_Feature F_Frame_Exclusion) :: frame_bound_is_groups f'
+  | _ => nil
+  end.
 
 Fixpoint sexpr_uses (e : sexpr) {struct e} : list use :=
   match e with
@@ -580,15 +602,19 @@ with squery_uses (q : squery) {struct q} : list use :=
                 match w with 
                 | W_As f lp lo _ => 
                   flat_map sexpr_uses lp ++ flat_map nulls_features lo ++
-                  match f with
-                  | W_Agg ag _ e fr => U_Agg ag :: sexpr_uses e ++ frame_bound_is_groups fr
-                  | W_First_Value e fr => sexpr_uses e ++ frame_bound_is_groups fr
-                  | W_Last_Value e fr => sexpr_uses e ++ frame_bound_is_groups fr
-                  | W_Nth_Value e _ fr => sexpr_uses e ++ frame_bound_is_groups fr
-                  | W_Lag e _ d => sexpr_uses e ++ sexpr_uses d
-                  | W_Lead e _ d => sexpr_uses e ++ sexpr_uses d
-                  | _ => nil
-                  end
+                  (fix fuses (f : swfun) : list use :=
+                     match f with
+                     | W_Agg ag _ e fr => U_Agg ag :: sexpr_uses e ++ frame_bound_is_groups fr
+                     | W_First_Value e fr => sexpr_uses e ++ frame_bound_is_groups fr
+                     | W_Last_Value e fr => sexpr_uses e ++ frame_bound_is_groups fr
+                     | W_Nth_Value e _ fr => sexpr_uses e ++ frame_bound_is_groups fr
+                     | W_Lag e _ d => sexpr_uses e ++ sexpr_uses d
+                     | W_Lead e _ d => sexpr_uses e ++ sexpr_uses d
+                     | W_Opts f' ign last =>
+                       (if ign then (U_Feature F_Null_Treatment) :: nil else nil) ++
+                       (if last then (U_Feature F_From_Last) :: nil else nil) ++ fuses f'
+                     | _ => nil
+                     end) f
                 end) lw
   | SQ_With _ q1 q2 => (U_Feature F_With) :: squery_uses q1 ++ squery_uses q2
   | SQ_WithRec _ _ q1 q2 q3 =>
@@ -1109,7 +1135,8 @@ Inductive wsem : Type :=
   | WS_Shift : bool -> (tuple -> value) -> nat -> (tuple -> value) -> wsem
   | WS_First : (tuple -> value) -> frame -> wsem
   | WS_Last : (tuple -> value) -> frame -> wsem
-  | WS_Nth : (tuple -> value) -> nat -> frame -> wsem.
+  | WS_Nth : (tuple -> value) -> nat -> frame -> wsem
+  | WS_Opts : wsem -> bool -> bool -> wsem.
 
 (** The number of the group of peers of each row of a sorted partition. *)
 Fixpoint peer_groups specs (prev : option (list value)) (cur : nat) (ks : list (list value)) :=
@@ -1124,12 +1151,18 @@ Fixpoint peer_groups specs (prev : option (list value)) (cur : nat) (ks : list (
   end.
 
 (** Is position [pj] in the frame of position [pi]? *)
+(** a rational offset counts [ceiling q] rows or groups in [ROWS] and [GROUPS] frames (the engines only take
+    integers there) *)
+Definition q_count (q : Q) : nat := Z.to_nat (Qceiling q).
+
 Definition after_start (b : frame_bound) (pi pj : nat) :=
   match b with
   | Unbounded_Preceding => true
   | Preceding k => Nat.leb pi (pj + k)
+  | Preceding_Q q => Nat.leb pi (pj + q_count q)
   | Current_Row => Nat.leb pi pj
   | Following k => Nat.leb (pi + k) pj
+  | Following_Q q => Nat.leb (pi + q_count q) pj
   | Unbounded_Following => false
   end.
 
@@ -1137,70 +1170,86 @@ Definition before_end (b : frame_bound) (pi pj : nat) :=
   match b with
   | Unbounded_Preceding => false
   | Preceding k => Nat.leb (pj + k) pi
+  | Preceding_Q q => Nat.leb (pj + q_count q) pi
   | Current_Row => Nat.leb pj pi
   | Following k => Nat.leb pj (pi + k)
+  | Following_Q q => Nat.leb pj (pi + q_count q)
   | Unbounded_Following => true
+  end.
+
+(** the offset of a [RANGE] bound, as a rational *)
+Definition bound_offset (b : frame_bound) : Q :=
+  match b with
+  | Preceding k | Following k => inject_Z (Z.of_nat k)
+  | Preceding_Q q | Following_Q q => q
+  | _ => 0%Q
   end.
 
 (** The positions of a [RANGE] frame with offsets. [rk] are the keys of the rows (negated for a
     descending order, so that they ascend), [gidx] the numbers of the groups of peers. *)
-Definition range_after_start (b : frame_bound) (rk : list (option Q)) (gidx : list nat) (pi pj : nat) :=
+Definition range_after_start (b0 : frame_bound) (rk : list (option Q)) (gidx : list nat) (pi pj : nat) :=
   let ki := nth pi rk None in
   let kj := nth pj rk None in
-  match b with
+  match b0 with
   | Unbounded_Preceding => true
   | Current_Row => Nat.leb (nth pi gidx 0) (nth pj gidx 0)
-  | Preceding k => match ki, kj with
-                   | Some a, Some b => Qle_bool (Qminus a (inject_Z (Z.of_nat k))) b
+  | Preceding _ | Preceding_Q _ => match ki, kj with
+                   | Some a, Some b => Qle_bool (Qminus a (bound_offset b0)) b
                    | None, None => true
                    | _, _ => false
                    end
-  | Following k => match ki, kj with
-                   | Some a, Some b => Qle_bool (Qplus a (inject_Z (Z.of_nat k))) b
+  | Following _ | Following_Q _ => match ki, kj with
+                   | Some a, Some b => Qle_bool (Qplus a (bound_offset b0)) b
                    | None, None => true
                    | _, _ => false
                    end
   | Unbounded_Following => false
   end.
 
-Definition range_before_end (b : frame_bound) (rk : list (option Q)) (gidx : list nat) (pi pj : nat) :=
+Definition range_before_end (b0 : frame_bound) (rk : list (option Q)) (gidx : list nat) (pi pj : nat) :=
   let ki := nth pi rk None in
   let kj := nth pj rk None in
-  match b with
+  match b0 with
   | Unbounded_Preceding => false
   | Current_Row => Nat.leb (nth pj gidx 0) (nth pi gidx 0)
-  | Preceding k => match ki, kj with
-                   | Some a, Some b => Qle_bool b (Qminus a (inject_Z (Z.of_nat k)))
+  | Preceding _ | Preceding_Q _ => match ki, kj with
+                   | Some a, Some b => Qle_bool b (Qminus a (bound_offset b0))
                    | None, None => true
                    | _, _ => false
                    end
-  | Following k => match ki, kj with
-                   | Some a, Some b => Qle_bool b (Qplus a (inject_Z (Z.of_nat k)))
+  | Following _ | Following_Q _ => match ki, kj with
+                   | Some a, Some b => Qle_bool b (Qplus a (bound_offset b0))
                    | None, None => true
                    | _, _ => false
                    end
   | Unbounded_Following => true
   end.
 
-(** The rows of the frame of the row number [i] of a sorted partition, [gidx]
-    being the numbers of the groups of peers of its rows. *)
-Definition frame_rows (fr : frame) (sorted : list tuple) (gidx : list nat) (rk : list (option Q)) (i : nat) :=
+(** The positions of the rows of the frame of the row number [i] of a sorted partition of [n] rows,
+    [gidx] being the numbers of the groups of peers of its rows. *)
+Fixpoint frame_positions (fr : frame) (n : nat) (gidx : list nat) (rk : list (option Q)) (i : nat) : list nat :=
   match fr with
   | Frame_Range lo hi =>
-    map (@snd _ _)
-        (filter (fun x => range_after_start lo rk gidx i (fst x) && range_before_end hi rk gidx i (fst x))
-                (combine (seq 0 (List.length sorted)) sorted))
-  | _ =>
-  let (pos, lohi) :=
-      match fr with
-      | Frame_Rows lo hi => (seq 0 (List.length sorted), (lo, hi))
-      | Frame_Groups lo hi | Frame_Range lo hi => (gidx, (lo, hi))
-      end in
-  let pi := nth i pos 0 in
-  map (@snd _ _)
-      (filter (fun x => after_start (fst lohi) pi (fst x) && before_end (snd lohi) pi (fst x))
-              (combine pos sorted))
+    filter (fun j => range_after_start lo rk gidx i j && range_before_end hi rk gidx i j) (seq 0 n)
+  | Frame_Rows lo hi =>
+    filter (fun j => after_start lo i j && before_end hi i j) (seq 0 n)
+  | Frame_Groups lo hi =>
+    let gi := nth i gidx 0 in
+    filter (fun j => after_start lo gi (nth j gidx 0) && before_end hi gi (nth j gidx 0)) (seq 0 n)
+  | Frame_Excl fr' ex =>
+    let gi := nth i gidx 0 in
+    filter (fun j => match ex with
+                     | Excl_Current_Row => negb (Nat.eqb j i)
+                     | Excl_Group => negb (Nat.eqb (nth j gidx 0) gi)
+                     | Excl_Ties => Nat.eqb j i || negb (Nat.eqb (nth j gidx 0) gi)
+                     | Excl_No_Others => true
+                     end) (frame_positions fr' n gidx rk i)
   end.
+
+(** The rows of the frame of the row number [i] of a sorted partition. *)
+Definition frame_rows (fr : frame) (sorted : list tuple) (gidx : list nat) (rk : list (option Q)) (i : nat) :=
+  flat_map (fun j => match nth_error sorted j with Some t => t :: nil | None => nil end)
+           (frame_positions fr (List.length sorted) gidx rk i).
 
 Definition ntile (buckets n i : nat) : Z :=
   let q := Nat.div n buckets in
@@ -1211,9 +1260,36 @@ Definition ntile (buckets n i : nat) : Z :=
 
 (** The value of a window function for the row [t], which is the row number [i]
     (starting from 0) of its sorted partition. *)
-Definition eval_wsem (a : attribute) (w : wsem)
+Fixpoint eval_wsem (a : attribute) (w : wsem)
            (sorted : list tuple) (gidx : list nat) (rk : list (option Q)) (i : nat) (t : tuple) : value :=
   match w with
+  (** [IGNORE NULLS]: the rows where the argument is NULL are skipped; [FROM LAST]: the frame is read from
+      its end *)
+  | WS_Opts w' ign last =>
+    let keep (arg : tuple -> value) (l : list tuple) := if ign then filter (fun t' => negb (is_null O (arg t'))) l else l in
+    match w' with
+    | WS_First arg fr =>
+      match keep arg ((if last then @rev _ else fun l => l) (frame_rows fr sorted gidx rk i)) with
+      | t' :: _ => arg t' | nil => null_of a end
+    | WS_Last arg fr =>
+      match keep arg ((if last then fun l => l else @rev _) (frame_rows fr sorted gidx rk i)) with
+      | t' :: _ => arg t' | nil => null_of a end
+    | WS_Nth arg n fr =>
+      match n with
+      | 0 => null_of a
+      | S n => match nth_error (keep arg ((if last then @rev _ else fun l => l) (frame_rows fr sorted gidx rk i))) n with
+               | Some t' => arg t' | None => null_of a end
+      end
+    | WS_Shift back arg k dflt =>
+      match k with
+      | 0 => arg t
+      | S k' =>
+        (* the rows before (LAG) or after (LEAD) the current one, the nearest first *)
+        let others := if back then rev (firstn i sorted) else skipn (S i) sorted in
+        match nth_error (keep arg others) k' with Some t' => arg t' | None => dflt t end
+      end
+    | _ => eval_wsem a w' sorted gidx rk i t
+    end
   | WS_Agg ag sq arg fr =>
     let vs := map arg (frame_rows fr sorted gidx rk i) in
     match first_error vs with
@@ -1600,20 +1676,22 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
                  let part t := map (fun e => ev e t) lp in
                  let keys t := map (fun o => match o with O_By e _ _ => ev e t end) lo in
                  let f' :=
-                     match f with
-                     | W_Agg ag sq e fr => WS_Agg ag sq (ev e) fr
-                     | W_Row_Number => WS_Row_Number
-                     | W_Rank => WS_Rank
-                     | W_Dense_Rank => WS_Dense_Rank
-                     | W_Ntile n => WS_Ntile n
-                     | W_Percent_Rank => WS_Percent_Rank
-                     | W_Cume_Dist => WS_Cume_Dist
-                     | W_Lag e n d => WS_Shift true (ev e) n (ev d)
-                     | W_Lead e n d => WS_Shift false (ev e) n (ev d)
-                     | W_First_Value e fr => WS_First (ev e) fr
-                     | W_Last_Value e fr => WS_Last (ev e) fr
-                     | W_Nth_Value e n fr => WS_Nth (ev e) n fr
-                     end in
+                     (fix comp (f : swfun) : wsem :=
+                        match f with
+                        | W_Agg ag sq e fr => WS_Agg ag sq (ev e) fr
+                        | W_Row_Number => WS_Row_Number
+                        | W_Rank => WS_Rank
+                        | W_Dense_Rank => WS_Dense_Rank
+                        | W_Ntile n => WS_Ntile n
+                        | W_Percent_Rank => WS_Percent_Rank
+                        | W_Cume_Dist => WS_Cume_Dist
+                        | W_Lag e n d => WS_Shift true (ev e) n (ev d)
+                        | W_Lead e n d => WS_Shift false (ev e) n (ev d)
+                        | W_First_Value e fr => WS_First (ev e) fr
+                        | W_Last_Value e fr => WS_Last (ev e) fr
+                        | W_Nth_Value e n fr => WS_Nth (ev e) n fr
+                        | W_Opts f'' ign last => WS_Opts (comp f'') ign last
+                        end) f in
                  fun rows =>
                    eval_window part (map sorder_spec lo) keys a f'
                      (map (fun t => if existsb (is_error O) (part t ++ keys t) then err_row t else t) rows)
