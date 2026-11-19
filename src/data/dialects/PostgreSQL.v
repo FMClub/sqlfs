@@ -163,7 +163,7 @@ Definition pg_aggregates : list (string * (list value -> value)) :=
   ++ ("json_agg", json_array_agg 1 pg_json_of_value) :: ("jsonb_agg", json_array_agg 0 pg_json_of_value)
   :: ("json_object_agg", json_object_agg 1 is_null text_of pg_json_of_value)
   :: ("jsonb_object_agg", json_object_agg 0 is_null text_of pg_json_of_value)
-  :: nil.
+  :: ordered_set_table false is_null num_of_value sql_order.
 
 (** [substr] is a synonym of [substring] *)
 Definition pg_symbol_table : list (string * (list value -> value)) :=

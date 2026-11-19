@@ -671,9 +671,27 @@ class P:
                 if self.kw('separator', 'order'):
                     raise Skip('aggregate clause')
                 self.need_op(')')
+                within = None
+                # an ordered-set aggregate: f (args) WITHIN GROUP (ORDER BY e [ASC | DESC])
+                if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'within':
+                    self.i += 1
+                    self.need_kw('group')
+                    self.need_op('(')
+                    self.need_kw('order')
+                    self.need_kw('by')
+                    oe = self.expr()
+                    desc = False
+                    if self.eat_kw('desc'):
+                        desc = True
+                    else:
+                        self.eat_kw('asc')
+                    if self.kw('nulls'):
+                        raise Skip('within group nulls')
+                    self.need_op(')')
+                    within = (oe, desc)
                 if self.kw('over'):
                     raise Skip('window')
-                return ('call', lname, args, False, distinct)
+                return ('call', lname, args, False, distinct, within)
             if self.eat_op('.'):
                 if self.op('*'):
                     raise Skip('qualified star')
@@ -871,7 +889,7 @@ AGGS = {'count', 'sum', 'avg', 'min', 'max', 'group_concat', 'bit_and', 'bit_or'
         'bit_xor', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'any_value', 'json_arrayagg', 'json_agg', 'jsonb_agg',
         'bool_and', 'bool_or', 'every', 'covar_pop', 'covar_samp', 'corr', 'regr_count', 'regr_slope',
         'regr_intercept', 'regr_r2', 'regr_sxx', 'regr_syy', 'regr_sxy', 'regr_avgx', 'regr_avgy',
-        'json_objectagg', 'json_object_agg', 'jsonb_object_agg'}
+        'json_objectagg', 'json_object_agg', 'jsonb_object_agg', 'median'}
 # the aggregates of two arguments
 AGGS2 = {'covar_pop', 'covar_samp', 'corr', 'regr_count', 'regr_slope', 'regr_intercept', 'regr_r2', 'regr_sxx',
          'regr_syy', 'regr_sxy', 'regr_avgx', 'regr_avgy', 'json_objectagg', 'json_object_agg', 'jsonb_object_agg'}
@@ -971,6 +989,17 @@ class Tr:
                 cc = self.cond(('cmp', '=', subj, c)) if subj is not None else self.cond(c)
                 out = '(e_case %s %s %s)' % (cc, self.ex(v), out)
             return out
+        if k == 'call' and len(e) > 5 and e[5] is not None:
+            name, args, (oe, desc) = e[1], e[2], e[5]
+            d = 'Desc' if desc else 'Asc'
+            if name in ('percentile_cont', 'percentile_disc') and len(args) == 1:
+                return '(agg_x "%s" %s (Some %s) [o_by %s %s])' % (name, self.ex(oe), self.ex(args[0]), self.ex(oe), d)
+            if name == 'mode' and not args:
+                return '(agg_x "mode" %s None [o_by %s %s])' % (self.ex(oe), self.ex(oe), d)
+            if name in ('rank', 'dense_rank', 'percent_rank', 'cume_dist') and len(args) == 1:
+                return '(agg_x "hyp_%s_%s" %s (Some %s) [o_by %s %s])' % (name, 'desc' if desc else 'asc', self.ex(oe),
+                                                                         self.ex(args[0]), self.ex(oe), d)
+            raise Skip('within group ' + name)
         if k == 'call':
             name, args, star, distinct = e[1], e[2], e[3], e[4]
             if name in ('max', 'min') and ENGINE == 'sqlite' and len(args) > 1 and not star:
@@ -1070,7 +1099,9 @@ def has_call(e, name):
 
 
 def is_agg_call(e):
-    # the scalar max (a, b, ...) and min of SQLite are not aggregates
+    # the scalar max (a, b, ...) and min of SQLite are not aggregates; WITHIN GROUP makes an aggregate
+    if e[0] == 'call' and len(e) > 5 and e[5] is not None:
+        return True
     return (e[0] == 'call' and e[1] in AGGS and
             not (ENGINE == 'sqlite' and e[1] in ('max', 'min') and len(e[2]) > 1))
 
