@@ -301,7 +301,8 @@ Definition acceptance (q : squery) := map (fun d => accepted_by (dialect_of d) (
 Example accepted_full_join : acceptance q_full_join = [true; false; true; true; true].
 Proof. check. Qed.
 
-Example accepted_lateral : acceptance q_lateral = [true; true; false; false; false].
+(** [LATERAL] exists in OceanBase since 4.3.1 (grammar of the MySQL mode; documentation of both modes). *)
+Example accepted_lateral : acceptance q_lateral = [true; true; false; true; true].
 Proof. check. Qed.
 
 Example accepted_intersect_all : acceptance q_intersect_all = [true; true; false; false; false].

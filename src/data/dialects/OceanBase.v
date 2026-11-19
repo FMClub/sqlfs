@@ -22,28 +22,33 @@ Import NullValues.
 
 (** * MySQL mode
 
-    The semantics of the values is that of MySQL. The constructs are those listed in the
-    documentation of OceanBase 4.x: [FULL JOIN] is an extension of OceanBase, and
-    [INTERSECT]/[EXCEPT] exist. The documentation does not say whether [INTERSECT ALL],
-    [EXCEPT ALL] and [LATERAL] exist; they are taken as not supported, which is to be
-    verified against a tenant. *)
+    The semantics of the values is that of MySQL, with the differences which follow, and
+    which are established by the source of OceanBase (the grammar
+    [src/sql/parser/sql_parser_mysql_mode.y], the default values of the system variables
+    [ob_system_variable_init.json], [deps/oblib/src/common/sql_mode/ob_sql_mode.h]) and by
+    its test suite ([tools/deploy/mysql_test], expected results):
+    - the default collation is [utf8mb4_general_ci], which is case insensitive and [PAD SPACE]:
+      ['a' = 'a '] is true and ['a' LIKE 'a '] is false (MySQL 8: [utf8mb4_0900_ai_ci], no padding);
+    - the default [sql_mode] is [STRICT_ALL_TABLES, NO_ZERO_IN_DATE, NO_AUTO_CREATE_USER]: there is
+      neither [ONLY_FULL_GROUP_BY] (a query may select a column which is not grouped), nor
+      [PIPES_AS_CONCAT] ([||] is the logical OR: [length(trim('     hi' || 'dir '))] is 1), nor
+      [ERROR_FOR_DIVISION_BY_ZERO];
+    - the grammar has [LATERAL] derived tables, [FULL [OUTER] JOIN], [INTERSECT], [EXCEPT] and
+      [MINUS] (without [ALL]: [INTERSECT ALL] is a syntax error), [ROLLUP], [CUBE], [GROUPING SETS],
+      [WITH RECURSIVE], [ROWS] and [RANGE] window frames (no [GROUPS]), but no [FILTER] clause on
+      aggregates, and [NULLS FIRST/LAST] only in the [ORDER BY] of [ARRAY_AGG]. *)
 
 Definition ob_my_supports (f : feature) : bool :=
   match f with
-  | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order | F_Lateral | F_Intersect_All | F_Except_All => false
+  | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order | F_Intersect_All | F_Except_All => false
   | _ => true
   end.
 
-Definition OceanBaseMySQL : vsem :=
-  mk_vsem "OceanBase (MySQL mode)"
-          (vs_pred MySQL) (vs_symb MySQL) (vs_agg MySQL)
-          (vs_is_null MySQL) (vs_truth MySQL) (vs_of_truth MySQL) (vs_eq3 MySQL)
-          (vs_order MySQL) (vs_canon MySQL) (vs_nulls_smallest MySQL)
-          ob_my_supports.
+Definition OceanBaseMySQL : vsem := mysql_vs true "OceanBase (MySQL mode)" ob_my_supports.
 
 (** * Oracle mode
 
-    - the empty string is NULL: a string function whose result is empty returns NULL, 
+    - the empty string is NULL ([ObObj::is_null_oracle]: NULL, or a character value of length 0): a string function whose result is empty returns NULL, 
       [length('')] is NULL, and ['' = ''] is UNKNOWN;
     - there is no boolean type: a condition is not a value;
     - strings are compared byte by byte; a string compared with a number is converted to
@@ -54,8 +59,8 @@ Definition OceanBaseMySQL : vsem :=
     - [/] is the exact division, a division by zero is NULL (Oracle signals an error);
       [MOD(x, 0)] is [x];
     - [||] and [CONCAT] treat a NULL operand as the empty string: [NULL || 'a'] is ['a'];
-    - [GREATEST] and [LEAST] are NULL as soon as one argument is NULL;
-    - [SUBSTR] with a start of 0 starts at 1, and returns NULL for a length below 1;
+    - [GREATEST] and [LEAST] are NULL as soon as one argument is NULL ([ObExprLeastGreatest::calc_oracle]);
+    - [SUBSTR] with a start of 0 starts at 1 ([ObExprSubstr]), and returns NULL for a length below 1;
     - [LIKE] is case sensitive and has no default escape character;
     - [VARIANCE] is the variance of the sample; [LISTAGG] ignores the NULLs.
     [MINUS] is [EXCEPT]. *)
@@ -119,16 +124,25 @@ Definition ora_concat (l : list value) : value :=
                                                    else match text_of v with Some s => acc ++ s | None => acc end) 
                                      l EmptyString)).
 
+(** The numeric arguments of [SUBSTR] are truncated: [SUBSTR('OceanBase', -3, 2.1)] has 2 characters
+    (documentation; [ObExprUtil::get_trunc_int64] in the source). *)
+Definition ora_z_arg (v : value) : option Z :=
+  match strict_conv v with
+  | Some (Num_Z z) => Some z
+  | Some (Num_Q q) => Some (Qc_trunc q)
+  | None => None
+  end.
+
 Definition ora_substr (l : list value) : value :=
   match l with
   | s :: p :: rest =>
     if ora_isnull s then Value_string None
-    else match text_of s, z_arg p, rest with
+    else match text_of s, ora_z_arg p, rest with
          | Some s, Some p, nil => 
            let p' := if Z.eqb p 0 then 1 else if Z.ltb p 0 then (Z.of_nat (String.length s) + p + 1) else p in
            Value_string (Some (sql_substring s p' None))
          | Some s, Some p, n :: nil =>
-           match z_arg n with
+           match ora_z_arg n with
            | Some n => 
              if Z.ltb n 1 then Value_string None
              else let p' := if Z.eqb p 0 then 1 else if Z.ltb p 0 then (Z.of_nat (String.length s) + p + 1) else p in
@@ -236,13 +250,17 @@ Definition ora_aggregate_table : list (string * (list value -> value)) :=
   :: ("var_pop", agg_var_by ora_isnull strict_conv false)
   :: nil.
 
-(** The constructs of OceanBase in Oracle mode, from its documentation: [UNION [ALL]],
-    [INTERSECT] and [MINUS]; the other ones are assumed from Oracle. [LATERAL] and the
-    [ALL] forms of [INTERSECT] and [MINUS] are not supported. *)
+(** The constructs of OceanBase in Oracle mode, from its documentation (the repository
+    [oceanbase-doc], pages of the SQL reference of the Oracle mode): [UNION [ALL]], [INTERSECT]
+    and [MINUS] (no [ALL] for the last two, and no [EXCEPT]); [FULL], [LEFT] and [RIGHT]
+    [OUTER JOIN]; [LATERAL] derived tables (since V4.3.1); [ROWS] and [RANGE] window frames
+    (no [GROUPS]); [ORDER BY ... NULLS FIRST/LAST]; [OFFSET ... FETCH FIRST ... ROWS]. There is no
+    [FILTER] clause on aggregates, and no boolean type. The source of OceanBase does not contain
+    the parser of the Oracle mode: what is established by the source (the engine is shared)
+    is stated with the corresponding functions above. *)
 Definition ora_supports (f : feature) : bool :=
   match f with
-  | F_Lateral | F_Intersect_All | F_Except_All | F_Frame_Groups | F_Filter_Agg 
-  | F_Cond_Value => false
+  | F_Intersect_All | F_Except_All | F_Frame_Groups | F_Filter_Agg | F_Cond_Value => false
   | _ => true
   end.
 
