@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL Hash StringFuns JsonFuns.
+Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL Hash StringFuns JsonFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -574,7 +574,7 @@ Definition lite_text_funs : list string :=
 Definition lite_symbol_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) lite_text_funs
                 then (fst p, fun l => (snd p) (lite_textual l))
-                else (fst p, fun l => lite_real ((snd p) l))) (c_math_table true lenient ++ bit_table true lenient ++ lite_round_table lenient ++ lite_symbol_table_raw).
+                else (fst p, fun l => lite_real ((snd p) l))) (sys_table default_env "SQLite" ++ c_math_table true lenient ++ bit_table true lenient ++ lite_round_table lenient ++ lite_symbol_table_raw).
 
 Definition lite_aggregate_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) ("group_concat" :: "group_concat_sep" :: "string_agg_sep" :: nil)
