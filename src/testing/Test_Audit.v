@@ -200,15 +200,30 @@ Example old_aggregate_empty :
     (_Sql_Select (sel [(agg_ "count" y, cnt)]) [tbl "e"] _Sql_True (_Group_By nil) _Sql_True) = [].
 Proof. check. Qed.
 
-(** KNOWN DEVIATION of [Sql.v]: [SELECT * FROM t WHERE (a, b) NOT IN (SELECT c, d FROM u)]
-    is empty, where SQL returns (1, 10) and (1, NULL). *)
+(** [SELECT * FROM t WHERE (a, b) NOT IN (SELECT c, d FROM u)]: the comparison of rows is
+    component-wise, so that (1, 10) and (1, NULL) differ from (2, NULL) and from (3, 30),
+    since their first component definitely differs. (This used to be empty.) *)
 Example old_row_not_in :
-  eval_sql_query_in_state db 
+  old_returns
     (_Sql_Select _Select_Star [tbl "t"]
        (_Sql_Not (_Sql_In [_Select_As (dot_ a) a; _Select_As (dot_ b) b] 
                           (_Sql_Select (sel [(dot_ c, a); (dot_ d, b)]) [tbl "u"] 
                                        _Sql_True _Group_Fine _Sql_True)))
-       _Group_Fine _Sql_True) = [].
+       _Group_Fine _Sql_True)
+    [a; b] [ [VZ 1; VZ 10]; [VZ 1; NullZ] ] = true.
+Proof. check. Qed.
+
+(** [SELECT * FROM t WHERE (a, b) IN (SELECT c, d FROM u)]: (2, NULL) is compared with 
+    (2, NULL), no component definitely differs, so the result is UNKNOWN and the row is
+    not returned. *)
+Example old_row_in_unknown :
+  old_returns
+    (_Sql_Select _Select_Star [tbl "t"]
+       (_Sql_In [_Select_As (dot_ a) a; _Select_As (dot_ b) b] 
+                (_Sql_Select (sel [(dot_ c, a); (dot_ d, b)]) [tbl "u"] 
+                             _Sql_True _Group_Fine _Sql_True))
+       _Group_Fine _Sql_True) 
+    [a; b] [ ] = true.
 Proof. check. Qed.
 
 (** The same query, in [SqlFull]. *)

@@ -15,11 +15,11 @@ claim below is checked by computation in `src/testing/Test_Audit.v` and
 | A2 | `Values.v`, `interp_predicate` | `<`, `<=`, `>`, `>=` were UNKNOWN on strings, `=` and `<>` were UNKNOWN on booleans | fixed |
 | A3 | `SqlExt.v`, `eval_sql_query_ext` | joins were folded from the right, so the `ON` condition of a join could not see the earlier joins; the result disagreed with `sql_query_ext_to_sql_query` | fixed |
 | A4 | `Sql.v` + `make_groups` | an aggregate query without `GROUP BY` over an empty input returns no row; SQL returns one | open in `Sql.v`, correct in `SqlFull.v` |
-| A5 | `Formula.v`, `Sql_In` | `(a, b) [NOT] IN (q)` is UNKNOWN whenever any component is NULL; SQL compares component-wise, so a definite mismatch gives FALSE | open in `Sql.v`, correct in `SqlFull.v` |
+| A5 | `Formula.v`, `Sql_In` | `(a, b) [NOT] IN (q)` was UNKNOWN whenever any component is NULL; SQL compares component-wise, so a definite mismatch gives FALSE | fixed (`in_match`) |
 | A6 | `Sql.v`, FROM list | items sharing an attribute name are merged silently (`FROM w, w` yields each row twice) | by design (named tuples); documented |
 
-A4 and A5 are not fixed in `Sql.v` because the equivalence proof with the
-algebra (`SqlAlgebra.v`) depends on the current definitions; see
+A4 is not fixed in `Sql.v` because the equivalence proof with the algebra
+(`SqlAlgebra.v`) depends on the current definition of `make_groups`; see
 `docs/OPEN_ISSUES.md`.
 
 ### Incomplete (not expressible before)

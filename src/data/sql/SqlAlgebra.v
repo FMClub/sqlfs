@@ -1302,8 +1302,8 @@ intros WI n; induction n as [ | n]; [repeat split | ].
          apply (proj1 IHn); [ sql_size_tac | assumption].
       -- {
           intros x1 x2 Hx1 Hx.
-          rewrite <- (Oeset.compare_eq_2 _ _ _ _ Hx), <- (contains_nulls_eq _ _ Hx).
-          apply refl_equal.
+          apply (Formula.in_match_eq T unknown contains_nulls contains_nulls_eq); 
+            [apply Oeset.compare_eq_refl | apply Hx].
         }
     * simpl sql_formula_to_alg.
       rewrite 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Exists _ _)).
@@ -3052,8 +3052,8 @@ intros W n; induction n as [ | n]; split.
       refine (le_trans _ _ _ _ (le_plus_r _ _)).
       apply le_plus_l.
     * intros x1 x2 Hx1 Hx.
-      rewrite <- (Oeset.compare_eq_2 _ _ _ _ Hx), <- (contains_nulls_eq _ _ Hx).
-      apply refl_equal.
+      apply (Formula.in_match_eq T unknown contains_nulls contains_nulls_eq); 
+        [apply Oeset.compare_eq_refl | apply Hx].
   + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Exists _ _)).
     cbv beta iota zeta.
     apply if_eq; trivial.
@@ -3804,8 +3804,8 @@ Proof.
           by (intros; lia).
         eauto.
       * intros t1 t2 _ H.
-        rewrite <- (Oeset.compare_eq_2 _ _ _ _ H).
-        case (Oeset.compare (OTuple T) (projection T env (Select_List (_Select_List s))) t1); auto; now rewrite (contains_nulls_eq _ _ H).
+        apply (Formula.in_match_eq T unknown contains_nulls contains_nulls_eq); 
+          [apply Oeset.compare_eq_refl | apply H].
     + (* Sql_Exists *)
       simpl. rewrite (Febag.is_empty_eq _ _ (eval_query env q)); auto.
       apply IHn. simpl in Hn. clear -Hn.

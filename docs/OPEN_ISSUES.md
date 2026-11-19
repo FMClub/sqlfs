@@ -11,31 +11,40 @@ options.
 
 ---
 
-## I1. Two deviations from SQL in the core semantics of `Sql.v`, which the equivalence proof depends on
+## I1. Two deviations from SQL in the core semantics of `Sql.v`
 
-**Current state** (both machine-checked by `old_aggregate_empty` and
-`old_row_not_in` in `src/testing/Test_Audit.v`):
+**Status: the multi-column `IN` is fixed; the empty-table aggregate is open.**
 
-- An aggregate query without `GROUP BY` returns no row on an empty table; SQL
-  returns one (`SELECT count(*) FROM empty` is `0`). `make_groups` partitions
-  the input rows, so an empty input has no group.
-- A multi-column `(a, b) [NOT] IN (subquery)` is UNKNOWN as soon as any
-  component is NULL; SQL compares component-wise, and the row comparison is
-  FALSE when one component definitely differs.
+- **Fixed**: `(a, b) [NOT] IN (subquery)` is now compared component-wise
+  (`in_match` in `src/logic/Formula.v`): the result is the conjunction of the
+  comparisons of the components, each of them being UNKNOWN when one of its two
+  values is NULL. A component which definitely differs makes the row
+  comparison FALSE. The single-column case is unchanged. The proofs of
+  `SqlAlgebra.v` only needed their congruence step updated (`in_match_eq`).
+  Checked by `old_row_not_in` and `old_row_in_unknown` in
+  `src/testing/Test_Audit.v`.
+- **Open**: an aggregate query without `GROUP BY` returns no row on an empty
+  table; SQL returns one (`SELECT count(*) FROM empty` is `0`). `make_groups`
+  partitions the input rows, so an empty input has no group.
 
-**Why it was not changed**: these two definitions (`eval_sql_query`,
-`eval_sql_formula`) are used directly by `SqlAlgebra.v` (about 3800 lines: the
-equivalence between SQL and the extended relational algebra). Changing them
-requires redoing the affected proofs.
+**Why the second one is still open**: the natural fix is to make `make_groups`
+return one empty group for `Group_By nil` on an empty input. An experiment
+shows that this breaks, besides the congruence lemma `make_groups_eq` (easily
+repaired), the well-sortedness proof of `Sql.v` and about ten proofs of
+`SqlAlgebra.v` which unfold `make_groups` (16 uses). It also changes the
+derived operator `delta` (DISTINCT, defined by grouping on all the attributes)
+when the sort is empty, and `SELECT *` with an empty group needs a defined
+sort: the algebra translates it to a projection on `sql_sort`, while the
+evaluator of `Sql.v` returns the empty tuple.
 
 **Options**:
-1. Change `Sql.v` / `Formula.v` and redo the affected proofs of `SqlAlgebra.v`
-   (most work, strongest result).
-2. Leave `Sql.v` as it is, present it explicitly as "the proven fragment",
-   state these two deviations in the documentation, and take `SqlFull.v` as the
-   reference semantics.
-3. Add hypotheses to the equivalence theorem (non-empty input, single-column
-   `IN`) under which the current proof is kept.
+1. Make the change and redo the affected proofs, giving `SELECT *` over an
+   empty group the sort of the query (most work, strongest result).
+2. Keep `Sql.v` as "the proven fragment" (it agrees with SQL when the
+   input of an aggregate query is not empty), and take `SqlFull.v` as the
+   reference semantics (see I2).
+3. Add the hypothesis "the input of an aggregate query without `GROUP BY`
+   is not empty" to the equivalence theorem.
 
 ## I2. No theorem relates `SqlFull.v` to the existing results
 
