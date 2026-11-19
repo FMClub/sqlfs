@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Values Dialects ValueKit PostgreSQL MySQL.
+Require Import Collation Bool3 OrderedSet SqlFull Values Dialects ValueKit PostgreSQL MySQL.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -48,7 +48,7 @@ Definition ob_my_supports (f : feature) : bool :=
 (** The default session: [utf8mb4_general_ci] (PAD SPACE, case insensitive), [sql_mode] without
     [ONLY_FULL_GROUP_BY] nor [PIPES_AS_CONCAT], [group_concat_max_len] = 1024
     ([src/share/system_variable/ob_system_variable_init.json]). *)
-Definition ob_my_default_session : my_session := mk_my_session true true 4 false false 1024%N.
+Definition ob_my_default_session : my_session := mk_my_session true Coll_General_CI 4 false false 1024%N.
 
 Definition OceanBaseMySQL : vsem := mysql_vs ob_my_default_session "OceanBase (MySQL mode)" ob_my_supports.
 
@@ -324,4 +324,5 @@ Definition OceanBaseOracle : vsem :=
           false
           ora_pred_error
           (* a [NUMBER] has no display scale: [1.50] is [1.5] *)
-          (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end).
+          (fun v => match v with Value_D (Some (q, _, _)) => Value_Q (Some q) | _ => v end)
+          (fun _ => false).

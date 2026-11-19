@@ -12,7 +12,7 @@ Require Import Bool3 FlatData ListFacts OrderedSet
         FiniteSet FiniteBag FiniteCollection Tree Formula SqlFull.
 
 Require Import Values TuplesImpl GenericInstance SqlSyntax SqlFullSyntax
-        Dialects ValueKit MySQL MariaDB TiDB SpecRunner.
+        Dialects ValueKit MySQL MariaDB TiDB SpecRunner Collation.
 
 Import Tuple.
 Import ListNotations.
@@ -33,7 +33,7 @@ Definition value1 (d : vsem) (e : sexpr) : string :=
 
 (** a session of MySQL with [PIPES_AS_CONCAT], [div_precision_increment] = 2, [group_concat_max_len] = 3,
     and without [ONLY_FULL_GROUP_BY] *)
-Definition custom : my_session := mk_my_session false true 2 true false 3%N.
+Definition custom : my_session := mk_my_session false Coll_UCA900_AI_CI 2 true false 3%N.
 Definition MySQL' : vsem := mysql_vs custom "MySQL" my_supports.
 
 Example pipes_default : value1 MySQL (fn "||" [str "a"; str "b"]) = "0".

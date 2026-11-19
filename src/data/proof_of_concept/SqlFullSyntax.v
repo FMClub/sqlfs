@@ -38,7 +38,7 @@ Definition TNull_PostgreSQL : dialect TNull :=
              (fun _ => true)
              (fun _ => true) (fun _ => true) (fun _ => true)
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
-             NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v).
+             NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v) (fun _ => false).
 
 Definition TNull_ops := TNull_PostgreSQL.
 

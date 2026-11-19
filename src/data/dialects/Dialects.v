@@ -58,7 +58,9 @@ Record vsem : Type :=
           number is compared with a number) *)
       vs_pred_error : string -> list value -> bool;
       (** the value of a literal *)
-      vs_const : value -> value
+      vs_const : value -> value;
+      (** the values which cannot be used as a condition *)
+      vs_truth_error : value -> bool
     }.
 
 (** [DISTINCT] aggregates: the name of the aggregate starts with ["distinct "]. *)
@@ -155,7 +157,8 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              NullValues.is_lazy_symbol 
              (fun p l => match p with Values.Predicate s => vs_pred_error d s l end)
              (vs_scalar_first d)
-             (vs_const d).
+             (vs_const d)
+             (vs_truth_error d).
 
 (** * Moving a query to a dialect
 
