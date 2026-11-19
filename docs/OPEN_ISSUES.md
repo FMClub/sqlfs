@@ -1,94 +1,138 @@
-# 待讨论的问题（Open issues）
+# Open issues
 
-本仓库没有开启 GitHub Issues，所以用这个文件记录**需要讨论的设计与方向性问题**。
-实现层面的细节问题（聚合函数对 NULL 的处理、字符串比较、`SqlExt` 的 JOIN 顺序等）已经直接修复，
-见 `docs/SQL_COVERAGE.md`，不在此列。
+GitHub Issues are not enabled on this repository, so this file records the
+**design and direction questions that need discussion**. Implementation-level
+defects (NULL handling in aggregates, string comparison, the join order of
+`SqlExt`, ...) have been fixed directly and are listed in
+`docs/SQL_COVERAGE.md`; they are not repeated here.
 
-每一条给出：现状、为什么不能直接改、可选方案。
+Each entry gives the current state, why it cannot simply be changed, and the
+options.
 
 ---
 
-## I1. `Sql.v` 核心语义有两处与 SQL 不符，但修改会破坏与代数的等价性证明
+## I1. Two deviations from SQL in the core semantics of `Sql.v`, which the equivalence proof depends on
 
-**现状**（均由 `src/testing/Test_Audit.v` 中的 `old_aggregate_empty`、`old_row_not_in` 机器检验）：
+**Current state** (both machine-checked by `old_aggregate_empty` and
+`old_row_not_in` in `src/testing/Test_Audit.v`):
 
-- 没有 `GROUP BY` 的聚合查询在空表上返回 0 行；SQL 返回 1 行
-  （`SELECT count(*) FROM empty` 应为 `0`）。原因是 `make_groups` 对输入行做划分，空输入没有分组。
-- 多列 `(a, b) [NOT] IN (子查询)` 只要任一分量为 NULL 就判为 UNKNOWN；
-  SQL 是逐分量比较，某一分量确定不等时整行比较为 FALSE。
+- An aggregate query without `GROUP BY` returns no row on an empty table; SQL
+  returns one (`SELECT count(*) FROM empty` is `0`). `make_groups` partitions
+  the input rows, so an empty input has no group.
+- A multi-column `(a, b) [NOT] IN (subquery)` is UNKNOWN as soon as any
+  component is NULL; SQL compares component-wise, and the row comparison is
+  FALSE when one component definitely differs.
 
-**为什么没有直接改**：`eval_sql_query` 与 `eval_sql_formula` 的这两处定义被 `SqlAlgebra.v`
-（约 3800 行，SQL 与扩展关系代数的等价性证明）直接依赖，改定义需要重做相关证明。
+**Why it was not changed**: these two definitions (`eval_sql_query`,
+`eval_sql_formula`) are used directly by `SqlAlgebra.v` (about 3800 lines: the
+equivalence between SQL and the extended relational algebra). Changing them
+requires redoing the affected proofs.
 
-**可选方案**：
-1. 修改 `Sql.v` / `Formula.v` 并重做 `SqlAlgebra.v` 中受影响的证明（工作量大，结论最强）。
-2. 保持 `Sql.v` 不变，把它明确定位为“已证明的片段”，在文档中声明这两处偏差；完整语义以 `SqlFull.v` 为准。
-3. 给等价性定理加前提（输入非空 / `IN` 为单列），在前提下保持证明。
+**Options**:
+1. Change `Sql.v` / `Formula.v` and redo the affected proofs of `SqlAlgebra.v`
+   (most work, strongest result).
+2. Leave `Sql.v` as it is, present it explicitly as "the proven fragment",
+   state these two deviations in the documentation, and take `SqlFull.v` as the
+   reference semantics.
+3. Add hypotheses to the equivalence theorem (non-empty input, single-column
+   `IN`) under which the current proof is kept.
 
-## I2. `SqlFull.v` 与已有成果之间还没有定理联系
+## I2. No theorem relates `SqlFull.v` to the existing results
 
-**现状**：`SqlFull.v` 是新的语法和可执行语义，正确性目前靠 130 多个可计算的例子（`Test_SqlFull.v`、`Test_Audit.v`）和
-`SqlFullFacts.v` 里的若干性质保证。它与 `Sql.v` 的关系、与关系代数的关系都**没有证明**。
+**Current state**: `SqlFull.v` is a new syntax and executable semantics. Its
+correctness currently rests on about 130 examples checked by computation
+(`Test_SqlFull.v`, `Test_Audit.v`) and on the properties of
+`SqlFullFacts.v`. Its relation to `Sql.v` and to the relational algebra is
+**not proven**.
 
-**需要决定的方向**：
-- 是否证明嵌入定理：`Sql.v` 的查询翻译到 `SqlFull` 后语义一致（需排除 I1 的两处偏差，并处理
-  bag 与 list、`N_join_bag` 与笛卡尔积的差别）。
-- 是否把代数（`SqlAlgebra.v` / `SqlAlgebraExt.v`）扩展到外连接、DISTINCT、排序、窗口，并证明
-  `SqlFull` 到代数的翻译正确。这是原论文主定理的自然延伸，但工作量很大，需要先确定覆盖哪些构造。
-- `SqlExt.v`（合作者的 JOIN 扩展）与 `SqlFull.v` 功能重叠：合并、保留其一，还是让 `SqlExt` 成为
-  `SqlFull` 的一个子集？
+**Directions to decide**:
+- Whether to prove an embedding theorem: a query of `Sql.v`, translated to
+  `SqlFull`, has the same semantics (excluding the two deviations of I1, and
+  dealing with bags vs. lists and with `N_join_bag` vs. the cross product).
+- Whether to extend the algebra (`SqlAlgebra.v` / `SqlAlgebraExt.v`) to outer
+  joins, DISTINCT, ordering and windows, and to prove a translation from
+  `SqlFull` correct. This is the natural extension of the main theorem of the
+  paper, but it is a large amount of work, and the set of constructs to cover
+  has to be chosen first.
+- `SqlExt.v` (the JOIN extension) overlaps with `SqlFull.v`: merge them, keep
+  one, or make `SqlExt` a subset of `SqlFull`?
 
-## I3. 运行时错误被建模为 NULL
+## I3. Runtime errors are modelled by NULL
 
-**现状**：语义是全函数。除以零、非法类型转换、标量子查询返回多行，在 SQL 中是运行时错误，
-这里统一返回 NULL。
+**Current state**: the semantics is a total function. Division by zero, an
+invalid cast, and a scalar subquery returning several rows are runtime errors
+in SQL; here they all yield NULL.
 
-**问题**：这与多数数据库不一致（会把“报错的查询”当成“有结果的查询”）。
+**Problem**: this differs from most database systems (a query that fails is
+given a result).
 
-**可选方案**：(a) 保持现状并在定理中说明；(b) 求值结果改为 `option` / 错误单子，所有定义和证明都要带上
-错误传播；(c) 另外定义一个“不会出错”的静态/动态判定谓词，定理只对满足该谓词的查询成立。
+**Options**: (a) keep this and state it in the theorems; (b) make evaluation
+return an `option` / error monad, with error propagation in every definition
+and proof; (c) define a separate static or dynamic "does not fail" predicate,
+and state the theorems for the queries which satisfy it.
 
-## I4. 命名元组模型 vs. SQL 的位置语义
+## I4. Named tuples vs. the positional semantics of SQL
 
-**现状**：元组是“属性名 → 值”的有限映射。因此：
-- 集合运算要求两边属性名相同（SQL 按位置对应）；
-- 结果中不能有重名列，自连接必须显式重命名；
-- `FROM` 中同名属性会被静默合并（见 `SQL_COVERAGE.md` 的 A6）。
+**Current state**: a tuple is a finite map from attribute names to values.
+Consequently:
+- set operations require the same attribute names on both sides (SQL matches
+  columns by position);
+- a result cannot have two columns with the same name, and a self-join needs
+  an explicit renaming;
+- attributes with the same name in a `FROM` clause are merged silently (A6 in
+  `SQL_COVERAGE.md`).
 
-**需要决定**：是否引入位置化/带限定名的列模型（影响 `Tuple.Rcd` 及其上的全部证明），
-还是保持命名模型，并写一个把真实 SQL 规范化为“属性互不相同”形式的前端及其正确性说明。
+**To decide**: introduce a positional or qualified column model (this affects
+`Tuple.Rcd` and every proof above it), or keep the named model and provide a
+front end which normalises real SQL into the "pairwise distinct attributes"
+form, together with a statement of its correctness.
 
-## I5. 没有静态类型与良构性检查
+## I5. No static typing, no well-formedness check
 
-**现状**：查询没有类型系统。类型不匹配的比较结果是 UNKNOWN，对非数值做算术得到 NULL，
-非法的分组引用（`SELECT` 中出现未分组的列）取分组中的第一行。NULL 带类型
-（`Value_Z None` 与 `Value_string None` 是不同的值），目前在写入元组时按属性类型规范化。
+**Current state**: queries have no type system. A comparison between values
+of different types is UNKNOWN, arithmetic over a non-number is NULL, and a
+non-grouped column in the `SELECT` of a grouped query takes its value from the
+first row of the group. NULLs are typed (`Value_Z None` and
+`Value_string None` are different values); they are currently normalised to
+the type of the attribute when a tuple is built.
 
-**需要决定**：是否定义类型检查与良构性判定（类似 `WellFormed.v` 对旧语言所做的），
-并把语义的正确性陈述限制在良构查询上。聚合函数“属于哪一层查询块”的判定目前是语法性的
-（按列绑定在哪一层），与旧代码 `find_eval_env` 的判定方式不同，也应在良构性定义中统一。
+**To decide**: whether to define type checking and well-formedness (as
+`WellFormed.v` does for the former language), and to restrict the correctness
+statements to well-formed queries. The rule which says to which query block an
+aggregate belongs is currently syntactic (the block which binds one of its
+columns), and differs from the `find_eval_env` of the former code; it should be
+settled by the same definition.
 
-## I6. 方言相关的选择是写死的
+## I6. Dialect-dependent choices are hard-wired
 
-**现状**：以下行为在 SQL 标准中是实现定义的，目前固定为 PostgreSQL 的行为：
-NULL 在排序中视为最大；整数除法向零截断；`avg` 返回精确有理数；`GREATEST`/`LEAST` 忽略 NULL；
-无全序的 `LIMIT` 取确定的一种结果。
+**Current state**: the following are implementation-defined in the SQL
+standard, and are fixed here to the behaviour of PostgreSQL: NULLs are the
+largest values in an ordering; integer division truncates towards zero; `avg`
+returns an exact rational; `GREATEST` / `LEAST` ignore NULLs; a `LIMIT`
+without a total order returns one determined result.
 
-**需要决定**：是否把这些做成参数（“方言”记录），使同一套定理可对多个数据库实例化。
+**To decide**: whether to make these parameters (a "dialect" record), so that
+the same theorems can be instantiated for several database systems.
 
-## I7. 尚未覆盖的 SQL 特性
+## I7. SQL features which are not covered
 
-按预计难度排序，需要决定优先级：
-- 递归 CTE（`WITH RECURSIVE`）：不保证终止，需要燃料参数或不动点的存在性条件；
-- `GROUPING SETS` / `ROLLUP` / `CUBE`；
-- 带数值偏移的 `RANGE` 窗口帧、帧排除；
-- 日期/时间、浮点数、字符排序规则；
-- 有序集聚合（`percentile_cont` 等）、多参数聚合、`string_agg` 的 `ORDER BY`。
+In the expected order of difficulty; priorities are to be decided:
+- recursive CTEs (`WITH RECURSIVE`): termination is not guaranteed, so this
+  needs a fuel parameter or a condition for the existence of a fixpoint;
+- `GROUPING SETS` / `ROLLUP` / `CUBE`;
+- `RANGE` window frames with a numeric offset, frame exclusion;
+- date/time types, floating-point numbers, collations;
+- ordered-set aggregates (`percentile_cont`, ...), aggregates with several
+  arguments, `ORDER BY` inside `string_agg`.
 
-## I8. 构建与仓库维护
+## I8. Build and repository maintenance
 
-- 根目录 `Makefile` 执行 `cd src; make`，但 `src/Makefile` 被 `.gitignore` 忽略，新克隆的仓库不能直接
-  `make`；提交的 `src/CoqMakeFile*` 是生成文件且含机器相关路径。
-- `coq-sqlformalsemantics.opam` 要求 Coq 8.11.2，README 写的是 8.15.0（本次用 8.15.2 验证通过）。
-- `src/data/proof_of_concept/FreshAttr.v` 含 `Admitted`，且不在 `_CoqProject` 中。
-- 没有 CI；建议加一个编译全部文件（含测试）的工作流。
+- The top-level `Makefile` runs `cd src; make`, but `src/Makefile` is ignored
+  by `.gitignore`, so a fresh clone cannot run `make` directly; the committed
+  `src/CoqMakeFile*` are generated files and contain machine-specific paths.
+- `coq-sqlformalsemantics.opam` requires Coq 8.11.2, the README says 8.15.0
+  (this work was checked with 8.15.2).
+- `src/data/proof_of_concept/FreshAttr.v` contains an `Admitted` and is not in
+  `_CoqProject`.
+- There is no CI; a workflow which compiles every file, tests included, is
+  suggested.
