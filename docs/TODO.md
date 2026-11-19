@@ -525,7 +525,9 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   `CONNECT BY`, `ROWNUM <=`, `PIVOT`, `UNPIVOT` are derived forms in `SqlFullSyntax.v` (`connect_by`, `rownum_le`,
   `pivot`, `unpivot`); `TO_NUMBER` added; tests in `src/testing/Test_OracleForms.v`.
 - **4.10 Per-version flags**: a `version` parameter on each dialect record, and `supports d v feature`; tests that a construct introduced in version N is rejected before it.
+  **Status: DONE** (`src/data/dialects/Versions.v`, `src/testing/Test_Versions.v`; the values of functions do not depend on the version).
 - **4.11 Decide the scope of further engines** (Oracle Database, SQL Server, DuckDB, ClickHouse, CockroachDB, Snowflake, BigQuery): a short decision record in `docs/OPEN_ISSUES.md` for the user; do not start them before it is answered.
+  **Status: DONE** (decision record D1 in `docs/OPEN_ISSUES.md`, awaiting the answer).
 
 ---------------------------------------------------------------------------------------------------------
 
