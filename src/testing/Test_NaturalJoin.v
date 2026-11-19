@@ -45,6 +45,7 @@ Definition mk_role mid pid n :=
               | Attr_string _ => Value_string None
               | Attr_Z _ => Value_Z None
               | Attr_bool _ => Value_bool None
+              | Attr_Q _ => Value_Q None
               end).
 
 Definition roles :=
@@ -69,6 +70,7 @@ Definition mk_director mid pid :=
               | Attr_string _ => Value_string None
               | Attr_Z _ => Value_Z None
               | Attr_bool _ => Value_bool None
+              | Attr_Q _ => Value_Q None
               end).
 
 Definition directors :=
@@ -90,6 +92,7 @@ Definition mk_people pid f l :=
               | Attr_string _ => Value_string None
               | Attr_Z _ => Value_Z None
               | Attr_bool _ => Value_bool None
+              | Attr_Q _ => Value_Q None
               end).
 
 Definition people :=
@@ -120,6 +123,7 @@ Definition mk_movie mid t y rt rk :=
               | Attr_string _ => Value_string None
               | Attr_Z _ => Value_Z None
               | Attr_bool _ => Value_bool None
+              | Attr_Q _ => Value_Q None
               end).
 
 Definition movies :=

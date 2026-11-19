@@ -57,7 +57,8 @@ Definition name_of_attribute (a : attribute) : string
     := match a with
        | Attr_string name
        | Attr_Z name
-       | Attr_bool name => name
+       | Attr_bool name
+       | Attr_Q name => name
        end.
 
 Definition names_of_attributes (l : list attribute) : list string
@@ -70,6 +71,7 @@ Definition fresh_attr (a : attribute) (l : list attribute) : attribute
       | Attr_string _ => Attr_string name
       | Attr_Z _ => Attr_Z name
       | Attr_bool _ => Attr_bool name
+      | Attr_Q _ => Attr_Q name
       end.
 
 

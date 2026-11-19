@@ -59,6 +59,7 @@ Fixpoint mk_att att atts vals :=
                 | Attr_string _ => Value_string None
                 | Attr_Z _ => Value_Z None
                 | Attr_bool _ => Value_bool None
+                | Attr_Q _ => NullValues.Value_Q None
                 end
   end.
 
@@ -207,14 +208,7 @@ Definition SortedTuplesT := TNull.
 Register SortedTuplesT as datacert.syntax.SortedTuplesT.
 
 Definition contains_nulls (t : tuple TNull) :=
- existsb (fun a => match dot TNull t a with
-                   | NullValues.Value_string None
-                   | NullValues.Value_Z None
-                   | NullValues.Value_bool None => true
-                   | NullValues.Value_string (Some _)
-                   | NullValues.Value_Z (Some _)
-                   | NullValues.Value_bool (Some _) => false
-                   end) ({{{labels TNull t}}}).
+ existsb (fun a => NullValues.is_null (dot TNull t a)) ({{{labels TNull t}}}).
 
 Lemma contains_nulls_eq :
   forall t1 t2, t1 =t= t2 -> contains_nulls t1 = contains_nulls t2.

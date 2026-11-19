@@ -11,6 +11,31 @@ make install
 ```
 
 
+## SQL coverage
+
+`src/data/sql/Sql.v` is the fragment proven equivalent to the extended
+relational algebra. `src/data/sql/SqlFull.v` extends its syntax and gives an
+executable semantics to the rest of the query language: outer and lateral
+joins, `DISTINCT`, set operations with and without `ALL`, `ORDER BY` /
+`OFFSET` / `LIMIT`, subqueries and conditions inside expressions, `CASE`,
+`FILTER` and `DISTINCT` aggregates, window functions, `WITH` and `VALUES`.
+The values, predicates, functions and aggregates are in
+`src/data/proof_of_concept/Values.v`.
+
+- [docs/SQL_COVERAGE.md](docs/SQL_COVERAGE.md): audit of the formalisation
+  against SQL, what is covered, and the conventions of the semantics.
+- [docs/OPEN_ISSUES.md](docs/OPEN_ISSUES.md): open design questions.
+- `src/testing/Test_SqlFull.v`, `src/testing/Test_Audit.v`: examples checked
+  by computation during the build.
+
+To build from a fresh clone:
+```
+cd src
+coq_makefile -f _CoqProject -o Makefile
+make
+```
+
+
 ## License
 
 This code is released under the terms of the [Creative Common
