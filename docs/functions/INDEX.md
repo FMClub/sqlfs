@@ -299,6 +299,7 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `opp` | MySQL.v, OceanBase.v, SQLite.v, Values.v | core.md |
 | `or` | MySQL.v, SQLite.v, Values.v | core.md |
 | `ord` | MySQL.v | strings.md |
+| `overlaps` | PostgreSQL.v | core.md |
 | `overlay` | PostgreSQL.v | strings.md |
 | `percentile_cont` | Aggregates.v | aggregates.md |
 | `percentile_disc` | Aggregates.v | aggregates.md |
@@ -328,8 +329,14 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `reverse` | MySQL.v, Values.v | core.md |
 | `right` | MySQL.v, Values.v | core.md |
 | `round` | MySQL.v, OceanBase.v, SQLite.v, Values.v | datetime.md |
+| `row is not null` | ValueKit.v | core.md |
+| `row is null` | ValueKit.v | core.md |
+| `row<` | ValueKit.v | core.md |
+| `row<=` | ValueKit.v | core.md |
 | `row<>` | ValueKit.v, Values.v | core.md |
 | `row=` | ValueKit.v, Values.v | core.md |
+| `row>` | ValueKit.v | core.md |
+| `row>=` | ValueKit.v | core.md |
 | `row_count` | SystemFuns.v | system.md |
 | `rpad` | MySQL.v, OceanBase.v, PostgreSQL.v | strings.md |
 | `rtrim` | MySQL.v, OceanBase.v, PostgreSQL.v, SQLite.v, Values.v | core.md |

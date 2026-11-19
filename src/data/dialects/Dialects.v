@@ -64,7 +64,9 @@ Record vsem : Type :=
       (** the conversion of the operands of a comparison by their affinities (SQLite) *)
       vs_cmp_coerce : string -> list nat -> list value -> list value;
       (** the values of a column of the result of a set operation, in the type of the column (TODO 3.3) *)
-      vs_unify : list value -> list value
+      vs_unify : list value -> list value;
+      (** the table functions (TODO 3.4) *)
+      vs_table_fun : string -> option (list value -> list (list value))
     }.
 
 (** [DISTINCT] aggregates: the name of the aggregate starts with ["distinct "]. *)
@@ -170,7 +172,8 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (vs_truth_error d)
              (fun a => match a with Attr_string _ => 1%nat | Attr_Z _ | Attr_bool _ => 2%nat | _ => 2%nat end)
              (fun p ks l => match p with Values.Predicate s => vs_cmp_coerce d s ks l end)
-             (vs_unify d).
+             (vs_unify d)
+             (vs_table_fun d).
 
 (** * Moving a query to a dialect
 
@@ -259,6 +262,7 @@ with sfrom_to (f : sfrom T1 relname) {struct f} : sfrom T2 relname :=
   match f with
   | Fr_Query q r => @Fr_Query T2 relname (squery_to q) (ren_to r)
   | Fr_Join jt lat f1 f2 c => @Fr_Join T2 relname jt lat (sfrom_to f1) (sfrom_to f2) (scond_to c)
+  | Fr_Fun name args ord atts => @Fr_Fun T2 relname name (map sexpr_to args) ord atts
   end
 
 with sorder_to (o : sorder T1 relname) {struct o} : sorder T2 relname :=

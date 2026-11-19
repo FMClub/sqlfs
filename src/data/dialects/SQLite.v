@@ -334,6 +334,47 @@ Definition lite_json_update (create replace : bool) (l : list value) : value :=
   | nil => Value_Err "wrong number of arguments"
   end.
 
+(** [json_each (j [, path])]: one row per element or member, with the columns [key], [value], [type],
+    [atom], [id], [parent], [fullkey], [path] ([json.c]); [id] numbers the rows from 1 (SQLite gives the
+    offset of the node in its internal form, which the model does not have); [parent] is NULL *)
+Definition lite_json_each (l : list value) : list (list value) :=
+  let doc_path := match l with
+                  | d :: nil => Some (d, "$"%string)
+                  | d :: p :: nil => match text_of p with Some t => Some (d, t) | None => None end
+                  | _ => None end in
+  match doc_path with
+  | Some (d, path) =>
+    match lite_json_doc d, parse_path path with
+    | Some (Some j), Some st =>
+      match follow st j with
+      | Some target =>
+        let atom (x : json) := match x with JArr _ | JObj _ => Value_string None | _ => lite_sql_of_json x end in
+        let row (k : value) (full : string) (i : nat) (x : json) :=
+            k :: (match x with JArr _ | JObj _ => Value_string (Some (text_compact x)) | _ => lite_sql_of_json x end)
+              :: Value_string (Some (lite_json_type x)) :: atom x :: Value_Z (Some (Z.of_nat (S i)))
+              :: Value_Z None :: Value_string (Some full) :: Value_string (Some path) :: nil in
+        match target with
+        | JArr xs => map (fun (p : nat * json) => let (i, x) := p in
+                                   row (Value_Z (Some (Z.of_nat i))) (path ++ "[" ++ string_of_Z (Z.of_nat i) ++ "]") i x)
+                         (combine (seq 0 (List.length xs)) xs)
+        | JObj ms => map (fun (p : nat * (string * json)) => let (i, m) := p in row (Value_string (Some (fst m))) (path ++ "." ++ fst m) i (snd m))
+                         (combine (seq 0 (List.length ms)) ms)
+        | x => row (Value_Z None) path 0%nat x :: nil
+        end
+      | None => nil
+      end
+    | Some None, _ => nil
+    | _, _ => (Value_Err "malformed JSON" :: nil) :: nil
+    end
+  | None => nil
+  end%string.
+
+Definition lite_table_funs (name : string) : option (list value -> list (list value)) :=
+  match name with
+  | "json_each" => Some lite_json_each
+  | _ => None
+  end%string.
+
 Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
   let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
@@ -590,7 +631,7 @@ Definition lite_supports (f : feature) : bool :=
   match f with
   | F_Lateral | F_Intersect_All | F_Except_All | F_Any_All 
   | F_Grouping_Sets | F_Rollup | F_Cube | F_Fetch_Ties | F_Fetch_Percent
-  | F_Null_Treatment | F_From_Last => false
+  | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false
   | _ => true
   end.
 
@@ -666,4 +707,5 @@ Definition SQLite : vsem :=
           lite_real
           (fun _ => false)
           lite_cmp_coerce
-          (fun l => l).
+          (fun l => l)
+          lite_table_funs.

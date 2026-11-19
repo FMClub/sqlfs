@@ -328,6 +328,32 @@ Fixpoint row_eq_gen (cmp : value -> value -> option comparison) (l1 l2 : list va
   | _, _ => unknown3
   end.
 
+(** [(a1, ..., an) < (b1, ..., bn)] (TODO 3.7): the first pair which is not equal decides; a NULL before
+    the decision makes the result UNKNOWN; equal rows are [=]. [strict]: [<] (or [>]), [lt]: [<] / [<=]. *)
+Fixpoint row_cmp_gen (cmp : value -> value -> option comparison) (lt strict : bool) (l1 l2 : list value) : bool3 :=
+  match l1, l2 with
+  | nil, nil => bool3_of_bool (negb strict)
+  | v1 :: r1, v2 :: r2 =>
+    match cmp v1 v2 with
+    | Some Eq => row_cmp_gen cmp lt strict r1 r2
+    | Some Lt => bool3_of_bool lt
+    | Some Gt => bool3_of_bool (negb lt)
+    | None => unknown3
+    end
+  | _, _ => unknown3
+  end.
+
+(** [(a1, ..., an) IS NULL]: all are NULL; [IS NOT NULL]: none is *)
+Definition row_preds (cmp : value -> value -> option comparison) (isnull : value -> bool)
+  : list (string * (list value -> bool3)) :=
+     ("row<", fun l => let (l1, l2) := split_half l in row_cmp_gen cmp true true l1 l2)
+  :: ("row<=", fun l => let (l1, l2) := split_half l in row_cmp_gen cmp true false l1 l2)
+  :: ("row>", fun l => let (l1, l2) := split_half l in row_cmp_gen cmp false true l1 l2)
+  :: ("row>=", fun l => let (l1, l2) := split_half l in row_cmp_gen cmp false false l1 l2)
+  :: ("row is null", fun l => bool3_of_bool (forallb isnull l))
+  :: ("row is not null", fun l => bool3_of_bool (forallb (fun v => negb (isnull v)) l))
+  :: nil.
+
 (** The comparison predicates, [BETWEEN], [IN] and the row comparisons. *)
 Definition comparison_table (cmp : value -> value -> option comparison) 
   : list (string * (list value -> bool3)) :=
@@ -344,7 +370,7 @@ Definition comparison_table (cmp : value -> value -> option comparison)
   :: ("not in", fun l => negb3 (in_gen cmp l))
   :: ("row=", fun l => let (l1, l2) := split_half l in row_eq_gen cmp l1 l2)
   :: ("row<>", fun l => let (l1, l2) := split_half l in negb3 (row_eq_gen cmp l1 l2))
-  :: nil.
+  :: row_preds cmp is_null.
 
 (** * Generic aggregates *)
 

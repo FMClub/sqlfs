@@ -203,7 +203,7 @@ known gap and its status; it is updated by every pull request which touches one 
 | 18 | `ORDER BY` and separator inside `group_concat` / `string_agg` / `listagg` (`E_AggX`; aggregates `group_concat_sep`, `string_agg_sep`, `listagg_sep`) | resolved |
 | 18b | Ordered-set aggregates (`percentile_cont`, `percentile_disc`, `mode`), other multi-argument aggregates | open |
 | 19 | `DISTINCT ON` (derived form `distinct_on`, by `ROW_NUMBER`), `NATURAL` join (derived form `from_natural_join`, existing) | resolved as derived forms |
-| 19b | `USING` joins, table functions (`generate_series`), `TABLE` as a statement | `USING`/`NATURAL` resolved (TODO 3.2, translator); table functions and `TABLE` open (TODO 3.4) |
+| 19b | `USING` joins, table functions (`generate_series`), `TABLE` as a statement | `USING`/`NATURAL` resolved (TODO 3.2, translator); table functions resolved (TODO 3.4, `Fr_Fun`); `TABLE t` is a derived form |
 | 20 | SQLite: bare column in an aggregate query with `min` / `max` | open |
 | 21 | `ROW` values and row comparison with more than one column outside `IN` | open |
 | 22 | Static typing and well-formedness of queries (I5) | open |

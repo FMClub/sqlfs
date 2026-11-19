@@ -391,10 +391,81 @@ Targets: every function of the table is either modelled or has an explicit exclu
   - NULLs are not distinct from each other in set operations, and equality follows the dialect's collation.
   - `CORRESPONDING` is in none of the engines and is excluded.
 - **3.4 Table functions and sources**: `generate_series`, `unnest ... WITH ORDINALITY`, `json_table`/`JSON_TABLE`, `json_each`/`json_tree`, `jsonb_array_elements`, `string_to_table`, `regexp_split_to_table`, `XMLTABLE` (decide scope), `(VALUES ...) AS t(a, b)`, `TABLE t`, `SELECT` without `FROM`, `DUAL`, SQLite virtual tables and `pragma_*` table-valued functions, `INFORMATION_SCHEMA` as ordinary tables with engine-specific contents.
+  **Status: DONE**, tested in `src/testing/Test_TableFuns.v`. The scope decisions are below.
+  - New core source `Fr_Fun name args ordinality atts`. A new dialect field `table_fun` gives the rows of
+    a call, and acceptance rejects an unknown table function (`U_Table_Fun`). In a lateral join, the
+    arguments read the rows on the left; a table function after a comma is lateral, as in PostgreSQL.
+  - PostgreSQL:
+    - `generate_series` over integers, `numeric` and timestamps with an interval step (a zero step is an error);
+    - `unnest` of several arrays, with NULL padding;
+    - `json(b)_array_elements(_text)`, `json(b)_each(_text)`, `json(b)_object_keys`;
+    - `string_to_table`, `regexp_split_to_table`;
+    - `WITH ORDINALITY`.
+  - MySQL: `JSON_TABLE` with `PATH` columns. The column types, `FOR ORDINALITY` and `ON EMPTY/ERROR` are
+    not modelled.
+  - SQLite: `json_each`, with its eight visible columns. `id` numbers the rows; SQLite gives a node offset.
+  - Sources that already existed: `(VALUES ...) AS t(a, b)` (`values_` + `from_as`) and `SELECT` without
+    `FROM`.
+  - Translator: reads `FROM DUAL`, table functions in `FROM` (PostgreSQL, SQLite) and MySQL `JSON_TABLE`.
+  - `TABLE t` is `SELECT * FROM t` (a derived form).
+  - Excluded:
+    - `json_tree` and `XMLTABLE` (XML is not modelled);
+    - SQLite `pragma_*` and other virtual tables, and `INFORMATION_SCHEMA`: they read the catalog,
+      which the model does not have;
+    - `generate_series` in SQLite (an extension, not in the core library).
 - **3.5 `GROUP BY` / `ORDER BY` forms**: ordinals (`GROUP BY 1`), output aliases (MySQL/SQLite allow in `GROUP BY`/`HAVING`/`ORDER BY`; PostgreSQL only in `ORDER BY` and `GROUP BY`), expressions over aliases; `GROUP BY ... WITH ROLLUP` ordering details (MySQL `GROUPING()`, sort of result); `ORDER BY` with `COLLATE`; the ordering of NULLs per type; `ORDER BY` inside views and subqueries (ignored unless `LIMIT`); stable vs unspecified sort of ties (set-valued result: `results : set of lists`).
+  **Status: DONE**. Ordinals and aliases are name resolution, which the translator does before the
+  core sees a query. The core works on the resolved expressions.
+  - `GROUP BY`/`ORDER BY` ordinals: done.
+  - Aliases:
+    - in `GROUP BY`, the tables come first and then the aliases (MySQL, SQLite);
+    - a bare alias in `ORDER BY` comes first;
+    - aliases inside `ORDER BY` expressions (MySQL, SQLite);
+    - aliases in `HAVING`: MySQL looks at the aliases first, SQLite only for names that are not columns,
+      and PostgreSQL rejects them (an unknown column).
+  - `WITH ROLLUP` is `G_Rollup`. Its rows are a bag; the engines do not specify their order without
+    `ORDER BY`.
+  - `ORDER BY ... COLLATE` is an ordering key with `collate`.
+  - NULLs in ordering: `nulls_smallest` per dialect and `NULLS FIRST/LAST` (1.4).
+  - An `ORDER BY` inside a subquery is kept as a list, which the enclosing block reads as a bag; it
+    matters with `LIMIT`/`FETCH`.
+  - The order of ties is not specified. The conformance runner accepts any order of rows with equal
+    keys only for the unordered comparison; making results a set of possible lists is item 3.10.
 - **3.6 Recursion**: multiple CTEs referencing each other, mutual recursion (`WITH RECURSIVE a ..., b ...`), `SEARCH DEPTH/BREADTH FIRST`, `CYCLE` (PostgreSQL, Oracle), recursive CTE restrictions per engine (no aggregates in the recursive term in MySQL, `UNION` vs `UNION ALL`, `LIMIT` in recursive term, data type of the anchor decides column types and truncation in MySQL), per-engine recursion limits (`cte_max_recursion_depth` = 1000 in MySQL/MariaDB/TiDB errors instead of returning the first 1000 steps, which today's `rec_fuel` does: change to an error after 1.1).
+  **Status: DONE** (tests in `src/testing/Test_Recursive.v` and `Test_Recursive2.v`).
+  - Recursion limit: a recursion with no fixpoint within `rec_fuel` = 1000 steps is a failed row. MySQL,
+    MariaDB and TiDB fail there (`cte_max_recursion_depth`). PostgreSQL and SQLite do not terminate,
+    which is a failure of the evaluation too.
+  - CTEs that refer to the CTEs before them are nested `SQ_With`.
+  - Mutual recursion is in none of the engines (PostgreSQL: "mutual recursion between WITH items is not
+    implemented") and is excluded.
+  - `SEARCH`/`CYCLE` are written as PostgreSQL's manual defines them (7.8.2.2): a depth column, or a path
+    array with `= ANY(path)`. The arrays of 2.8 make the `CYCLE` rewriting run; it is tested on a cyclic
+    graph.
+  - An aggregate or a `GROUP BY` in the recursive term is rejected by acceptance in every dialect: new
+    feature `F_Rec_Aggregate`, computed by `rec_term_groups`.
+  - `UNION` and `UNION ALL` are both modelled.
+  - Not modelled: the MySQL rule that the anchor's types decide the column types (and truncation
+    errors), which needs static typing (1.9 / 6.2); `LIMIT` in the recursive term.
 - **3.7 Row values**: `(a, b) < (c, d)`, `(a, b) = (SELECT ..)`, `ROW(..)`, row `IN` with NULLs, `OVERLAPS`, `(a,b) IS NULL`; per-dialect restrictions.
+  **Status: DONE**, tested in `src/testing/Test_Rows.v`.
+  - Row comparisons `row< row<= row> row>=`: the first pair that is not equal decides, and a NULL before
+    the decision makes the result UNKNOWN. They join the existing `row=`/`row<>`.
+  - `(a, b) IS [NOT] NULL` (`row is null`, `row is not null`) for every dialect.
+  - PostgreSQL `OVERLAPS`: an end may be an interval from its start, and the ends are swapped when
+    reversed. The manual's examples are tested.
+  - Row `IN` with NULLs is `C_In`, already modelled.
+  - `ROW(...)` and the parenthesized row are the same syntax (translator).
+  - `(a, b) = (SELECT ...)` with a one-row subquery is written `(a, b) IN (SELECT ...)`. With several
+    rows, the engines raise an error; the model gives the `IN` result instead (a documented difference).
 - **3.8 Scalar subquery and `EXISTS` details**: more than one row is an error (needs 1.1) except in `LIMIT 1` forms; zero rows gives NULL; `ANY`/`ALL` with empty sets; `IN` with `UNION` subqueries; correlated references in `ORDER BY`/`GROUP BY`/`HAVING`; `LATERAL` references to window-function outputs.
+  **Status: DONE**, tested in `src/testing/Test_Subqueries.v`.
+  - A scalar subquery with two rows is an error in PostgreSQL and MySQL, and the first row in SQLite
+    (`scalar_first_row`). With no row, it is NULL.
+  - `ALL` of an empty set is true and `ANY` of it is false; with a NULL, `ALL` and `ANY` are three-valued.
+  - `IN` over a `UNION` and `NOT EXISTS` are tested.
+  - A correlated subquery in `HAVING` reads the group's column.
+  - A `LATERAL` reference to a window output is a lateral join over `SQ_Window`, which needs nothing new.
 - **3.9 Output naming and column identity**: the names of output columns for unnamed expressions (`?column?`, `count(*)`), duplicate names in derived tables (error in PostgreSQL/MySQL `Duplicate column name` when referenced, allowed in outputs), positional semantics (I4), `SELECT *` over joins and `USING`, qualified names `t.*`, ambiguous column errors.
 - **3.10 Non-determinism and environment**: model the choice of rows as a set of allowed results: `LIMIT` without `ORDER BY`, ties, bare columns, `RANDOM`, `NOW`, `UUID()`; a semantic function `eval_query_set : ... -> list tuple -> Prop` (is this multiset a possible result) alongside the executable one; use it in the conformance harness instead of skipping those queries.
 - **3.11 Statements accepted and ignored**: `FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`, `SKIP LOCKED`, optimizer hints, `SELECT ... INTO`, `EXPLAIN` (no result semantics): parsed and accepted with no effect, recorded per dialect.

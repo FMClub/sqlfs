@@ -120,6 +120,27 @@ Definition pg_extra_preds : list (string * (list value -> bool3)) :=
   :: ("not between symmetric", fun l => match l with
                                         | x :: a :: b :: nil => negb3 (orb3 (pg_between (x :: a :: b :: nil)) (pg_between (x :: b :: a :: nil)))
                                         | _ => unknown3 end)
+  (* row comparisons [(a, b) < (c, d)], [(a, b) IS NULL] (TODO 3.7) *)
+  :: row_preds sql_compare is_null
+  (* [(s1, e1) OVERLAPS (s2, e2)]: an end may be an interval from its start; the ends are swapped when
+     they come before the starts; two periods overlap when each starts before the other ends, or when
+     they start together ([overlaps_timestamp]) *)
+  ++ ("overlaps", fun l =>
+        let plus a b := match string_assoc _ "+" symbol_table with Some f => f (a :: b :: nil) | None => b end in
+        let fin a b := match b with Value_V _ => plus a b | _ => b end in
+        match l with
+        | s1 :: e1 :: s2 :: e2 :: nil =>
+          let e1 := fin s1 e1 in let e2 := fin s2 e2 in
+          let lt a b := match sql_compare a b with Some Lt => Some true | Some _ => Some false | None => None end in
+          let eq a b := match sql_compare a b with Some Eq => Some true | Some _ => Some false | None => None end in
+          let ord a b := match lt b a with Some true => (b, a) | _ => (a, b) end in
+          let (s1, e1) := ord s1 e1 in let (s2, e2) := ord s2 e2 in
+          match eq s1 s2, lt s1 e2, lt s2 e1 with
+          | Some true, _, _ => true3
+          | _, Some x, Some y => bool3_of_bool (x && y)
+          | _, _, _ => unknown3
+          end
+        | _ => unknown3 end)
   :: nil.
 
 (** ** Regular expressions (TODO 2.4): Advanced Regular Expressions ([src/backend/regex]): the longest or the
@@ -447,6 +468,119 @@ Definition pg_json_preds : list (string * (list value -> bool3)) :=
                      | _ => unknown3 end)
   :: nil.
 
+(** ** Table functions (TODO 3.4): [generate_series], [unnest], [json(b)_array_elements(_text)],
+    [json(b)_each(_text)], [json(b)_object_keys], [string_to_table], [regexp_split_to_table] *)
+Fixpoint series_Z (fuel : nat) (cur stop step : Z) : list Z :=
+  match fuel with
+  | O => nil
+  | S f => if (if Z.ltb 0 step then Z.leb cur stop else Z.leb stop cur) then cur :: series_Z f (cur + step) stop step else nil
+  end.
+
+Fixpoint series_Q (fuel : nat) (cur stop step : Qc) : list Qc :=
+  match fuel with
+  | O => nil
+  | S f => if (if Qc_lt_bool (Qc_of_Z 0) step then Qc_le_bool cur stop else Qc_le_bool stop cur)
+           then cur :: series_Q f (Qcplus cur step) stop step else nil
+  end.
+
+Fixpoint series_ts (fuel : nat) (cur stop : Z) (iv : Z * Z * Z) (up : bool) : list Z :=
+  match fuel with
+  | O => nil
+  | S f => if (if up then Z.leb cur stop else Z.leb stop cur) then cur :: series_ts f (ts_plus_interval cur iv) stop iv up else nil
+  end.
+
+(** at most a million rows *)
+Definition series_fuel : nat := 1000000.
+
+Definition pg_generate_series (l : list value) : list (list value) :=
+  match l with
+  | a :: b :: rest =>
+    match a, b, rest with
+    | Value_T (Some (x, k)), Value_T (Some _), Value_V (Some (mo, d, us)) :: nil =>
+      match to_ts a, to_ts b with
+      | Some x, Some y =>
+        if Z.eqb mo 0 && Z.eqb d 0 && Z.eqb us 0 then (Value_Err "step size cannot equal zero" :: nil) :: nil
+        else let up := Z.leb 0 (mo * 30 * 86400000000 + d * 86400000000 + us) in
+             map (fun t => VTs t 6 :: nil) (series_ts series_fuel x y (mo, d, us) up)
+      | _, _ => nil
+      end
+    | _, _, _ =>
+      if existsb is_D (a :: b :: rest) then
+        match dec_of_value a, dec_of_value b, match rest with s :: nil => dec_of_value s | _ => Some (Qc_of_Z 1, 0%nat, 0%nat) end with
+        | Some (x, _, s1), Some (y, _, s2), Some (st, _, s3) =>
+          if Qc_is_zero st then (Value_Err "step size cannot equal zero" :: nil) :: nil
+          else let sc := Nat.max s1 (Nat.max s2 s3) in
+               map (fun q => VDec q sc sc :: nil) (series_Q series_fuel x y st)
+        | _, _, _ => nil
+        end
+      else
+        match int_parts a, int_parts b, match rest with s :: nil => int_parts s | _ => Some (1, 32%nat) end with
+        | Some (x, w1), Some (y, w2), Some (st, w3) =>
+          if Z.eqb st 0 then (Value_Err "step size cannot equal zero" :: nil) :: nil
+          else let w := Nat.max w1 (Nat.max w2 w3) in map (fun z => VInt w z :: nil) (series_Z series_fuel x y st)
+        | _, _, _ => nil
+        end
+    end
+  | _ => nil
+  end.
+
+(** [unnest (a1, a2, ...)]: the elements side by side, the shorter arrays padded with NULLs *)
+Definition pg_unnest (l : list value) : list (list value) :=
+  let arrs := map (fun v => match arr_elems v with Some xs => xs | None => nil end) l in
+  let n := fold_left Nat.max (map (@List.length _) arrs) 0%nat in
+  map (fun i => map (fun xs => nth i xs (Value_Z None)) arrs) (seq 0 n).
+
+Definition pg_json_rows (as_text : bool) (kind : nat) (each : bool) (keys : bool) (l : list value) : list (list value) :=
+  match l with
+  | v :: nil =>
+    let out (j : json) : value :=
+        if as_text then match j with JStr t => Value_string (Some t) | JNull => Value_string None | _ => Value_string (Some (text_spaced j)) end
+        else VJ kind j in
+    match json_of_J v with
+    | Some (JArr xs) => if each || keys then nil else map (fun x => out x :: nil) xs
+    | Some (JObj ms) => if keys then map (fun m => Value_string (Some (fst m)) :: nil) ms
+                        else if each then map (fun m => Value_string (Some (fst m)) :: out (snd m) :: nil) ms else nil
+    | _ => nil
+    end
+  | _ => nil
+  end.
+
+Definition pg_table_funs (name : string) : option (list value -> list (list value)) :=
+  match name with
+  | "generate_series" => Some pg_generate_series
+  | "unnest" => Some pg_unnest
+  | "json_array_elements" => Some (pg_json_rows false 1 false false)
+  | "jsonb_array_elements" => Some (pg_json_rows false 0 false false)
+  | "json_array_elements_text" | "jsonb_array_elements_text" => Some (pg_json_rows true 0 false false)
+  | "json_each" => Some (pg_json_rows false 1 true false)
+  | "jsonb_each" => Some (pg_json_rows false 0 true false)
+  | "json_each_text" | "jsonb_each_text" => Some (pg_json_rows true 0 true false)
+  | "json_object_keys" | "jsonb_object_keys" => Some (pg_json_rows true 0 false true)
+  | "string_to_table" => Some (fun l => match string_assoc _ "string_to_array" pg_array_funs with
+                                        | Some f => match arr_elems (f l) with Some xs => map (fun x => x :: nil) xs | None => nil end
+                                        | None => nil end)
+  | "regexp_split_to_table" =>
+    Some (fun l => match l with
+                   | s :: p :: rest =>
+                     match rx_setup pg_rx s p (match rest with f :: _ => Some f | nil => None end) with
+                     | Some (Some (cs, r, o, _)) =>
+                       (* the pieces between the matches; an empty match at the start or the end does not split *)
+                       let ms := filter (fun m => let '(b, e, _) := m in
+                                                  negb (Nat.eqb b e && (Nat.eqb b 0 || Nat.eqb b (List.length cs))))
+                                        (from_pos pg_rx cs r o 1) in
+                       let fix pieces (i : nat) (l : list rmatch) :=
+                           match l with
+                           | nil => txt (skipn i cs) :: nil
+                           | (b, e, _) :: r' => txt (firstn (b - i) (skipn i cs)) :: pieces e r'
+                           end in
+                       map (fun t => Value_string (Some t) :: nil) (pieces 0%nat ms)
+                     | Some None => (Value_Err "invalid regular expression" :: nil) :: nil
+                     | None => nil
+                     end
+                   | _ => nil end)
+  | _ => None
+  end%string.
+
 (** [substr] is a synonym of [substring] *)
 Definition pg_symbol_table : list (string * (list value -> value)) :=
   sys_table default_env "PostgreSQL" ++ pg_array_funs ++ pg_json_funs ++ pg_time_funs ++ pg_regex_funs ++ pg_string_table ++
@@ -470,7 +604,7 @@ Definition PostgreSQL : vsem :=
           sql_order
           canon_numeric
           false
-          (fun f => match f with F_Bare_Column | F_Fetch_Percent | F_Null_Treatment | F_From_Last => false | _ => true end)
+          (fun f => match f with F_Bare_Column | F_Fetch_Percent | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false | _ => true end)
           false
           (* an escape of more than one character: [invalid escape string] *)
           (fun p l => bad_escape pg_skit p l || rx_bad pg_rx ("~" :: "~*" :: "!~" :: "!~*" :: nil)%string p l)
@@ -488,4 +622,5 @@ Definition PostgreSQL : vsem :=
                          | Value_string (Some s) => match bool_of_string s with Some _ => false | None => true end
                          | _ => true end)
           (fun _ _ l => l)
-          (fun l => l).
+          (fun l => l)
+          pg_table_funs.

@@ -33,7 +33,7 @@ Definition tidb_supports (f : feature) : bool :=
   match f with
   | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order | F_Grouping_Sets | F_Cube
   | F_Fetch_Ties | F_Fetch_Percent
-  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last => false
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false
   | _ => true
   end.
 
