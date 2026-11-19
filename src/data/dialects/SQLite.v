@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull IEEE Values Dialects ValueKit Collation PostgreSQL MySQL.
+Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -16,6 +16,7 @@ Open Scope string_scope.
 Open Scope Z_scope.
 
 Import NullValues.
+Import ListNotations.
 
 (** * SQLite 3.4x
 
@@ -159,6 +160,148 @@ Definition lite_concat (l : list value) : value :=
 Definition lite_concat_skip (l : list value) : value :=
   Value_string (Some (fold_left (fun acc v => match text_of v with Some s => acc ++ s | None => acc end) l EmptyString)).
 
+(** * Dates and times ([src/date.c])
+
+    SQLite has no date type: the date functions read a time value (a text [YYYY-MM-DD], [YYYY-MM-DD HH:MM[:SS[.SSS]]],
+    [HH:MM[:SS]], ['now'], or a number of the Julian day), apply the modifiers in order, and return a text.
+    A month or a year modifier does not clamp the day: the date is normalized ([2024-01-31] + 1 month is
+    [2024-03-02]). An invalid time value or modifier gives NULL. *)
+Definition lite_time_value (v : value) : option Z :=
+  match v with
+  | Value_string (Some t) =>
+    if String.eqb t "now" then Some statement_time
+    else match parse_timestamp t with
+         | Some x => Some x
+         | None => match parse_time (if Nat.eqb (String.length t) 5 then t ++ ":00" else t) with
+                   | Some u => Some (ts_of (days_from_civil 2000 1 1) u)
+                   | None => match split_at " " t with
+                             | [d; hm] => match parse_date d, parse_time (hm ++ ":00") with
+                                          | Some dd, Some u => Some (ts_of dd u) | _, _ => None end
+                             | _ => None end
+                   end
+         end
+  | _ => match lenient v with
+         (* a number is a Julian day *)
+         | Some n => let q := Qc_of_num n in
+                     Some (Qc_round (Qcmult (Qcminus q (Q2Qc (Qmake 4881175 2))) (Qc_of_Z usec_per_day)))
+         | None => None
+         end
+  end.
+
+Definition lite_modifier (t : Z) (m : string) : option Z :=
+  let w := filter (fun x => negb (String.eqb x EmptyString)) (split_at " " m) in
+  let shift (n : Z) (unit : string) : option Z :=
+      match unit with
+      | "day" | "days" => Some (t + n * usec_per_day)
+      | "hour" | "hours" => Some (t + n * 3600000000)
+      | "minute" | "minutes" => Some (t + n * 60000000)
+      | "second" | "seconds" => Some (t + n * 1000000)
+      | "month" | "months" | "year" | "years" =>
+        let k := if (String.eqb unit "month" || String.eqb unit "months")%bool then n else n * 12 in
+        let '(y, mo, d) := civil_from_days (ts_days t) in
+        let tot := y * 12 + (mo - 1) + k in
+        Some (ts_of (days_from_civil (tot / 12) (tot mod 12 + 1) d) (ts_usec t))
+      | _ => None
+      end%string in
+  match w with
+  | ["weekday"; n] => match Z_of_string n with
+                      | Some k => let d := ts_days t in Some (ts_of (d + (k - day_of_week d) mod 7) (ts_usec t))
+                      | None => None end
+  | [n; unit] => 
+    let n' := match n with String "+" r => r | _ => n end in
+    match Z_of_string n' with Some k => shift k unit | None => None end
+  | ["start"; "of"; "day"] => Some (ts_of (ts_days t) 0)
+  | ["start"; "of"; "month"] => let '(y, mo, _) := civil_from_days (ts_days t) in Some (ts_of (days_from_civil y mo 1) 0)
+  | ["start"; "of"; "year"] => let '(y, _, _) := civil_from_days (ts_days t) in Some (ts_of (days_from_civil y 1 1) 0)
+  | ["utc"] | ["localtime"] => Some t
+  | _ => None
+  end%string.
+
+Definition lite_eval_time (l : list value) : option Z :=
+  match l with
+  | nil => Some statement_time
+  | v :: mods =>
+    if existsb is_null l then None else
+    match lite_time_value v with
+    | Some t => fold_left (fun acc m => match acc, text_of m with Some t, Some m => lite_modifier t m | _, _ => None end) mods (Some t)
+    | None => None
+    end
+  end.
+
+Definition lite_hms (u : Z) : string := time_text u 0.
+
+(** [strftime]: [%d %f %H %j %J %m %M %s %S %w %Y %%] *)
+Fixpoint lite_strftime (fuel : nat) (t : Z) (fmt : string) : string :=
+  match fuel with
+  | O => EmptyString
+  | S f =>
+    match fmt with
+    | EmptyString => EmptyString
+    | String "%" (String c r) =>
+      let days := ts_days t in
+      let '(y, m, d) := civil_from_days days in
+      let us := ts_usec t in
+      let piece :=
+          match c with
+          | "d" => pad 2 d | "m" => pad 2 m | "Y" => pad 4 y | "H" => pad 2 (us / 3600000000)
+          | "M" => pad 2 ((us / 60000000) mod 60) | "S" => pad 2 ((us / 1000000) mod 60)
+          | "f" => (pad 2 ((us / 1000000) mod 60) ++ "." ++ pad 3 ((us / 1000) mod 1000))%string
+          | "j" => pad 3 (day_of_year days) | "w" => NullValues.string_of_Z (day_of_week days)
+          | "s" => NullValues.string_of_Z (Z.div t 1000000)
+          | "%" => "%"%string
+          | _ => String "%" (String c EmptyString)
+          end%char in
+      piece ++ lite_strftime f t r
+    | String c r => String c (lite_strftime f t r)
+    end
+  end.
+
+(** * JSON ([src/json.c])
+
+    SQLite has no JSON type: the JSON functions return texts (minified, the members in their order), and
+    [json_extract] and [->>] return SQL values (a string, an integer, a real, 1 or 0 for [true] and
+    [false], NULL for [null], the text of an array or an object). An argument which is not valid JSON is an
+    error ([malformed JSON]). The subtype which marks a text as JSON is not modelled: a text given to
+    [json_array] or [json_object] is a JSON string. *)
+Definition lite_json_doc (v : value) : option (option json) :=
+  if is_null v then Some None
+  else match text_of v with
+       | Some t => match parse_json t with Some j => Some (Some j) | None => None end
+       | None => Some None
+       end.
+
+Definition lite_json_of_value (v : value) : json :=
+  if is_null v then JNull else
+  match v with
+  | Value_Z (Some z) => JNum (NullValues.string_of_Z z)
+  | Value_F (Some (x, k)) => JNum (lite_text (special_of_tag (Nat.div (Nat.modulo k 10) 2)) x)
+  | _ => match text_of v with Some t => JStr t | None => JNull end
+  end.
+
+Definition lite_sql_of_json (j : json) : value :=
+  match j with
+  | JNull => Value_Z None
+  | JBool b => Value_Z (Some (if b then 1 else 0))
+  | JStr t => Value_string (Some t)
+  | JNum t => match Z_of_string t with Some z => Value_Z (Some z) | None => to_float false (Qc_of_num (parse_prefix t)) end
+  | _ => Value_string (Some (text_compact j))
+  end.
+
+Definition lite_json_type (j : json) : string :=
+  match j with
+  | JNull => "null" | JBool true => "true" | JBool false => "false"
+  | JNum t => match Z_of_string t with Some _ => "integer" | None => "real" end
+  | JStr _ => "text" | JArr _ => "array" | JObj _ => "object"
+  end.
+
+Definition lite_json_at (doc p : value) : option (option json) :=
+  match lite_json_doc doc, text_of p with
+  | None, _ => None
+  | Some None, _ => Some None
+  | Some (Some d), Some path => match parse_path path with Some st => Some (follow st d) | None => None end
+  | _, None => Some None
+  end.
+
 Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
   let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
@@ -201,6 +344,42 @@ Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
                                               | _ => v1 end
                          | _ => Value_Z None end)
   :: ("case", case_by lite_truth)
+  (* JSON *)
+  :: ("json", fun l => match l with v :: nil => match lite_json_doc v with Some (Some j) => Value_string (Some (text_compact j)) | Some None => Value_string None | None => Value_Err "malformed JSON" end | _ => Value_string None end)
+  :: ("json_extract", fun l => match l with d :: p :: nil => match lite_json_at d p with Some (Some r) => lite_sql_of_json r | Some None => Value_Z None | None => Value_Err "malformed JSON" end | _ => Value_Z None end)
+  :: ("->", fun l => match l with d :: p :: nil => match lite_json_at d p with Some (Some r) => Value_string (Some (text_compact r)) | Some None => Value_string None | None => Value_Err "malformed JSON" end | _ => Value_string None end)
+  :: ("->>", fun l => match l with d :: p :: nil => match lite_json_at d p with Some (Some r) => lite_sql_of_json r | Some None => Value_Z None | None => Value_Err "malformed JSON" end | _ => Value_Z None end)
+  :: ("json_array", fun l => Value_string (Some (text_compact (JArr (map lite_json_of_value l)))))
+  :: ("json_object", fun l => 
+        let fix pairs (l : list value) : option (list (string * json)) :=
+            match l with
+            | nil => Some nil
+            | k :: v :: r => match text_of k, pairs r with Some key, Some rest => Some ((key, lite_json_of_value v) :: rest) | _, _ => None end
+            | _ => None end in
+        match pairs l with Some ps => Value_string (Some (text_compact (JObj ps))) | None => Value_Err "json_object() requires an even number of arguments" end)
+  :: ("json_type", fun l => match l with 
+                            | v :: nil => match lite_json_doc v with Some (Some j) => Value_string (Some (lite_json_type j)) | Some None => Value_string None | None => Value_Err "malformed JSON" end
+                            | d :: p :: nil => match lite_json_at d p with Some (Some j) => Value_string (Some (lite_json_type j)) | Some None => Value_string None | None => Value_Err "malformed JSON" end
+                            | _ => Value_string None end)
+  :: ("json_valid", fun l => match l with v :: nil => if is_null v then Value_Z None else Value_Z (Some (match lite_json_doc v with Some (Some _) => 1 | _ => 0 end)) | _ => Value_Z None end)
+  :: ("json_array_length", fun l => match l with 
+                                    | v :: nil => match lite_json_doc v with Some (Some (JArr a)) => Value_Z (Some (Z.of_nat (List.length a))) | Some (Some _) => Value_Z (Some 0) | Some None => Value_Z None | None => Value_Err "malformed JSON" end
+                                    | d :: p :: nil => match lite_json_at d p with Some (Some (JArr a)) => Value_Z (Some (Z.of_nat (List.length a))) | Some (Some _) => Value_Z (Some 0) | Some None => Value_Z None | None => Value_Err "malformed JSON" end
+                                    | _ => Value_Z None end)
+  :: ("date", fun l => match lite_eval_time l with Some t => Value_string (Some (date_text (ts_days t))) | None => Value_string None end)
+  :: ("time", fun l => match lite_eval_time l with Some t => Value_string (Some (lite_hms (ts_usec t))) | None => Value_string None end)
+  :: ("datetime", fun l => match lite_eval_time l with 
+                           | Some t => Value_string (Some (date_text (ts_days t) ++ " " ++ lite_hms (ts_usec t))) 
+                           | None => Value_string None end)
+  :: ("julianday", fun l => match lite_eval_time l with 
+                            | Some t => to_float false (Qcplus (Q2Qc (Qmake 4881175 2)) (Qcdiv (Qc_of_Z t) (Qc_of_Z usec_per_day)))
+                            | None => Value_F None end)
+  :: ("unixepoch", fun l => match lite_eval_time l with Some t => Value_Z (Some (Z.div t 1000000)) | None => Value_Z None end)
+  :: ("strftime", fun l => match l with
+                           | f :: r => match text_of f, lite_eval_time r with
+                                       | Some fmt, Some t => Value_string (Some (lite_strftime (S (String.length fmt)) t fmt))
+                                       | _, _ => Value_string None end
+                           | _ => Value_string None end)
   (* [x COLLATE c]: [no such collation sequence] for an unknown name *)
   :: ("collate", fun l => match l with
                           | v :: Value_string (Some n) :: nil =>
@@ -284,7 +463,7 @@ Definition lite_real (v : value) : value :=
 
 Definition lite_textual (l : list value) : list value :=
   map (fun v => match v with
-                | Value_F (Some (x, k)) => Value_string (Some (lite_text (special_of_tag (Nat.div k 2)) x))
+                | Value_F (Some (x, k)) => Value_string (Some (lite_text (special_of_tag (Nat.div (Nat.modulo k 10) 2)) x))
                 | _ => v
                 end) l.
 
@@ -295,7 +474,7 @@ Definition lite_text_funs : list string :=
 Definition lite_symbol_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) lite_text_funs
                 then (fst p, fun l => (snd p) (lite_textual l))
-                else (fst p, fun l => lite_real ((snd p) l))) lite_symbol_table_raw.
+                else (fst p, fun l => lite_real ((snd p) l))) (c_math_table true lenient ++ bit_table true lenient ++ lite_round_table lenient ++ lite_symbol_table_raw).
 
 Definition lite_aggregate_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) ("group_concat" :: "group_concat_sep" :: "string_agg_sep" :: nil)
@@ -322,6 +501,48 @@ Definition canon_lite (v : value) : value :=
   | _ => canon_numeric v
   end.
 
+(** * Type affinity ("Type Conversions Prior To Comparison", datatype3.html)
+
+    When an operand of a comparison has [INTEGER], [REAL] or [NUMERIC] affinity and the other one [TEXT] or
+    none, [NUMERIC] affinity is applied to the other one: a text which is a well-formed number becomes that
+    number. When an operand has [TEXT] affinity and the other none, [TEXT] affinity is applied to the other
+    one: a number becomes its text. A column has the affinity of its declared type; the other expressions
+    have none. *)
+Definition lite_numeric_affinity (v : value) : value :=
+  match v with
+  | Value_string (Some s) =>
+    let t := string_rtrim (string_ltrim s) in
+    match parse_number t with
+    | (Num_Z z, true) => Value_Z (Some z)
+    | (n, true) => to_float false (Qc_of_num n)
+    | _ => v end
+  | _ => v
+  end.
+
+Definition lite_text_affinity (v : value) : value :=
+  match v with
+  | Value_Z (Some z) => Value_string (Some (NullValues.string_of_Z z))
+  | Value_F (Some (x, k)) => Value_string (Some (lite_text (special_of_tag (Nat.div (Nat.modulo k 10) 2)) x))
+  | _ => v
+  end.
+
+Definition lite_comparisons : list string :=
+  "=" :: "==" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: "is" :: "is not" :: "between" :: "not between" :: nil.
+
+Definition lite_cmp_coerce (p : string) (ks : list nat) (l : list value) : list value :=
+  if negb (existsb (String.eqb p) lite_comparisons) then l else
+  match ks, l with
+  | k1 :: k2 :: kr, v1 :: v2 :: vr =>
+    let (v1', v2') :=
+        if Nat.eqb k1 2 && negb (Nat.eqb k2 2) then (v1, lite_numeric_affinity v2)
+        else if Nat.eqb k2 2 && negb (Nat.eqb k1 2) then (lite_numeric_affinity v1, v2)
+        else if Nat.eqb k1 1 && Nat.eqb k2 0 then (v1, lite_text_affinity v2)
+        else if Nat.eqb k2 1 && Nat.eqb k1 0 then (lite_text_affinity v1, v2)
+        else (v1, v2) in
+    v1' :: v2' :: vr
+  | _, _ => l
+  end.
+
 Definition SQLite : vsem :=
   mk_vsem "SQLite"
           (table_of_list lite_pred_table)
@@ -339,4 +560,5 @@ Definition SQLite : vsem :=
           (fun _ _ => false)
           (* a literal with a decimal point is a [REAL] *)
           lite_real
-          (fun _ => false).
+          (fun _ => false)
+          lite_cmp_coerce.

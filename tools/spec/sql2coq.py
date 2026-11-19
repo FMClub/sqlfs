@@ -91,10 +91,10 @@ def tokenize(s):
         elif s.startswith(('<=>', ), i):
             toks.append(('op', '<=>'))
             i += 3
-        elif s[i:i + 2] in ('<=', '>=', '<>', '!=', '||', '&&', ':='):
+        elif s[i:i + 2] in ('<=', '>=', '<>', '!=', '||', '&&', ':=', '<<', '>>'):
             toks.append(('op', s[i:i + 2]))
             i += 2
-        elif c in '+-*/%=<>(),.;@':
+        elif c in '+-*/%=<>(),.;@&|^~':
             toks.append(('op', c))
             i += 1
         else:
@@ -349,7 +349,7 @@ class P:
         return self.e_pred()
 
     def e_pred(self):
-        l = self.e_add()
+        l = self.e_bitor()
         while True:
             neg = False
             save = self.i
@@ -381,16 +381,16 @@ class P:
                 self.need_op(')')
                 l = ('in', neg, l, items)
             elif self.eat_kw('like'):
-                r = self.e_add()
+                r = self.e_bitor()
                 if self.kw('escape'):
                     raise Skip('escape')
                 if self.kw('binary'):
                     raise Skip('like binary')
                 l = ('like', neg, l, r)
             elif self.eat_kw('between'):
-                lo = self.e_add()
+                lo = self.e_bitor()
                 self.need_kw('and')
-                hi = self.e_add()
+                hi = self.e_bitor()
                 l = ('between', neg, l, lo, hi)
             elif self.kw('regexp', 'rlike'):
                 raise Skip('regexp')
@@ -411,9 +411,39 @@ class P:
                         self.need_op(')')
                         l = ('quant', t[1], quant, [l] if l[0] != 'row' else l[1], q)
                         continue
-                    l = ('cmp', t[1], l, self.e_add())
+                    l = ('cmp', t[1], l, self.e_bitor())
                 else:
                     break
+        return l
+
+    # the bit operators of the MySQL family: | below &, below << >>, below + -; ^ above * /
+    def e_bitor(self):
+        l = self.e_bitand()
+        while self.peek() == ('op', '|'):
+            self.i += 1
+            l = ('bin', '|', l, self.e_bitand())
+        return l
+
+    def e_bitand(self):
+        l = self.e_shift()
+        while self.peek() == ('op', '&'):
+            self.i += 1
+            l = ('bin', '&', l, self.e_shift())
+        return l
+
+    def e_shift(self):
+        l = self.e_add()
+        while self.peek() in (('op', '<<'), ('op', '>>')):
+            op = self.peek()[1]
+            self.i += 1
+            l = ('bin', op, l, self.e_add())
+        return l
+
+    def e_bitxor(self):
+        l = self.e_unary()
+        while self.peek() == ('op', '^'):
+            self.i += 1
+            l = ('bin', '^', l, self.e_unary())
         return l
 
     def e_add(self):
@@ -427,16 +457,16 @@ class P:
                 return l
 
     def e_mul(self):
-        l = self.e_unary()
+        l = self.e_bitxor()
         while True:
             t = self.peek()
             if t[0] == 'op' and t[1] in ('*', '/', '%'):
                 self.i += 1
-                l = ('bin', t[1], l, self.e_unary())
+                l = ('bin', t[1], l, self.e_bitxor())
             elif self.kw('div', 'mod'):
                 w = t[1].lower()
                 self.i += 1
-                l = ('bin', w, l, self.e_unary())
+                l = ('bin', w, l, self.e_bitxor())
             else:
                 return l
 
@@ -448,6 +478,8 @@ class P:
             return ('neg', e)
         if self.eat_op('+'):
             return self.e_unary()
+        if self.eat_op('~'):
+            return ('bitnot', self.e_unary())
         if self.eat_kw('not'):
             return ('not', self.e_unary())
         return self.e_primary()
@@ -512,7 +544,24 @@ class P:
             q = self.query()
             self.need_op(')')
             return ('exists', q)
-        if self.kw('interval', 'binary'):
+        if self.kw('date', 'timestamp', 'time') and self.peek(1)[0] == 'str':
+            ty = self.peek()[1].lower()
+            lit = self.peek(1)[1]
+            self.i += 2
+            return ('temporal', ty, lit)
+        if self.kw('interval'):
+            self.i += 1
+            if self.peek()[0] == 'str' and ENGINE == 'postgresql':
+                lit = self.peek()[1]
+                self.i += 1
+                return ('pginterval', lit)
+            n = self.e_primary()
+            unit = self.peek()[1]
+            if unit.upper() not in ('YEAR', 'QUARTER', 'MONTH', 'WEEK', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'MICROSECOND'):
+                raise Skip('interval unit')
+            self.i += 1
+            return ('interval', n, unit.upper())
+        if self.kw('binary'):
             raise Skip('construct')
         if t[0] in ('id', 'kw'):
             name = t[1]
@@ -636,6 +685,32 @@ def scaled_lit(txt):
     return ('-' if neg else '') + str(n), len(b)
 
 
+def temporal_value(txt, ty, fsp=0):
+    """The Coq value of a DATE, DATETIME, TIMESTAMP or TIME column holding the text txt."""
+    import datetime
+    epoch = datetime.datetime(1970, 1, 1)
+    t = txt.strip()
+    try:
+        if ty == 'date':
+            d = datetime.datetime.strptime(t[:10], '%Y-%m-%d')
+            return '(NullValues.VDate (%d))' % (d - epoch).days
+        if ty == 'time':
+            h, m, s = t.split(':')
+            us = ((int(h) * 60 + int(m)) * 60) * 1000000 + int(round(float(s) * 1000000))
+            return '(NullValues.VTime (%d) %d)' % (us, fsp)
+        fmt = '%Y-%m-%d %H:%M:%S' if ' ' in t else '%Y-%m-%d'
+        frac = 0
+        if '.' in t:
+            t, f = t.split('.')
+            # the fractional seconds are rounded to the precision of the column
+            frac = int(round(float('0.' + f) * 10 ** fsp)) * 10 ** (6 - fsp)
+        d = datetime.datetime.strptime(t, fmt)
+        us = ((d - epoch).days * 86400 + (d - epoch).seconds) * 1000000 + frac
+        return '(NullValues.VTs (%d) %d)' % (us, fsp)
+    except ValueError:
+        raise Skip('temporal value')
+
+
 def round_to_scale(txt, scale):
     """The unscaled integer of a decimal literal stored in a DECIMAL(p, scale) column: MySQL rounds
     half away from zero."""
@@ -747,12 +822,19 @@ class Tr:
             return '(col %s)' % attr(kind, alias + '.' + name)
         if k == 'neg':
             return '(fn "neg" [%s])' % self.ex(e[1])
+        if k == 'bitnot':
+            return '(fn "~" [%s])' % self.ex(e[1])
         if k == 'bin':
             op = e[1]
             if op in ('and', 'or', 'xor', '||'):
                 return '(e_cond %s)' % self.cond(e) if op in ('and', 'or') and False else \
                        '(fn "%s" [%s; %s])' % (op, self.ex(e[2]), self.ex(e[3]))
-            name = {'+': '+', '-': '-', '*': '*', '/': '/', '%': '%', 'div': 'div', 'mod': 'mod'}[op]
+            name = {'+': '+', '-': '-', '*': '*', '/': '/', '%': '%', 'div': 'div', 'mod': 'mod',
+                    '&': '&', '|': '|', '<<': '<<', '>>': '>>',
+                    # [^] is the exclusive or of the MySQL family, [#] that of PostgreSQL
+                    '^': '#' if ENGINE == 'postgresql' else '^'}[op]
+            if op == '^' and ENGINE == 'postgresql':
+                name = 'power'
             return '(fn "%s" [%s; %s])' % (name, self.ex(e[2]), self.ex(e[3]))
         if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant'):
             return '(e_cond %s)' % self.cond(e)
@@ -761,6 +843,15 @@ class Tr:
             return '(e_sub %s)' % cq
         if k == 'row':
             raise Skip('row value')
+        if k == 'temporal':
+            f = {'date': 'cast_date', 'timestamp': 'cast_timestamp', 'time': 'cast_time'}[e[1]]
+            if ENGINE == 'mysql' and e[1] == 'timestamp':
+                f = 'cast_datetime'
+            return '(fn "%s" [(str %s)])' % (f, coq_str(e[2]))
+        if k == 'interval':
+            return '(fn "interval" [%s; (str "%s")])' % (self.ex(e[1]), e[2])
+        if k == 'pginterval':
+            return '(fn "cast_interval" [(str %s)])' % coq_str(e[1])
         if k == 'cast_dec':
             return '(fn "cast_decimal" [%s; (int %d); (int %d)])' % (self.ex(e[3]), e[1], e[2])
         if k == 'cast':
@@ -1186,6 +1277,9 @@ def parse_create(toks):
             if ty in ('float', 'real', 'double', 'float4', 'float8'):
                 bits = {'double': 64, 'float8': 64, 'float4': 32, 'real': REAL_BITS}.get(ty, FLOAT_BITS)
                 width = ('flt', bits)
+            fsp = 0
+            if ty in ('datetime', 'timestamp', 'time') and p.op('(') and p.peek(1)[0] == 'num':
+                fsp = int(p.peek(1)[1])
             if ty in ('decimal', 'numeric'):
                 # DECIMAL(p, s); DECIMAL(p) and DECIMAL have the scale 0
                 width = ('dec', 0)
@@ -1203,7 +1297,10 @@ def parse_create(toks):
                         depth -= 1
                         if depth == 0:
                             break
-            if ty in NUM_TYPES:
+            if ty in ('date', 'datetime', 'timestamp', 'time') and ENGINE != 'sqlite':
+                kind = 'Z'
+                width = ('tmp', ty, fsp)
+            elif ty in NUM_TYPES:
                 kind = 'Z'
             elif ty in DEC_TYPES:
                 kind = 'Q'
@@ -1263,7 +1360,7 @@ def conv_value(lit, kind, limit=None):
         raise Skip('truncation')
     if lit[0] == 'str' and isinstance(limit, int) and len(lit[1]) > limit:
         raise Skip('truncation')
-    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] not in ('dec', 'flt', 'uns', 'pgint', 'char') and '.' not in lit[1] and 'e' not in lit[1].lower() and not (limit[0] <= int(lit[1]) <= limit[1]):
+    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] not in ('dec', 'flt', 'uns', 'pgint', 'char', 'tmp') and '.' not in lit[1] and 'e' not in lit[1].lower() and not (limit[0] <= int(lit[1]) <= limit[1]):
         raise Skip('out of range')
     if lit[0] == 'null':
         return {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[kind]
@@ -1275,9 +1372,13 @@ def conv_value(lit, kind, limit=None):
                 return 'VS %s' % coq_str(lit[1].rstrip(' '))
             return 'VS %s' % coq_str(lit[1])
         raise Skip('number into string column')
+    if lit[0] == 'str' and isinstance(limit, tuple) and limit[0] == 'tmp':
+        return temporal_value(lit[1], limit[1], limit[2])
     if lit[0] == 'str':
         raise Skip('string into numeric column')
     txt = lit[1]
+    if isinstance(limit, tuple) and limit[0] == 'tmp':
+        raise Skip('number into temporal column')
     if kind == 'Z':
         if '.' in txt:
             raise Skip('decimal into int column')
@@ -1497,10 +1598,15 @@ def process(path, out, stats):
                     if not p.eat_op(','):
                         break
             elif head == 'create':
+                # the parents of the foreign keys: a change of a parent can cascade to the child
+                refs = [toks[i + 1][1].lower() for i in range(len(toks) - 1)
+                        if toks[i][0] in ('id', 'kw') and toks[i][1].lower() == 'references'
+                        and toks[i + 1][0] in ('id', 'kw')]
                 try:
                     name, cols, limits = parse_create(toks)
                     tables[name.lower()] = Table(name, cols)
                     tables[name.lower()].limits = limits
+                    tables[name.lower()].parents = refs
                 except Skip:
                     # an unsupported table: remember that it exists but is unreliable
                     p = P(toks)
@@ -1532,12 +1638,27 @@ def process(path, out, stats):
                         n = p.ident()
                         if n.lower() in tables:
                             tables[n.lower()].ok = False
+                            # ON DUPLICATE KEY UPDATE can cascade to the children
+                            for t in tables.values():
+                                if n.lower() in getattr(t, 'parents', []):
+                                    t.ok = False
                     except Skip:
                         pass
             elif head in ('update', 'delete', 'replace', 'truncate', 'alter', 'rename'):
+                changed = set()
                 for t in tables.values():
                     if re.search(r'\b' + re.escape(t.name) + r'\b', s, re.I):
                         t.ok = False
+                        changed.add(t.name.lower())
+                # the cascades of the foreign keys (ON DELETE / ON UPDATE CASCADE, SET NULL)
+                grew = True
+                while grew:
+                    grew = False
+                    for t in tables.values():
+                        if t.name.lower() not in changed and changed & set(getattr(t, 'parents', [])):
+                            t.ok = False
+                            changed.add(t.name.lower())
+                            grew = True
             elif head == 'select':
                 if res is None:
                     stats['hidden'] = stats.get('hidden', 0) + 1

@@ -228,10 +228,12 @@ Definition join_compatible_tuple (t1 t2 : tuple T) : bool :=
       end)
    (labels T t1 interS labels T t2).
 
+(** the labels of [t1] are computed once, not for each attribute (the evaluation is call-by-value) *)
 Definition join_tuple t1 t2 :=
+  let l1 := labels T t1 in
   mk_tuple 
-    T (labels T t1 unionS labels T t2) 
-    (fun a => if a inS? labels T t1 then dot T t1 a else dot T t2 a).
+    T (l1 unionS labels T t2) 
+    (fun a => if a inS? l1 then dot T t1 a else dot T t2 a).
 
 Lemma join_tuple_unfold : 
   forall t1 t2, join_tuple t1 t2 = 

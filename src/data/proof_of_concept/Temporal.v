@@ -183,3 +183,145 @@ Definition parse_timestamp (s : string) : option Z :=
               end
   | _ => None
   end.
+
+(** * Weeks *)
+
+(** ISO 8601: the week starts on Monday, week 1 contains the first Thursday of the year *)
+Definition iso_weekday (days : Z) : Z := let w := day_of_week days in if w =? 0 then 7 else w.
+
+Definition iso_week_year (days : Z) : Z * Z :=
+  let thursday := days - iso_weekday days + 4 in
+  let '(y, _, _) := civil_from_days thursday in
+  (y, (thursday - days_from_civil y 1 1) / 7 + 1).
+
+(** * Intervals (PostgreSQL): months, days and microseconds, kept apart *)
+
+Definition plural (n : Z) (unit : string) : string :=
+  (string_of_Z n ++ " " ++ unit ++ (if Z.eqb (Z.abs n) 1 then "" else "s"))%string.
+
+(** [interval_out] with [IntervalStyle] = [postgres]: [1 year 2 mons 3 days 04:05:06] *)
+Definition pg_interval_text (months days usec : Z) : string :=
+  let y := Z.quot months 12 in
+  let mo := Z.rem months 12 in
+  let parts := (if Z.eqb y 0 then nil else [plural y "year"]) ++
+               (if Z.eqb mo 0 then nil else [if Z.eqb (Z.abs mo) 1 then (string_of_Z mo ++ " mon")%string else (string_of_Z mo ++ " mons")%string]) ++
+               (if Z.eqb days 0 then nil else [plural days "day"]) ++
+               (if Z.eqb usec 0 then nil else [pg_time_text usec]) in
+  match parts with
+  | nil => "00:00:00"
+  | p :: r => fold_left (fun acc x => (acc ++ " " ++ x)%string) r p
+  end.
+
+(** [n unit] for an interval literal or [INTERVAL n unit] *)
+Definition interval_of_unit (n : Z) (unit : string) : option (Z * Z * Z) :=
+  match unit with
+  | "year" | "years" | "YEAR" => Some (n * 12, 0, 0)
+  | "month" | "months" | "mon" | "mons" | "MONTH" => Some (n, 0, 0)
+  | "week" | "weeks" | "WEEK" => Some (0, n * 7, 0)
+  | "day" | "days" | "DAY" => Some (0, n, 0)
+  | "hour" | "hours" | "HOUR" => Some (0, 0, n * 3600000000)
+  | "minute" | "minutes" | "min" | "mins" | "MINUTE" => Some (0, 0, n * 60000000)
+  | "second" | "seconds" | "sec" | "secs" | "SECOND" => Some (0, 0, n * 1000000)
+  | "microsecond" | "microseconds" | "MICROSECOND" => Some (0, 0, n)
+  | "quarter" | "QUARTER" => Some (n * 3, 0, 0)
+  | _ => None
+  end%string.
+
+(** [timestamp + interval]: the months (the day clamped), then the days, then the microseconds *)
+Definition ts_plus_interval (ts : Z) (iv : Z * Z * Z) : Z :=
+  let '(mo, d, us) := iv in
+  ts_of (add_months (ts_days ts) mo + d) (ts_usec ts) + us.
+
+(** * The time of the statement
+
+    [now()], [CURRENT_DATE], [CURRENT_TIMESTAMP], [SYSDATE] are the time at which the statement
+    starts; the model takes it as a parameter of the environment, fixed here to
+    2026-01-01 12:00:00 UTC (a query which reads it has this value in all the dialects). *)
+Definition statement_time : Z := ts_of (days_from_civil 2026 1 1) (12 * 3600000000).
+
+(** * Formats *)
+
+Definition month_names : list string :=
+  ["January"; "February"; "March"; "April"; "May"; "June"; "July"; "August"; "September"; "October"; "November"; "December"]%string.
+Definition day_names : list string := ["Sunday"; "Monday"; "Tuesday"; "Wednesday"; "Thursday"; "Friday"; "Saturday"]%string.
+
+Definition upper_ascii (c : ascii) : ascii :=
+  let n := nat_of_ascii c in if (Nat.leb 97 n && Nat.leb n 122)%bool then ascii_of_nat (n - 32) else c.
+Fixpoint upper_string (s : string) : string := match s with EmptyString => EmptyString | String c r => String (upper_ascii c) (upper_string r) end.
+
+Definition month_name (m : Z) : string := nth (Z.to_nat (m - 1)) month_names EmptyString.
+Definition day_name (dow : Z) : string := nth (Z.to_nat dow) day_names EmptyString.
+
+(** MySQL [DATE_FORMAT] ([Item_func_date_format], [make_date_time]): [%Y %y %m %c %d %e %H %k %h %I %l %i %s %S
+    %f %p %M %b %W %a %j %w %T %r %%]; another character after [%] is itself *)
+Fixpoint my_format (fuel : nat) (ts : Z) (fmt : string) : string :=
+  match fuel with
+  | O => EmptyString
+  | S f =>
+    match fmt with
+    | EmptyString => EmptyString
+    | String "%" (String c r) =>
+      let days := ts_days ts in
+      let '(y, m, d) := civil_from_days days in
+      let us := ts_usec ts in
+      let h := us / 3600000000 in
+      let mi := (us / 60000000) mod 60 in
+      let se := (us / 1000000) mod 60 in
+      let h12 := let x := h mod 12 in if Z.eqb x 0 then 12 else x in
+      let piece :=
+          match c with
+          | "Y" => pad 4 y | "y" => pad 2 (y mod 100) | "m" => pad 2 m | "c" => string_of_Z m
+          | "d" => pad 2 d | "e" => string_of_Z d | "H" => pad 2 h | "k" => string_of_Z h
+          | "h" | "I" => pad 2 h12 | "l" => string_of_Z h12 | "i" => pad 2 mi
+          | "s" | "S" => pad 2 se | "f" => pad 6 (us mod 1000000)
+          | "p" => if Z.ltb h 12 then "AM"%string else "PM"%string
+          | "M" => month_name m | "b" => substring 0 3 (month_name m)
+          | "W" => day_name (day_of_week days) | "a" => substring 0 3 (day_name (day_of_week days))
+          | "j" => pad 3 (day_of_year days) | "w" => string_of_Z (day_of_week days)
+          | "T" => (pad 2 h ++ ":" ++ pad 2 mi ++ ":" ++ pad 2 se)%string
+          | "r" => (pad 2 h12 ++ ":" ++ pad 2 mi ++ ":" ++ pad 2 se ++ " " ++ (if Z.ltb h 12 then "AM" else "PM"))%string
+          | _ => String c EmptyString
+          end%char in
+      (piece ++ my_format f ts r)%string
+    | String c r => String c (my_format f ts r)
+    end
+  end.
+
+Open Scope string_scope.
+
+Fixpoint repeat_space (n : nat) : string := match n with O => EmptyString | S k => String " " (repeat_space k) end.
+
+(** PostgreSQL [to_char] and Oracle [TO_CHAR] for dates: the patterns [YYYY YY MM DD HH24 HH12 HH MI SS MS US
+    Month Mon Day Dy AM PM Q DDD D WW]; the other characters are copied. *)
+Fixpoint pg_format (fuel : nat) (ts : Z) (fmt : string) : string :=
+  match fuel with
+  | O => EmptyString
+  | S f =>
+    let days := ts_days ts in
+    let '(y, m, d) := civil_from_days days in
+    let us := ts_usec ts in
+    let h := us / 3600000000 in
+    let mi := (us / 60000000) mod 60 in
+    let se := (us / 1000000) mod 60 in
+    let h12 := let x := h mod 12 in if Z.eqb x 0 then 12 else x in
+    let take (p : string) := String.prefix p fmt in
+    let rest (p : string) := substring (String.length p) (String.length fmt - String.length p) fmt in
+    let try (p out : string) (k : string -> string) (otherwise : string) := if take p then (out ++ k (rest p))%string else otherwise in
+    let go := pg_format f ts in
+    match fmt with
+    | EmptyString => EmptyString
+    | String c r =>
+      try "YYYY" (pad 4 y) go (try "YY" (pad 2 (y mod 100)) go (try "MM" (pad 2 m) go (try "DDD" (pad 3 (day_of_year days)) go
+      (try "DD" (pad 2 d) go (try "HH24" (pad 2 h) go (try "HH12" (pad 2 h12) go (try "HH" (pad 2 h12) go
+      (try "MI" (pad 2 mi) go (try "SS" (pad 2 se) go (try "MS" (pad 3 ((us / 1000) mod 1000)) go (try "US" (pad 6 (us mod 1000000)) go
+      (try "Month" (let n := month_name m in (n ++ repeat_space (9 - String.length n))%string) go
+      (try "MONTH" (let n := upper_string (month_name m) in (n ++ repeat_space (9 - String.length n))%string) go
+      (try "Mon" (substring 0 3 (month_name m)) go (try "MON" (upper_string (substring 0 3 (month_name m))) go
+      (try "Day" (let n := day_name (day_of_week days) in (n ++ repeat_space (9 - String.length n))%string) go
+      (try "Dy" (substring 0 3 (day_name (day_of_week days))) go
+      (try "AM" (if Z.ltb h 12 then "AM" else "PM") go (try "PM" (if Z.ltb h 12 then "AM" else "PM") go
+      (try "Q" (string_of_Z ((m - 1) / 3 + 1)) go (try "D" (string_of_Z (day_of_week days + 1)) go
+      (try "WW" (pad 2 ((day_of_year days - 1) / 7 + 1)) go
+      (String c (go r))))))))))))))))))))))))
+    end
+  end.

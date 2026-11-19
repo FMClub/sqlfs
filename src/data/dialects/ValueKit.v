@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon Qround.
 
-Require Import Bool3 OrderedSet IEEE Values.
+Require Import Bool3 OrderedSet IEEE Temporal Json Values.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -61,7 +61,7 @@ Definition lenient (v : value) : option num :=
   | Value_Z (Some z) => Some (Num_Z z)
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
-  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div (Nat.modulo k 10) 2) 1 then Some (Num_Q q) else None
   | Value_I (Some (z, _)) => Some (Num_Z z)
   | Value_bool (Some b) => Some (Num_Z (if b then 1%Z else 0%Z))
   | Value_string (Some s) => Some (parse_prefix s)
@@ -75,7 +75,7 @@ Definition strict_conv (v : value) : option num :=
   | Value_Z (Some z) => Some (Num_Z z)
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
-  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div (Nat.modulo k 10) 2) 1 then Some (Num_Q q) else None
   | Value_I (Some (z, _)) => Some (Num_Z z)
   | Value_string (Some s) => 
     let (n, ok) := parse_number s in if ok then Some n else None
@@ -238,7 +238,18 @@ Definition text_of (v : value) : option string :=
   | Value_Q (Some q) => Some (string_of_dec q)
   | Value_D (Some (q, _, s)) => Some (dec_text q s)
   (* a float, as the MySQL family prints it ([my_gcvt]) *)
-  | Value_F (Some (x, k)) => Some (my_text (fmt_of (Nat.odd k)) (special_of_tag (Nat.div k 2)) x)
+  (* a double with fixed decimals is printed with them ([String::set_real] with [decimals] < [NOT_FIXED_DEC]) *)
+  | Value_F (Some (x, k)) => 
+    match fdec v with
+    | Some d => Some (dec_text x d)
+    | None => Some (my_text (fmt_of (Nat.odd k)) (special_of_tag (Nat.div (Nat.modulo k 10) 2)) x)
+    end
+  | Value_T (Some (n, k)) => 
+    let fsp := Nat.div k 10 in
+    match Nat.modulo k 10 with
+    | 0%nat => Some (date_text n) | 1%nat => Some (time_text n fsp) | _ => Some (timestamp_text n fsp) end
+  | Value_C (Some (s, _)) => Some s
+  | Value_J (Some (t, _)) => match parse_json t with Some j => Some (text_spaced j) | None => Some t end
   | Value_bool (Some b) => Some (if b then "1" else "0")
   | _ => None
   end.
@@ -410,6 +421,182 @@ Definition truncate_text (n : N) (v : value) : value :=
   | _ => v
   end.
 
+(** * Dates and times of the MySQL family ([sql/sql_time.cc], [sql/item_timefunc.cc])
+
+    A temporal value used as a number is [YYYYMMDD] for a [DATE], [YYYYMMDDhhmmss] for a [DATETIME] or a
+    [TIMESTAMP], [hhmmss] for a [TIME], with the fractional seconds as decimals ([TIME_to_ulonglong]). *)
+Definition my_temporal_number (v : value) : option (Qc * nat) :=
+  match temporal_parts v with
+  | Some (k, n, fsp) =>
+    let ymd d := let '(y, m, dd) := civil_from_days d in y * 10000 + m * 100 + dd in
+    let hms u := let s := u / 1000000 in (s / 3600) * 10000 + ((s / 60) mod 60) * 100 + s mod 60 in
+    let frac u := Qcdiv (Qc_of_Z (u mod 1000000)) (Qc_of_Z 1000000) in
+    match k with
+    | 0%nat => Some (Qc_of_Z (ymd n), 0%nat)
+    | 1%nat => Some (Qcplus (Qc_of_Z (hms n)) (frac n), fsp)
+    | _ => Some (Qcplus (Qc_of_Z (ymd (ts_days n) * 1000000 + hms (ts_usec n))) (frac (ts_usec n)), fsp)
+    end
+  | None => None
+  end.
+
+(** a number compared with a date or a datetime is read as one ([number_to_datetime], [sql-common/my_time.cc]):
+    [YYMMDD] (2000-2069 below 70), [YYYYMMDD], [YYMMDDhhmmss], [YYYYMMDDhhmmss] *)
+Definition my_number_to_datetime (n : Z) : option Z :=
+  let ymd (x : Z) := let y := x / 10000 in let m := (x / 100) mod 100 in let d := x mod 100 in
+                     if valid_date y m d then Some (days_from_civil y m d) else None in
+  let ymdhms (x : Z) := match ymd (x / 1000000) with
+                        | Some days => let t := x mod 1000000 in
+                                       let h := t / 10000 in let mi := (t / 100) mod 100 in let s := t mod 100 in
+                                       if (h <? 24) && (mi <? 60) && (s <? 60) then Some (ts_of days (((h * 60 + mi) * 60 + s) * 1000000)) else None
+                        | None => None end in
+  if n <? 101 then None
+  else if n <=? 691231 then option_map (fun d => ts_of d 0) (ymd (n + 20000000))
+  else if n <? 700101 then None
+  else if n <=? 991231 then option_map (fun d => ts_of d 0) (ymd (n + 19000000))
+  else if n <? 10000101 then None
+  else if n <=? 99991231 then option_map (fun d => ts_of d 0) (ymd n)
+  else if n <? 101000000 then None
+  else if n <=? 691231235959 then ymdhms (n + 20000000000000)
+  else if n <? 700101000000 then None
+  else if n <=? 991231235959 then ymdhms (n + 19000000000000)
+  else ymdhms n.
+
+Definition my_temporal_text (v : value) : option string :=
+  match temporal_parts v with
+  | Some (0%nat, d, _) => Some (date_text d)
+  | Some (1%nat, u, f) => Some (time_text u f)
+  | Some (_, t, f) => Some (timestamp_text t f)
+  | None => None
+  end.
+
+(** a date, a datetime, or a string which is one, as a timestamp (and whether it has a time) *)
+Definition my_ts_of (v : value) : option (Z * bool) :=
+  match v with
+  | Value_string (Some t) => 
+    match parse_date t with Some d => Some (ts_of d 0, false) | None =>
+    match parse_timestamp t with Some x => Some (x, true) | None => None end end
+  | _ => match temporal_parts v with
+         | Some (0%nat, d, _) => Some (ts_of d 0, false)
+         | Some (1%nat, _, _) => None
+         | Some (_, t, _) => Some (t, true)
+         | None => None end
+  end.
+
+(** [DATE_ADD(d, INTERVAL n unit)]: a [DATE] when [d] is a date and the unit is a day or longer, a
+    [DATETIME] otherwise; a date out of [0001-01-01 .. 9999-12-31] is NULL *)
+Definition my_date_add (sign : Z) (v iv : value) : value :=
+  match my_ts_of v, iv with
+  | Some (t, has_time), Value_V (Some (mo, d, us)) =>
+    let r := ts_plus_interval t (sign * mo, sign * d, sign * us) in
+    let '(y, _, _) := civil_from_days (ts_days r) in
+    if negb ((1 <=? y) && (y <=? 9999))%Z then Value_T None
+    else if has_time || negb (Z.eqb us 0) then VTs r (match temporal_parts v with Some (_, _, f) => f | None => 0%nat end)
+    else VDate (ts_days r)
+  | _, _ => Value_T None
+  end.
+
+(** [WEEK(d)] with the default mode 0: weeks start on Sunday, week 1 is the first one with a Sunday *)
+Definition my_week0 (days : Z) : Z :=
+  let '(y, _, _) := civil_from_days days in
+  let jan1 := days_from_civil y 1 1 in
+  let first_sunday := jan1 + (7 - day_of_week jan1) mod 7 in
+  if days <? first_sunday then 0 else (days - first_sunday) / 7 + 1.
+
+(** [TIMESTAMPDIFF(unit, a, b)]: the number of whole units from [a] to [b] *)
+Definition my_months_between (a b : Z) : Z :=
+  (* whole months: the day and the time of [b] must reach those of [a] *)
+  let '(ya, ma, da) := civil_from_days (ts_days a) in
+  let '(yb, mb, db) := civil_from_days (ts_days b) in
+  let m := (yb * 12 + mb) - (ya * 12 + ma) in
+  let ka := da * usec_per_day + ts_usec a in
+  let kb := db * usec_per_day + ts_usec b in
+  if (0 <? m) && (kb <? ka) then m - 1 else if (m <? 0) && (ka <? kb) then m + 1 else m.
+
+Definition my_timestampdiff (unit : string) (a b : Z) : option Z :=
+  let d := b - a in
+  match string_map upper_ascii unit with
+  | "MICROSECOND" => Some d | "SECOND" => Some (Z.quot d 1000000) | "MINUTE" => Some (Z.quot d 60000000)
+  | "HOUR" => Some (Z.quot d 3600000000) | "DAY" => Some (Z.quot d usec_per_day) | "WEEK" => Some (Z.quot d (7 * usec_per_day))
+  | "MONTH" => Some (my_months_between a b) | "QUARTER" => Some (Z.quot (my_months_between a b) 3)
+  | "YEAR" => Some (Z.quot (my_months_between a b) 12)
+  | _ => None
+  end%string.
+
+Definition my_cast_temporal (kind : nat) (v : value) : value :=
+  match v with
+  | Value_string (Some t) =>
+    let t := string_rtrim (string_ltrim t) in
+    match kind with
+    | 0%nat => match parse_date t with Some d => VDate d | None => 
+               match parse_timestamp t with Some x => VDate (ts_days x) | None => Value_T None end end
+    | 1%nat => match parse_time t with Some u => VTime u 0 | None => Value_T None end
+    | _ => match parse_timestamp t with Some u => VTs u 0 | None => Value_T None end
+    end
+  | _ => match kind, my_ts_of v, temporal_parts v with
+         | 0%nat, Some (x, _), _ => VDate (ts_days x)
+         | 1%nat, Some (x, _), _ => VTime (ts_usec x) 0
+         | 1%nat, None, Some (1%nat, u, f) => VTime u f
+         | _, Some (x, _), _ => VTs x 0
+         | _, _, _ => Value_T None end
+  end.
+
+(** * JSON in the MySQL family ([sql/item_jsonfunc.cc], [sql-common/json_dom.cc])
+
+    A value becomes a JSON value as a number, a string, or [null]; a string argument which a function reads
+    as a JSON document must be valid JSON ([ER_INVALID_JSON_TEXT_IN_PARAM]). *)
+Definition my_json_of_value (v : value) : json :=
+  if is_null v then JNull else
+  match v with
+  | Value_Z (Some z) | Value_I (Some (z, _)) => JNum (string_of_Z z)
+  | Value_D (Some (q, _, sc)) => JNum (dec_text q sc)
+  | Value_Q (Some q) => JNum (string_of_dec q)
+  | Value_J _ => match json_of_J v with Some j => j | None => JNull end
+  | _ => match text_of v with Some t => JStr t | None => JNull end
+  end.
+
+(** a JSON document argument: a JSON value, or a string which is the text of one *)
+Definition my_json_doc (v : value) : option (option json) :=
+  match v with
+  | Value_J _ => Some (json_of_J v)
+  | _ => if is_null v then Some None 
+         else match text_of v with
+              | Some t => match parse_json t with Some j => Some (Some j) | None => None end
+              | None => Some None end
+  end.
+
+Definition my_json_extract (doc p : value) : value :=
+  match my_json_doc doc, text_of p with
+  | None, _ => Value_Err "Invalid JSON text in argument 1"
+  | Some None, _ => Value_J None
+  | Some (Some d), Some path => 
+    match parse_path path with
+    | Some st => match follow st d with Some r => VJ 0 r | None => Value_J None end
+    | None => Value_Err "Invalid JSON path expression"
+    end
+  | _, None => Value_J None
+  end.
+
+Definition my_json_unquote (v : value) : value :=
+  match v with
+  | Value_J _ => match json_of_J v with Some (JStr t) => Value_string (Some t) | Some j => Value_string (Some (text_spaced j)) | None => Value_string None end
+  | _ => Value_string (text_of v)
+  end.
+
+Definition my_json_type_name (j : json) : string := json_type_name j.
+
+(** a JSON scalar compared with a SQL value: a string, a number, [true] / [false] as 1 / 0 *)
+Definition json_scalar (v : value) : value :=
+  match v with
+  | Value_J _ => match json_of_J v with
+                 | Some (JStr t) => Value_string (Some t)
+                 | Some (JNum t) => value_of_num (parse_prefix t)
+                 | Some (JBool b) => Value_Z (Some (if b then 1 else 0))
+                 | Some JNull => Value_Z None
+                 | Some j => Value_string (Some (text_compact j))
+                 | None => Value_Z None end
+  | _ => v
+  end.
+
 (** * The decimal arithmetic of the MySQL family
 
     MySQL, MariaDB, TiDB, Percona, PolarDB and OceanBase share the decimal library of MySQL
@@ -430,6 +617,11 @@ Definition mclass (v : value) : option mnum :=
   | Value_Q (Some q) => Some (MD q (dec_scale q) (dec_scale q))
   | Value_string (Some _) => Some MO
   | Value_F (Some _) => Some MO
+  | Value_T (Some _) => 
+    match my_temporal_number v with
+    | Some (q, 0%nat) => Some (MI (Qc_trunc q))
+    | Some (q, f) => Some (MD q f f)
+    | None => None end
   | _ => None
   end.
 
@@ -485,6 +677,22 @@ Definition my_double (v : value) : value :=
   | Value_Q None | Value_Z None | Value_D None => Value_F None
   | _ => v
   end.
+
+(** the decimals of an operand of the double arithmetic: those of a double, 0 for an integer, the scale of a
+    decimal, none for a string *)
+Definition my_fdec (v : value) : option nat :=
+  match v with
+  | Value_F _ => fdec v
+  | Value_Z (Some _) | Value_I (Some _) | Value_bool (Some _) => Some 0%nat
+  | Value_D (Some (_, _, s)) => Some s
+  | Value_Q (Some q) => Some (dec_scale q)
+  | _ => None
+  end.
+
+Definition dec_max (a b : option nat) : option nat :=
+  match a, b with Some x, Some y => Some (Nat.max x y) | _, _ => None end.
+Definition dec_sum (a b : option nat) : option nat :=
+  match a, b with Some x, Some y => Some (x + y)%nat | _, _ => None end.
 
 (** [fi] is the operation on integers, if the result of two integers is an integer *)
 Definition my_arith2 (fi : option (Z -> Z -> Z)) (fd : Qc * nat * nat -> Qc * nat * nat -> value)
@@ -546,14 +754,18 @@ Definition my_dbl_sum (isnull : value -> bool) (l : list value) : option Qc :=
 
 Definition my_agg_sum (isnull : value -> bool) (l : list value) : value :=
   if has_text isnull l 
-  then match my_dbl_sum isnull l with Some q => my_double (Value_Q (Some q)) | None => Value_F None end
+  then match my_dbl_sum isnull l with 
+       | Some q => with_fdec (match non_nulls_by isnull l with v :: _ => my_fdec v | nil => None end) (my_double (Value_Q (Some q)))
+       | None => Value_F None end
   else if negb (has_decimal isnull l) then agg_sum_by isnull lenient l
   else match my_dsum isnull l with Some (q, f, s) => VDec q f s | None => Value_D None end.
 
 Definition my_agg_avg (incr : nat) (isnull : value -> bool) (l : list value) : value :=
   if has_text isnull l 
   then match my_dbl_sum isnull l with 
-       | Some q => my_double (Value_Q (Some (Qcdiv q (Qc_of_Z (Z.of_nat (List.length (non_nulls_by isnull l)))))))
+       (* [AVG] of doubles has the decimals of its argument plus [div_precision_increment] *)
+       | Some q => with_fdec (match non_nulls_by isnull l with v :: _ => match my_fdec v with Some d => Some (d + incr)%nat | None => None end | nil => None end)
+                             (my_double (Value_Q (Some (Qcdiv q (Qc_of_Z (Z.of_nat (List.length (non_nulls_by isnull l))))))))
        | None => Value_F None end
   else match my_dsum isnull l with
        | Some d => my_ddiv incr d (Qc_of_Z (Z.of_nat (List.length (non_nulls_by isnull l))), 0%nat, 0%nat)
@@ -599,3 +811,167 @@ Definition agg_bit_by (isnull : value -> bool) (op : Z -> Z -> Z) (l : list valu
 Definition table_of_list (A : Type) (l : list (string * A)) : string -> option A :=
   fun s => string_assoc A s l.
 Arguments table_of_list {A}.
+
+(** * Mathematical functions of the MySQL family and of SQLite
+
+    The functions call the C library ([Item_func_sqrt], ..., [sql/item_func.cc]; [mathFunc],
+    [src/func.c] of SQLite), whose results are correctly rounded ([IEEE.v]). An argument outside the
+    domain gives NULL. MySQL raises [ER_DATA_OUT_OF_RANGE] on an infinite or NaN result
+    ([check_float_overflow]); SQLite keeps it. [log2] of MySQL is [log (x) / M_LN2] and [log (b, x)]
+    [log (x) / log (b)], each [log] rounded; [cot] is [1.0 / tan (x)]; [degrees] and [radians] multiply
+    by the double [180 / M_PI] or [M_PI / 180] ([Item_func_units]). For SQLite, [log (x)] is the
+    logarithm in base 10, [log (b, x)] is NULL for [b <= 1], and [degrees (x)] is [x * 180.0 / M_PI]. *)
+Definition dbl (q : Q) : Q := this (snd (round_q binary64 q)).
+
+Definition c_math_table (lite : bool) (conv : value -> option num) : list (string * (list value -> value)) :=
+  let null := Value_F None in
+  let range (v : value) :=
+      if lite then match v with
+                   (* a NaN is stored as NULL ([sqlite3VdbeMemSetDouble]) *)
+                   | Value_F (Some (_, k)) => if Nat.eqb (Nat.div (Nat.modulo k 10) 2) 4 then Value_F None else v
+                   | _ => v end
+      else match v with
+           | Value_F (Some (_, k)) => match special_of_tag (Nat.div (Nat.modulo k 10) 2) with
+                                      | F_PosInf | F_NegInf | F_NaN => Value_Err "DOUBLE value is out of range"
+                                      | _ => v end
+           | _ => v end in
+  let f1 (f : Q -> option (fspecial * Qc)) l := range (dbl_fun1 conv f null (fun s => VF false (s, Qc_of_Z 0)) null l) in
+  let f2 (f : Q -> Q -> option (fspecial * Qc)) l := range (dbl_fun2 conv f null null l) in
+  let pos (f : Q -> fspecial * Qc) q := if Z.leb (Qnum q) 0 then None else Some (f q) in
+  let ln1 := pos (fun q => round_q binary64 (ln_exact q)) in
+  let log10 := pos (fun q => round_q binary64 (Qdiv (ln_exact q) (ln_exact 10))) in
+  (* SQLite: [log (b)] must be positive *)
+  let log_b (b x : Q) := if Z.leb (Qnum b) 0 || Qeq_bool b 1 || Z.leb (Qnum x) 0 then None
+                         else if lite && Qle_bool b 1 then None
+                         else Some (round_q binary64 (Qdiv (dbl (ln_exact x)) (dbl (ln_exact b)))) in
+  let log2 := if lite then pos (fun q => round_q binary64 (Qdiv (ln_exact q) (ln_exact 2)))
+              else pos (fun q => round_q binary64 (Qdiv (dbl (ln_exact q)) (dbl (ln_exact 2)))) in
+  let pow := f2 (fun x y => match pow_c x y with
+                            | Some r => Some r
+                            (* [pow] of the C library returns NaN *)
+                            | None => if Z.eqb (Qnum x) 0 then Some (F_PosInf, Qc_of_Z 0) else Some (F_NaN, Qc_of_Z 0) end) in
+  let atan_any l := match l with
+                    | _ :: nil => f1 (fun q => Some (atan_q binary64 q)) l
+                    | _ => f2 (fun y x => Some (atan2_q binary64 y x)) l end in
+     ("sqrt", f1 (fun q => if Z.ltb (Qnum q) 0 then None else Some (sqrt_q binary64 q)))
+  :: ("exp", f1 (fun q => Some (exp_q binary64 q)))
+  :: ("ln", f1 ln1)
+  :: ("log", fun l => match l with
+                      | _ :: nil => f1 (if lite then log10 else ln1) l
+                      | _ => f2 log_b l end)
+  :: ("log2", f1 log2)
+  :: ("log10", f1 log10)
+  :: ("sin", f1 (fun q => Some (sin_q binary64 q)))
+  :: ("cos", f1 (fun q => Some (cos_q binary64 q)))
+  :: ("tan", f1 (fun q => Some (tan_q binary64 q)))
+  :: ("cot", f1 (fun q => let t := snd (tan_q binary64 q) in
+                          if Qc_is_zero t then Some (F_PosInf, Qc_of_Z 0) else Some (round_q binary64 (Qinv (this t)))))
+  :: ("asin", f1 (asin_q binary64)) :: ("acos", f1 (acos_q binary64))
+  :: ("atan", atan_any) :: ("atan2", f2 (fun y x => Some (atan2_q binary64 y x)))
+  :: ("sinh", f1 (fun q => Some (hyp_q binary64 0 q)))
+  :: ("cosh", f1 (fun q => Some (hyp_q binary64 1 q)))
+  :: ("tanh", f1 (fun q => Some (hyp_q binary64 2 q)))
+  :: ("degrees", f1 (fun q => Some (if lite then degrees_c q else degrees_my q)))
+  :: ("radians", f1 (fun q => Some (if lite then radians_c q else radians_my q)))
+  (* [PI()] of MySQL has 6 decimals ([Item_func_pi]) *)
+  :: ("pi", fun l => match l with
+                     | nil => if lite then VF false (F_Finite, pi_double) else with_fdec (Some 6%nat) (VF false (F_Finite, pi_double))
+                     | _ => null end)
+  :: ("power", pow) :: ("pow", pow)
+  :: nil.
+
+(** * Bits and integers of the MySQL family and of SQLite
+
+    MySQL: [&], [|], [^], [~], [<<], [>>] and [BIT_COUNT] work on [BIGINT UNSIGNED] (64 bits): a negative
+    argument is taken modulo [2^64], a shift by 64 or more gives 0 ([Item_func_bit], [sql/item_func.cc]);
+    a non-integer argument is rounded. SQLite: the operators work on signed 64-bit integers, a [REAL]
+    argument is truncated; a negative shift shifts the other way, a shift by 64 or more gives 0 (or -1 for
+    [>>] of a negative number) ([sqlite3VdbeExec], [OP_ShiftLeft]). *)
+Definition u64 (z : Z) : Z := Z.modulo z (2 ^ 64).
+Definition s64 (z : Z) : Z := let u := u64 z in if 2 ^ 63 <=? u then u - 2 ^ 64 else u.
+
+Fixpoint popcount_pos (p : positive) : Z :=
+  match p with xH => 1 | xO q => popcount_pos q | xI q => 1 + popcount_pos q end.
+Definition popcount (z : Z) : Z := match z with Zpos p => popcount_pos p | _ => 0 end.
+
+(** the integer of an argument: rounded (MySQL) or truncated (SQLite) *)
+Definition int_arg (trunc : bool) (conv : value -> option num) (v : value) : option Z :=
+  match conv v with
+  | Some (Num_Z z) => Some z
+  | Some (Num_Q q) => Some (if trunc then Qc_trunc q else Qc_round q)
+  | None => None
+  end.
+
+Definition bit_fun (lite : bool) (conv : value -> option num) (f : list Z -> option Z) (l : list value) : value :=
+  if existsb is_null l then (if lite then Value_Z None else Value_I None)
+  else match fold_right (fun v acc => match int_arg lite conv v, acc with Some z, Some r => Some (z :: r) | _, _ => None end)
+                        (Some nil) l with
+       | Some zs => match f zs with
+                    | Some r => if lite then Value_Z (Some (s64 r)) else Value_I (Some (u64 r, 1%nat))
+                    | None => Value_Err "function does not exist"
+                    end
+       | None => if lite then Value_Z None else Value_I (Some (0, 1%nat))
+       end.
+
+Definition bit_table (lite : bool) (conv : value -> option num) : list (string * (list value -> value)) :=
+  let b2 (f : Z -> Z -> Z) := bit_fun lite conv (fun l => match l with a :: b :: nil => Some (f a b) | _ => None end) in
+  let norm z := if lite then s64 z else u64 z in
+  let shift (left : bool) (a n : Z) :=
+      let a := norm a in
+      if lite then
+        let (left, n) := if n <? 0 then (negb left, - n) else (left, n) in
+        if 64 <=? n then (if left then 0 else if a <? 0 then -1 else 0)
+        else if left then Z.shiftl a n else Z.shiftr a n
+      else
+        let n := u64 n in
+        if 64 <=? n then 0 else if left then Z.shiftl a n else Z.shiftr a n in
+     ("&", b2 (fun a b => Z.land (norm a) (norm b)))
+  :: ("|", b2 (fun a b => Z.lor (norm a) (norm b)))
+  :: ("^", b2 (fun a b => Z.lxor (norm a) (norm b)))
+  :: ("~", bit_fun lite conv (fun l => match l with a :: nil => Some (Z.lnot (norm a)) | _ => None end))
+  :: ("<<", b2 (shift true)) :: (">>", b2 (shift false))
+  :: ("bit_count", fun l => match bit_fun false conv (fun l => match l with a :: nil => Some a | _ => None end) l with
+                            | Value_I (Some (z, _)) => Value_Z (Some (popcount z))
+                            | Value_I None => Value_Z None
+                            | v => v end)
+  :: nil.
+
+(** [RAND(N)] of the MySQL family: the first number of the generator seeded with [N] ([my_rnd_init],
+    [my_rnd], [mysys/my_rnd.c]). The value is the one of the first row: the generator advances at each
+    row, which the model, whose functions have no state, does not follow. [RAND()] without seed is not
+    deterministic and is not modelled (an error). *)
+Definition my_rand_seeded (n : Z) : value :=
+  let m := 1073741823 in
+  let t := Z.modulo n (2 ^ 32) in
+  let s1 := Z.modulo (Z.modulo (t * 65537 + 55555555) (2 ^ 32)) m in
+  let s2 := Z.modulo (Z.modulo (t * 268435457) (2 ^ 32)) m in
+  let s1' := Z.modulo (s1 * 3 + s2) m in
+  VF false (round_q binary64 (Qmake s1' (Z.to_pos m))).
+
+Definition my_rand (conv : value -> option num) (l : list value) : value :=
+  match l with
+  | v :: nil => if is_null v then my_rand_seeded 0 else match int_arg false conv v with Some n => my_rand_seeded n | None => my_rand_seeded 0 end
+  | _ => Value_Err "nondeterministic function"
+  end.
+
+(** [ceil], [ceiling], [floor] and [trunc] of SQLite: an integer is kept, a [REAL] gives a [REAL]
+    ([ceilingFunc], [src/func.c]) *)
+Definition lite_round_table (conv : value -> option num) : list (string * (list value -> value)) :=
+  let f (g : Qc -> Z) (l : list value) :=
+      match l with
+      | v :: nil =>
+        if is_null v then Value_Z None
+        else match v with
+             | Value_F (Some (x, k)) => if Nat.eqb (Nat.div (Nat.modulo k 10) 2) 0
+                                        then VF false (F_Finite, Qc_of_Z (g x)) else v
+             | _ => match conv v with
+                    | Some (Num_Z z) => Value_Z (Some z)
+                    | Some (Num_Q q) => VF false (F_Finite, Qc_of_Z (g q))
+                    | None => Value_Z None
+                    end
+             end
+      | _ => Value_Err "wrong number of arguments"
+      end in
+     ("ceil", f Qc_ceiling) :: ("ceiling", f Qc_ceiling) :: ("floor", f Qc_floor) :: ("trunc", f Qc_trunc)
+  :: ("random", fun _ => Value_Err "nondeterministic function")
+  :: nil.

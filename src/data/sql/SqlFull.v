@@ -242,7 +242,12 @@ Record dialect : Type :=
       const_of : value -> value;
       (** a value which cannot be used as a condition (PostgreSQL: a value which is not a boolean,
           [argument of WHERE must be type boolean]) *)
-      truth_error : value -> bool
+      truth_error : value -> bool;
+      (** the affinity of a column (SQLite: 0 none, 1 [TEXT], 2 [NUMERIC], [INTEGER] or [REAL]), and the
+          conversion of the operands of a predicate according to the affinities of their expressions
+          ("Type Conversions Prior To Comparison", datatype3.html); the identity for the other dialects *)
+      attr_affinity : attribute -> nat;
+      cmp_coerce : predicate -> list nat -> list value -> list value
     }.
 
 Hypothesis O : dialect.
@@ -733,6 +738,10 @@ Fixpoint lookup (env : senv) (a : attribute) : value :=
 (** The value which is stored for attribute [a]: this only makes sure that a
     NULL has the type of [a]. *)
 Definition store (a : attribute) (v : value) := if is_null O v then null_of a else v.
+
+(** The affinity of an expression: that of a column, none for the other expressions. *)
+Definition sexpr_affinity (e : sexpr) : nat :=
+  match e with E_Col a => attr_affinity O a | _ => 0%nat end.
 
 (** * Failed rows
 
@@ -1462,7 +1471,7 @@ with eval_scond (ce : cte_env) (env : senv) (c : scond) {struct c} : bool3 :=
   | C_Conj a c1 c2 => interp_conj (B T) a (eval_scond ce env c1) (eval_scond ce env c2)
   | C_Not c => Bool.negb (B T) (eval_scond ce env c)
   | C_True => Bool.true (B T)
-  | C_Pred p l => interp_predicate T p (map (eval_sexpr ce env) l)
+  | C_Pred p l => interp_predicate T p (cmp_coerce O p (map sexpr_affinity l) (map (eval_sexpr ce env) l))
   | C_Expr e => truth_of_value O (eval_sexpr ce env e)
   | C_Quant qtf p l q la =>
     let lv := map (eval_sexpr ce env) l in
@@ -1765,12 +1774,14 @@ with eval_sfrom (ce : cte_env) (env : senv) (f : sfrom) {struct f} : list tuple 
     let l2 := eval_sfrom ce env f2 in
     let right t1 := if lateral then eval_sfrom ce (slice_t t1 :: env) f2 else l2 in
     let bad t := scond_raises ce (slice_t t :: env) c in
+    (** a combination of rows holds a failed value only if one of the rows does: when no row of the
+        operands failed (and the join is not lateral), the rows of the result are not inspected *)
+    let errs := lateral || existsb row_error (l1 ++ l2) in
     (** a combination on which the condition fails, or which holds a failed row, is kept as a failed row *)
-    keep_errors 
-      (eval_join jt (sfrom_sort ce f1) (sfrom_sort ce f2) l1 right l2
-                 (fun t => row_error t || bad t || is_true3 (eval_scond ce (slice_t t :: env) c))
-                 (fun t => if bad t then err_row t else t))
-      (l1 ++ l2)
+    let r := eval_join jt (sfrom_sort ce f1) (sfrom_sort ce f2) l1 right l2
+                       (fun t => (errs && row_error t) || bad t || is_true3 (eval_scond ce (slice_t t :: env) c))
+                       (fun t => if bad t then err_row t else t) in
+    if errs then keep_errors r (l1 ++ l2) else r
   end.
 
 (** * The semantics of a query

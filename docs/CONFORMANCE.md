@@ -42,10 +42,22 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 570 queries are translated and replayed, and **all 570**
-give the recorded result. The last ones were fixed by the decimal scale (TODO 1.2.1: `length(0.00)`,
-`4/3 = 1.333333333`) and by binary floating point (TODO 1.2.2: the `sum` of a `FLOAT` column is
-`147.57999897003174`, the `avg` of a `DOUBLE` column is a double).
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 638 queries are translated and replayed (dates, times and
+`datetime(6)` columns are translated since TODO 1.5), and **635** give the recorded result:
+
+- `expr_floor:56` and `expr_floor:57` (`ORDER BY floor(i4)`) list the rows with equal keys in another order:
+  the order of rows with equal sort keys is not specified by SQL, and the model keeps the order of the
+  table where OceanBase keeps the order of its plan. Not a deviation of the semantics.
+- `rqg_subquery_semijoin_nested_timeout` (one query) exceeds the time limit of the runner (`FILE_TIMEOUT`,
+  900 s): the tuples of the model are lists, so a row of many columns is slow to build.
+  `join_many_table` (32 left joins) passes since the labels of a joined row are computed once
+  (`join_tuple`) and the rows of a join are checked for errors only when an operand holds a failed row.
+
+The queries on a table whose rows a foreign key may change by a cascade (`ON DELETE CASCADE`, `SET NULL`)
+after a statement on its parent are not translated: the translator does not replay the cascades.
+
+Earlier milestones: 570/570 after the decimal scale (TODO 1.2.1: `length(0.00)`, `4/3 = 1.333333333`)
+and binary floating point (TODO 1.2.2: the `sum` of a `FLOAT` column is `147.57999897003174`).
 
 Since TODO 1.2.1, a decimal of the model has a scale, and is compared with the recorded text exactly
 (`1.3333`, `0.00`): the former deviations `length(0.00)` and `4/3 = 1.333333333` are gone. The latter was

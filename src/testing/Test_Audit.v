@@ -70,7 +70,8 @@ Example round_1 : veq (F "round" [VQ 5 2]) (VZ 3) = true. Proof. check. Qed.
 Example round_2 : veq (F "round" [VQ (-5) 2]) (VZ (-3)) = true. Proof. check. Qed.
 Example floor_1 : veq (F "floor" [VQ (-5) 2]) (VZ (-3)) = true. Proof. check. Qed.
 Example trunc_1 : veq (F "trunc" [VQ (-5) 2]) (VZ (-2)) = true. Proof. check. Qed.
-Example power_1 : veq (F "power" [VZ 2; VZ 10]) (VZ 1024) = true. Proof. check. Qed.
+(** [power (integer, integer)] is the one of [double precision] *)
+Example power_1 : veq (F "power" [VZ 2; VZ 10]) (NullValues.to_float false (Qcanon.Q2Qc (QArith_base.inject_Z 1024))) = true. Proof. check. Qed.
 Example greatest_1 : veq (F "greatest" [VZ 2; NullZ; VZ 5]) (VZ 5) = true. Proof. check. Qed.
 
 (** Conditional expressions. *)
