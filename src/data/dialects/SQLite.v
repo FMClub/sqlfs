@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL.
+Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL Hash StringFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -302,6 +302,15 @@ Definition lite_json_at (doc p : value) : option (option json) :=
   | _, None => Some None
   end.
 
+(** the text of an argument of a string function: a [REAL] is written with ["%!.15g"] *)
+Definition lite_skit : skit :=
+  mk_skit (fun v => match v with
+                    | Value_F (Some (x, k)) => Some (lite_text (special_of_tag (Nat.div (Nat.modulo k 10) 2)) x)
+                    | Value_C (Some (s, _)) => Some s
+                    | _ => text_of v end)
+          (fun v => match lenient v with Some (Num_Z z) => Some z | Some (Num_Q q) => Some (Qc_trunc q) | None => None end)
+          (fun s => Value_string (Some s)) (Value_string None).
+
 Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
   let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
@@ -396,19 +405,59 @@ Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   (* strings *)
   :: ("||", lite_concat)
   :: ("concat", lite_concat_skip)
-  :: ("length", str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  (* [length] of a text counts its characters ([lengthFunc]) *)
+  :: ("length", str1 (fun s => Value_Z (Some (char_count s))))
   :: ("upper", str_fun1 upper_s) :: ("lower", str_fun1 lower_s)
-  :: ("trim", str_fun1 (fun s => string_rtrim (string_ltrim s)))
-  :: ("ltrim", str_fun1 string_ltrim) :: ("rtrim", str_fun1 string_rtrim)
+  (* [trim (s, chars)]: a set of characters, a space by default ([trimFunc]) *)
+  :: ("trim", f_trim_set lite_skit 0) :: ("ltrim", f_trim_set lite_skit 1) :: ("rtrim", f_trim_set lite_skit 2)
+  :: ("trim_both", f_trim_set lite_skit 0) :: ("trim_leading", f_trim_set lite_skit 1) :: ("trim_trailing", f_trim_set lite_skit 2)
   :: ("substr", lite_substr_fun) :: ("substring", lite_substr_fun)
+  :: ("concat_ws", f_concat_ws lite_skit)
+  (* the scalar [max (a, b, ...)] and [min]: NULL if an argument is NULL; compared as by [ORDER BY]
+     ([minmaxFunc]) *)
+  :: ("max_scalar", fun l => if existsb is_null l then Value_Z None
+                             else match l with v :: r => fold_left (fun a b => match lite_order a b with Lt => b | _ => a end) r v
+                                          | nil => Value_Z None end)
+  :: ("min_scalar", fun l => if existsb is_null l then Value_Z None
+                             else match l with v :: r => fold_left (fun a b => match lite_order a b with Gt => b | _ => a end) r v
+                                          | nil => Value_Z None end)
+  (* hints to the planner: the value of the argument *)
+  :: ("likely", fun l => match l with v :: nil => v | _ => Value_Err "wrong number of arguments" end)
+  :: ("unlikely", fun l => match l with v :: nil => v | _ => Value_Err "wrong number of arguments" end)
+  :: ("likelihood", fun l => match l with v :: _ :: nil => v | _ => Value_Err "wrong number of arguments" end)
+  :: ("octet_length", str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  (* [hex] of the text of the value (NULL gives ['']), in upper case; [unhex] NULL if not hexadecimal *)
+  :: ("hex", fun l => match l with
+                      | v :: nil => Value_string (Some (match sk_txt lite_skit v with
+                                                        | Some s => hex_of_bytes true (bytes_of_string s)
+                                                        | None => EmptyString end))
+                      | _ => Value_Err "wrong number of arguments" end)
+  :: ("unhex", fun l => match texts lite_skit l with
+                        | Some (s :: nil) => match bytes_of_hex s with
+                                             | Some b => if Nat.odd (String.length s) then Value_string None
+                                                         else Value_string (Some (string_of_bytes b))
+                                             | None => Value_string None end
+                        | _ => Value_string None end)
+  :: ("char", fun l => Value_string (Some (txt (flat_map (fun v => match sk_int lite_skit v with Some n => n :: nil | None => nil end) l))))
+  :: ("unicode", fun l => match texts lite_skit l with
+                          | Some (s :: nil) => match cps s with c :: _ => Value_Z (Some c) | nil => Value_Z None end
+                          | _ => Value_Z None end)
+  (* [quote]: a text between quotes (doubled inside), a number as its text, NULL as [NULL] *)
+  :: ("quote", fun l => match l with
+                        | (Value_string (Some s) | Value_C (Some (s, _))) :: nil =>
+                          Value_string (Some (txt (39 :: flat_map (fun c => if Z.eqb c 39 then 39 :: 39 :: nil else c :: nil) (cps s) ++ 39 :: nil)))
+                        | v :: nil => if is_null v then Value_string (Some "NULL"%string)
+                                      else match sk_txt lite_skit v with Some t => Value_string (Some t) | None => Value_string None end
+                        | _ => Value_Err "wrong number of arguments" end)
   :: ("replace", fun l => match l with
                           | s :: f :: t :: nil => match text_of s, text_of f, text_of t with
                                                   | Some s, Some f, Some t => Value_string (Some (string_replace s f t))
                                                   | _, _, _ => Value_string None end
                           | _ => Value_string None end)
+  (* [instr] counts characters *)
   :: ("instr", fun l => match l with
-                        | s :: sub :: nil => match text_of s, text_of sub with
-                                             | Some s, Some sub => Value_Z (Some (string_index sub s))
+                        | s :: sub :: nil => match sk_txt lite_skit s, sk_txt lite_skit sub with
+                                             | Some s, Some sub => Value_Z (Some (strpos_cp (cps sub) (cps s)))
                                              | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   (* casts *)
@@ -468,8 +517,8 @@ Definition lite_textual (l : list value) : list value :=
                 end) l.
 
 Definition lite_text_funs : list string :=
-  "||" :: "concat" :: "length" :: "upper" :: "lower" :: "trim" :: "ltrim" :: "rtrim" :: "substr" :: "substring"
-       :: "replace" :: "instr" :: "cast_string" :: nil.
+  "||" :: "concat" :: "length" :: "upper" :: "lower" :: "substr" :: "substring"
+       :: "replace" :: "cast_string" :: nil.
 
 Definition lite_symbol_table : list (string * (list value -> value)) :=
   map (fun p => if existsb (String.eqb (fst p)) lite_text_funs
@@ -545,7 +594,7 @@ Definition lite_cmp_coerce (p : string) (ks : list nat) (l : list value) : list 
 
 Definition SQLite : vsem :=
   mk_vsem "SQLite"
-          (table_of_list lite_pred_table)
+          (table_of_list (like_table lite_skit false low_cp low_cp None ++ lite_pred_table))
           (table_of_list lite_symbol_table)
           (table_of_list lite_aggregate_table)
           is_null
@@ -557,7 +606,8 @@ Definition SQLite : vsem :=
           true
           lite_supports
           true
-          (fun _ _ => false)
+          (* [ESCAPE expression must be a single character] *)
+          (bad_escape lite_skit)
           (* a literal with a decimal point is a [REAL] *)
           lite_real
           (fun _ => false)

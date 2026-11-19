@@ -348,12 +348,16 @@ class P:
             return ('not', self.e_not())
         return self.e_pred()
 
+    def ilike_mark(self):
+        self.i += 1
+        return True
+
     def e_pred(self):
         l = self.e_bitor()
         while True:
             neg = False
             save = self.i
-            if self.kw('not') and self.peek(1)[1].lower() in ('in', 'like', 'between', 'regexp', 'rlike'):
+            if self.kw('not') and self.peek(1)[1].lower() in ('in', 'like', 'ilike', 'between', 'regexp', 'rlike'):
                 self.i += 1
                 neg = True
             if self.eat_kw('is'):
@@ -380,18 +384,26 @@ class P:
                     items.append(self.expr())
                 self.need_op(')')
                 l = ('in', neg, l, items)
-            elif self.eat_kw('like'):
+            elif self.eat_kw('like') or (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'ilike'
+                                         and ENGINE == 'postgresql' and not self.eat_kw('like')
+                                         and self.ilike_mark()):
+                ci = self.t[self.i - 1][1].lower() == 'ilike'
                 r = self.e_bitor()
-                if self.kw('escape'):
-                    raise Skip('escape')
+                esc = None
+                if self.eat_kw('escape'):
+                    esc = self.e_bitor()
                 if self.kw('binary'):
                     raise Skip('like binary')
-                l = ('like', neg, l, r)
+                l = ('like', neg, l, r, esc, ci)
             elif self.eat_kw('between'):
+                sym = False
+                if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('symmetric', 'asymmetric'):
+                    sym = self.peek()[1].lower() == 'symmetric'
+                    self.i += 1
                 lo = self.e_bitor()
                 self.need_kw('and')
                 hi = self.e_bitor()
-                l = ('between', neg, l, lo, hi)
+                l = ('between', neg, l, lo, hi, sym)
             elif self.kw('regexp', 'rlike'):
                 raise Skip('regexp')
             else:
@@ -549,6 +561,14 @@ class P:
             lit = self.peek(1)[1]
             self.i += 2
             return ('temporal', ty, lit)
+        if self.kw('interval') and self.peek(1) == ('op', '(') and ENGINE == 'mysql':
+            # the function INTERVAL (n, n1, n2, ...)
+            self.i += 2
+            args = [self.expr()]
+            while self.eat_op(','):
+                args.append(self.expr())
+            self.need_op(')')
+            return ('call', 'interval_index', args, False, False)
         if self.kw('interval'):
             self.i += 1
             if self.peek()[0] == 'str' and ENGINE == 'postgresql':
@@ -569,6 +589,51 @@ class P:
             if self.op('('):
                 self.i += 1
                 lname = name.lower()
+                # the special syntaxes of the standard: TRIM ([LEADING | TRAILING | BOTH] [r] FROM s),
+                # POSITION (a IN b), SUBSTRING (s FROM n [FOR m]), OVERLAY (s PLACING r FROM n [FOR m])
+                if lname == 'trim' and (self.kw('leading', 'trailing', 'both') or
+                                        any(tk == ('kw', 'from') or (tk[0] == 'kw' and tk[1].lower() == 'from')
+                                            for tk in self.t[self.i:self.i + 4])):
+                    where = 'both'
+                    if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('leading', 'trailing', 'both'):
+                        where = self.peek()[1].lower()
+                        self.i += 1
+                    r = None
+                    if not self.kw('from'):
+                        r = self.e_bitor()
+                    self.need_kw('from')
+                    src = self.expr()
+                    self.need_op(')')
+                    return ('call', 'trim_' + where, [src] + ([r] if r is not None else []), False, False)
+                if lname == 'position':
+                    a = self.e_bitor()
+                    self.need_kw('in')
+                    b = self.expr()
+                    self.need_op(')')
+                    return ('call', 'position', [a, b], False, False)
+                if lname in ('substring', 'overlay'):
+                    save = self.i
+                    try:
+                        src = self.expr()
+                        placing = None
+                        if lname == 'overlay':
+                            if not (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'placing'):
+                                raise Skip('overlay')
+                            self.i += 1
+                            placing = self.expr()
+                        if self.eat_kw('from'):
+                            n = self.expr()
+                            m = None
+                            if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'for':
+                                self.i += 1
+                                m = self.expr()
+                            self.need_op(')')
+                            args = [src] + ([placing] if placing is not None else []) + [n] + ([m] if m is not None else [])
+                            return ('call', lname, args, False, False)
+                    except Skip:
+                        if lname == 'overlay':
+                            raise
+                    self.i = save
                 if self.eat_op('*'):
                     self.need_op(')')
                     if self.kw('over'):
@@ -785,7 +850,13 @@ AGGS = {'count', 'sum', 'avg', 'min', 'max', 'group_concat', 'bit_and', 'bit_or'
 FUNS = {'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power', 'pow', 'mod', 'greatest', 'least',
         'coalesce', 'ifnull', 'nullif', 'concat', 'concat_ws', 'length', 'char_length', 'upper', 'lower', 'trim',
         'ltrim', 'rtrim', 'reverse', 'substring', 'substr', 'mid', 'left', 'right', 'replace', 'repeat', 'locate',
-        'instr', 'ucase', 'lcase', 'character_length', 'ascii', 'space', 'lpad', 'rpad', 'strcmp', 'if'}
+        'instr', 'ucase', 'lcase', 'character_length', 'ascii', 'space', 'lpad', 'rpad', 'strcmp', 'if',
+        'trim_both', 'trim_leading', 'trim_trailing', 'position', 'overlay', 'substring_index', 'translate',
+        'initcap', 'ord', 'char', 'chr', 'split_part', 'format', 'strpos', 'btrim', 'quote_ident', 'quote_literal',
+        'quote', 'md5', 'sha1', 'sha', 'sha2', 'hex', 'unhex', 'to_base64', 'from_base64', 'soundex', 'insert',
+        'elt', 'field', 'find_in_set', 'to_hex', 'unicode', 'octet_length', 'bit_length',
+        'iif', 'nvl', 'nvl2', 'decode', 'isnull', 'num_nulls', 'num_nonnulls', 'likely', 'unlikely', 'likelihood',
+        'interval_index'}
 ALIAS = {'ucase': 'upper', 'lcase': 'lower', 'character_length': 'char_length'}
 
 
@@ -873,6 +944,8 @@ class Tr:
             return out
         if k == 'call':
             name, args, star, distinct = e[1], e[2], e[3], e[4]
+            if name in ('max', 'min') and ENGINE == 'sqlite' and len(args) > 1 and not star:
+                return '(fn "%s_scalar" [%s])' % (name, '; '.join(self.ex(a) for a in args))
             if name in AGGS:
                 if star:
                     if name != 'count':
@@ -933,9 +1006,17 @@ class Tr:
         if k == 'in':
             return '(pred "%s" [%s])' % ('not in' if e[1] else 'in', '; '.join([self.ex(e[2])] + [self.ex(i) for i in e[3]]))
         if k == 'like':
-            return '(pred "%s" [%s; %s])' % ('not like' if e[1] else 'like', self.ex(e[2]), self.ex(e[3]))
+            esc = e[4] if len(e) > 4 else None
+            ci = e[5] if len(e) > 5 else False
+            name = ('ilike' if ci else 'like') + ('_escape' if esc is not None else '')
+            if not ci and esc is None:
+                name = 'like'
+            name = ('not ' if e[1] else '') + name
+            args = [self.ex(e[2]), self.ex(e[3])] + ([self.ex(esc)] if esc is not None else [])
+            return '(pred "%s" [%s])' % (name, '; '.join(args))
         if k == 'between':
-            return '(pred "%s" [%s; %s; %s])' % ('not between' if e[1] else 'between', self.ex(e[2]), self.ex(e[3]), self.ex(e[4]))
+            name = ('not between' if e[1] else 'between') + (' symmetric' if len(e) > 5 and e[5] else '')
+            return '(pred "%s" [%s; %s; %s])' % (name, self.ex(e[2]), self.ex(e[3]), self.ex(e[4]))
         return '(c_expr %s)' % self.ex(e)
 
 
@@ -949,10 +1030,16 @@ def has_call(e, name):
     return any(has_call(x, name) for x in e[1:])
 
 
+def is_agg_call(e):
+    # the scalar max (a, b, ...) and min of SQLite are not aggregates
+    return (e[0] == 'call' and e[1] in AGGS and
+            not (ENGINE == 'sqlite' and e[1] in ('max', 'min') and len(e[2]) > 1))
+
+
 def has_agg(e):
     if not isinstance(e, tuple):
         return False
-    if e[0] == 'call' and e[1] in AGGS:
+    if is_agg_call(e):
         return True
     return any(has_agg(x) or (isinstance(x, list) and any(has_agg(y) for y in x)) for x in e[1:])
 
@@ -977,7 +1064,7 @@ def plain_cols(e, out):
         return
     if not isinstance(e, tuple):
         return
-    if e[0] == 'call' and e[1] in AGGS:
+    if is_agg_call(e):
         return
     if e[0] == 'col':
         out.append(e)
@@ -1136,7 +1223,7 @@ class QTr:
                     return True
                 if e in gexprs:
                     return True
-                if e[0] == 'call' and e[1] in AGGS:
+                if is_agg_call(e):
                     return True
                 if e[0] in ('subq', 'exists', 'insub', 'quant'):
                     return True

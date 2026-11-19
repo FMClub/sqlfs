@@ -207,3 +207,5 @@ known gap and its status; it is updated by every pull request which touches one 
 | 20 | SQLite: bare column in an aggregate query with `min` / `max` | open |
 | 21 | `ROW` values and row comparison with more than one column outside `IN` | open |
 | 22 | Static typing and well-formedness of queries (I5) | open |
+| 23 | Mathematical functions: correct rounding, `numeric` scales of PostgreSQL, bit operators | resolved (TODO 2.1, `docs/functions/math.md`); `rand()`/`random()` without seed excluded (nondeterministic) |
+| 24 | String functions of each dialect | resolved (TODO 2.2, `docs/functions/strings.md`); Unicode case folding (`upper`, `lower`, `ILIKE` beyond ASCII) open: needs generated case-mapping tables |
