@@ -343,6 +343,8 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
 Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
+  (* only [WITH ROLLUP] *)
+  | F_Grouping_Sets | F_Cube => false
   | _ => true
   end.
 

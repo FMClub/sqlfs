@@ -69,7 +69,7 @@ section). `planned` means that it is not modelled yet.
 | Default `sql_mode` | n/a | `ONLY_FULL_GROUP_BY`, `STRICT_TRANS_TABLES`, ... | n/a | `STRICT_ALL_TABLES`, `NO_ZERO_IN_DATE`, `NO_AUTO_CREATE_USER` (source) | n/a | recorded |
 | Bare columns in a grouped query | rejected | rejected (`ONLY_FULL_GROUP_BY`) | allowed (arbitrary row; the row of the `min`/`max`) | allowed by default (value is implementation defined) | rejected | planned |
 | Row limiting | `LIMIT`/`OFFSET`, `FETCH FIRST` | `LIMIT`/`OFFSET` | `LIMIT`/`OFFSET` | `LIMIT`/`OFFSET` | `OFFSET ... FETCH FIRST ... ROWS [ONLY \| WITH TIES]`, `PERCENT` | `LIMIT`/`OFFSET` done; `WITH TIES`, `PERCENT` planned |
-| `ROLLUP`, `CUBE`, `GROUPING SETS` | yes | `WITH ROLLUP` | no | yes (grammar) | yes | planned |
+| `ROLLUP`, `CUBE`, `GROUPING SETS` | yes | `WITH ROLLUP` | no | yes (grammar) | yes | yes (`GROUPING()` too; ORDER BY keys not masked) |
 | `WITH RECURSIVE` | yes | yes | yes | yes (grammar) | yes | planned |
 | Functions, predicates and aggregates which exist only in some dialects (`string_agg`, `group_concat`, `listagg`, `total`, `ifnull`, `nvl`, `is distinct from`, `<=>`) | | | | | | done (`accepted_by` checks the names) |
 | Integer range and overflow | 4/8 bytes, error | 8 bytes, error | 8 bytes, to real | as MySQL | number | not modelled |

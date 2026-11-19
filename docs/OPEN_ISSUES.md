@@ -129,7 +129,7 @@ Still open:
   checked (`accepted_by`); `ONLY_FULL_GROUP_BY` and the bare columns of SQLite (the value of an
   arbitrary row, or the row of the `min`/`max`) are not.
 - **Constructs of the dialects which `SqlFull` does not have**: `RANGE` window frames with an
-  offset, `ROLLUP`, `CUBE` and `GROUPING SETS` (PostgreSQL, OceanBase, Oracle), `WITH RECURSIVE`,
+  offset, `WITH RECURSIVE`,
   `FETCH FIRST ... WITH TIES` and `PERCENT` (Oracle mode), `ORDER BY` inside `string_agg`.
 - **Oracle mode** is checked against the documentation and the shared engine code, because the
   open-source repository of OceanBase has neither its parser nor recorded results for it.
@@ -140,7 +140,7 @@ Still open:
 In the expected order of difficulty; priorities are to be decided:
 - recursive CTEs (`WITH RECURSIVE`): termination is not guaranteed, so this
   needs a fuel parameter or a condition for the existence of a fixpoint;
-- `GROUPING SETS` / `ROLLUP` / `CUBE`;
+- (done) `GROUPING SETS` / `ROLLUP` / `CUBE` / `GROUPING()`: grouping expressions that a set does not group read as NULL; limitation: `ORDER BY` keys are not masked;
 - `RANGE` window frames with a numeric offset, frame exclusion;
 - date/time types, floating-point numbers, collations;
 - ordered-set aggregates (`percentile_cont`, ...), aggregates with several

@@ -96,3 +96,4 @@ testing/slt/SQLite/Slt_expr_slt_good_10.v
 testing/slt/SQLite/Slt_expr_slt_good_100.v
 testing/slt/SQLite/Slt_expr_slt_good_101.v
 testing/slt/SQLite/Slt_expr_slt_good_102.v
+testing/Test_Grouping.v

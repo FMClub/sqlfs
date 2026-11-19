@@ -91,7 +91,7 @@ an aggregate is the aggregate of its argument over the group).
 
 ### Not covered
 
-Recursive CTEs; `GROUPING SETS`, `ROLLUP`, `CUBE`; `RANGE` frames with a numeric
+Recursive CTEs; `RANGE` frames with a numeric
 offset and frame exclusion; date/time and floating-point types; collations;
 positional or duplicate column names; ordered-set and multi-argument
 aggregates; static typing of queries.

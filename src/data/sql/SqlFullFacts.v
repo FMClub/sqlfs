@@ -62,9 +62,9 @@ Lemma eval_order_unfold :
     let rows := 
         match q with
         | SQ_Select sp => eval_sspec ce env sp (map (fun o => match o with O_By e _ _ => e end) lo)
-        | _ => map (fun t => (t, slice_t T t :: env)) (eval_squery ce env q)
+        | _ => map (fun t => (t, slice_t T relname t :: env)) (eval_squery ce env q)
         end in
-    let keys (x : tuple * senv T) :=
+    let keys (x : tuple * senv T relname) :=
         map (fun o => match o with
                       | O_By e _ _ => 
                         match is_output_col (fst x) e with
@@ -109,7 +109,7 @@ Qed.
 Theorem inner_join_spec :
   forall ce env f1 f2 c,
     eval_sfrom ce env (Fr_Join J_Inner false f1 f2 c) =
-    filter (fun t => is_true3 T (eval_scond ce (slice_t T t :: env) c))
+    filter (fun t => is_true3 T (eval_scond ce (slice_t T relname t :: env) c))
            (cross_product T (eval_sfrom ce env f1) (eval_sfrom ce env f2)).
 Proof.
 intros ce env f1 f2 c.
@@ -171,24 +171,26 @@ Qed.
 (** CASE evaluates only one of its branches. *)
 Lemma eval_case_true :
   forall ce env c e1 e2,
+    is_hidden env (E_Case c e1 e2) = false ->
     is_true3 T (eval_scond ce env c) = true ->
     eval_sexpr ce env (E_Case c e1 e2) = eval_sexpr ce env e1.
 Proof.
-intros ce env c e1 e2 H.
-change ((if is_true3 T (eval_scond ce env c) then eval_sexpr ce env e1 else eval_sexpr ce env e2) =
+intros ce env c e1 e2 Hh H.
+change ((if is_hidden env (E_Case c e1 e2) then null O else if is_true3 T (eval_scond ce env c) then eval_sexpr ce env e1 else eval_sexpr ce env e2) =
         eval_sexpr ce env e1).
-rewrite H; apply refl_equal.
+rewrite Hh, H; apply refl_equal.
 Qed.
 
 Lemma eval_case_not_true :
   forall ce env c e1 e2,
+    is_hidden env (E_Case c e1 e2) = false ->
     is_true3 T (eval_scond ce env c) = false ->
     eval_sexpr ce env (E_Case c e1 e2) = eval_sexpr ce env e2.
 Proof.
-intros ce env c e1 e2 H.
-change ((if is_true3 T (eval_scond ce env c) then eval_sexpr ce env e1 else eval_sexpr ce env e2) =
+intros ce env c e1 e2 Hh H.
+change ((if is_hidden env (E_Case c e1 e2) then null O else if is_true3 T (eval_scond ce env c) then eval_sexpr ce env e1 else eval_sexpr ce env e2) =
         eval_sexpr ce env e2).
-rewrite H; apply refl_equal.
+rewrite Hh, H; apply refl_equal.
 Qed.
 
 (** An aggregate of the current block, without DISTINCT nor FILTER, is the
@@ -196,15 +198,15 @@ Qed.
 Lemma eval_agg_group :
   forall ce env sa g ag a,
     a inS sa ->
-    eval_sexpr ce ((sa, g) :: env) (E_Agg ag Set_All (E_Col T relname a) (C_True T relname)) =
+    eval_sexpr ce ((sa, g, nil) :: env) (E_Agg ag Set_All (E_Col T relname a) (C_True T relname)) =
     interp_aggregate T ag (map (fun t => dot T t a) g).
 Proof.
 intros ce env sa g ag a Ha.
 change (interp_aggregate T ag
-          (match agg_env (a :: nil) ((sa, g) :: env) with
+          (match agg_env (a :: nil) ((sa, g, nil) :: env) with
            | nil => nil
-           | (sa', g') :: env' =>
-             map (fun t => lookup ((sa', t :: nil) :: env') a)
+           | (sa', g', _) :: env' =>
+             map (fun t => lookup ((sa', t :: nil, nil) :: env') a)
                  (filter (fun t => is_true3 T (Bool.true (B T))) g')
            end) = interp_aggregate T ag (map (fun t => dot T t a) g)).
 unfold agg_env; simpl; rewrite Ha; simpl.

@@ -173,6 +173,7 @@ Fixpoint sexpr_to (e : sexpr T1 relname) {struct e} : sexpr T2 relname :=
   | E_Case c e1 e2 => @E_Case T2 relname (scond_to c) (sexpr_to e1) (sexpr_to e2)
   | E_Cond c => @E_Cond T2 relname (scond_to c)
   | E_Sub q => @E_Sub T2 relname (squery_to q)
+  | E_Grouping e => @E_Grouping T2 relname (sexpr_to e)
   end
 
 with scond_to (c : scond T1 relname) {struct c} : scond T2 relname :=
@@ -206,7 +207,13 @@ with sspec_to (sp : sspec T1 relname) {struct sp} : sspec T2 relname :=
             | S_List l => @S_List T2 relname (map sitem_to l)
             end)
            (map sfrom_to lf) (scond_to w) 
-           (match g with G_Fine _ _ => G_Fine T2 relname | G_By l => @G_By T2 relname (map sexpr_to l) end)
+           (match g with 
+            | G_Fine _ _ => G_Fine T2 relname 
+            | G_By l => @G_By T2 relname (map sexpr_to l) 
+            | G_Sets ss => @G_Sets T2 relname (map (map sexpr_to) ss)
+            | G_Rollup l => @G_Rollup T2 relname (map sexpr_to l)
+            | G_Cube l => @G_Cube T2 relname (map sexpr_to l)
+            end)
            (scond_to h)
   end
 
