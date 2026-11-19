@@ -114,17 +114,28 @@ settled by the same definition.
 
 ## I6. Dialect-dependent choices are hard-wired
 
-**Status: the dialects are modelled; acceptance rules and more of each dialect remain.**
-PostgreSQL, MySQL, SQLite and OceanBase (MySQL and Oracle modes) are instances of
-the record `vsem` (`src/data/dialects/`), which gives both the interpretation of the
-values and the engine-level choices of the record `dialect` of `SqlFull.v`. The same
-query can be run under each (`to_dialect`), and 40 differential examples in
-`src/testing/Test_Dialects.v` check the results. The matrix of differences, the sources
-and what is not modelled are in `docs/DIALECTS.md`.
+**Status: the dialects are modelled and checked against real engines; some features remain.**
+PostgreSQL, MySQL, SQLite and OceanBase (MySQL and Oracle modes) are instances of the record
+`vsem` (`src/data/dialects/`). Their behaviour is established from the documentation, from the
+source code of OceanBase, and from results recorded by real engines (`docs/DIALECTS.md`,
+`docs/CONFORMANCE.md`): 545 OceanBase queries (7 known deviations), and 9600 `random/expr`
+queries of sqllogictest per dialect with no failure.
 
-Still open: the acceptance of a query by the names of its functions and aggregates,
-`ONLY_FULL_GROUP_BY` and the bare columns of SQLite, and the behaviours of OceanBase
-which its documentation does not state (marked "assumed" in `docs/DIALECTS.md`).
+Still open:
+- **Decimal scale**: a decimal keeps the number of decimals of its literal (`length(0.00)` is 4).
+  `Value_Q` is a rational and forgets it; a value which carries its scale would also fix the
+  display of `4/3` and the type of `sum` and `avg`.
+- **Aggregate of a correlated subquery**: an aggregate whose argument is a subquery which reads
+  columns of an outer block belongs to that outer block (case `optimizer_subquery_bug:48`).
+  `sexpr_cols` ignores the columns of subqueries.
+- **Acceptance of a query by the names** of its functions and aggregates, `ONLY_FULL_GROUP_BY`,
+  and the bare columns of SQLite (the value of an arbitrary row, or the row of the `min`/`max`).
+- **Constructs of the dialects which `SqlFull` does not have**: `RANGE` window frames with an
+  offset, `ROLLUP`, `CUBE` and `GROUPING SETS` (PostgreSQL, OceanBase, Oracle), `WITH RECURSIVE`,
+  `FETCH FIRST ... WITH TIES` and `PERCENT` (Oracle mode), `ORDER BY` inside `string_agg`.
+- **Oracle mode** is checked against the documentation and the shared engine code, because the
+  open-source repository of OceanBase has neither its parser nor recorded results for it.
+- Dates and times, floating-point numbers, integer ranges, regular expressions, JSON.
 
 ## I7. SQL features which are not covered
 

@@ -36,12 +36,28 @@ Import NullValues.
     Accents are not folded; sizes of integers and floating-point rounding are not
     modelled. *)
 
+(** The collation of strings. Both collations of MySQL and of OceanBase which are the
+    default ones are case insensitive; they differ by the treatment of the trailing spaces:
+    - [utf8mb4_0900_ai_ci], the default of MySQL 8, is [NO PAD]: ['a'] and ['a '] are different;
+    - [utf8mb4_general_ci], the default of OceanBase (collation 45, from the default of the
+      system variable [collation_server]), is [PAD SPACE]: ['a' = 'a '], but ['a' LIKE 'a '] is false.
+    Accents are not folded. *)
+Section Collation.
+
+Variable pad : bool.
+
+(** The key of a string for a comparison *)
+Definition coll_key (s : string) : string := lower_s (if pad then string_rtrim s else s).
+
+(** the system variable [div_precision_increment], whose default value is 4 in MySQL and in OceanBase *)
+Definition div_precision_increment : nat := 4%nat.
+
 Definition my_isnull := is_null.
 
 Definition my_compare (v1 v2 : value) : option comparison :=
   if (is_null v1 || is_null v2)%bool then None
   else match v1, v2 with
-       | Value_string (Some a), Value_string (Some b) => Some (string_compare (lower_s a) (lower_s b))
+       | Value_string (Some a), Value_string (Some b) => Some (string_compare (coll_key a) (coll_key b))
        | _, _ => match lenient v1, lenient v2 with
                  | Some a, Some b => Some (num_cmp a b)
                  | _, _ => None
@@ -183,13 +199,40 @@ Definition my_substring (l : list value) : value :=
   | _ => Value_string None
   end.
 
+(** [LOCATE(sub, s [, pos])]: the position of [sub] in [s], starting the search at [pos]; 0 when there is
+    none, when [pos] is not a position of [s] (it can be the position after its last character), or when
+    [pos] is NULL (the source of MySQL reads a NULL position as 0). *)
+Definition my_locate (l : list value) : value :=
+  match l with
+  | sub :: s :: nil => 
+    match text_of sub, text_of s with
+    | Some sub, Some s => Value_Z (Some (string_index (lower_s sub) (lower_s s)))
+    | _, _ => Value_Z None
+    end
+  | sub :: s :: pos :: nil => 
+    match text_of sub, text_of s with
+    | Some sub, Some s => 
+      let p := match z_arg pos with Some p => p | None => 0 end in
+      let n := Z.of_nat (String.length s) in
+      if Z.ltb p 1 || Z.ltb (n + 1) p 
+      then Value_Z (Some 0)
+      else let rest := String.substring (Z.to_nat (p - 1)) (String.length s) s in
+           match string_index (lower_s sub) (lower_s rest) with
+           | 0 => Value_Z (Some 0)
+           | i => Value_Z (Some (i + p - 1))
+           end
+    | _, _ => Value_Z None
+    end
+  | _ => Value_Z None
+  end.
+
 Definition my_symbol_table : list (string * (list value -> value)) :=
   let conv := lenient in
   let plus := num_fun2 conv (fun a b => Some (num_plus a b)) in
   let minus := num_fun2 conv (fun a b => Some (num_minus a b)) in
   let mult := num_fun2 conv (fun a b => Some (num_mult a b)) in
   let opp := num_fun1 conv num_opp in
-  let div := num_fun2 conv num_div_exact in
+  let div := num_fun2 conv (num_div_dec div_precision_increment) in
   let idiv := num_fun2 conv num_div_trunc in
   let modulo := num_fun2 conv num_rem in
   let logic_and := fun l => my_of_truth (fold_truth my_truth andb3 true3 l) in
@@ -267,11 +310,7 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
                                             | Some s, Some n => Value_string (Some (string_repeat (Z.to_nat n) s))
                                             | _, _ => Value_string None end
                          | _ => Value_string None end)
-  :: ("locate", fun l => match l with
-                         | sub :: s :: nil => match text_of sub, text_of s with
-                                              | Some sub, Some s => Value_Z (Some (string_index (lower_s sub) (lower_s s)))
-                                              | _, _ => Value_Z None end
-                         | _ => Value_Z None end)
+  :: ("locate", my_locate)
   :: ("instr", fun l => match l with
                         | s :: sub :: nil => match text_of sub, text_of s with
                                              | Some sub, Some s => Value_Z (Some (string_index (lower_s sub) (lower_s s)))
@@ -289,7 +328,7 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
      ("count", agg_count_by is_null)
   :: ("count(*)", fun l => Value_Z (Some (Z.of_nat (List.length l))))
   :: ("sum", agg_sum_by is_null lenient)
-  :: ("avg", agg_avg_by is_null lenient)
+  :: ("avg", agg_avg_dec div_precision_increment is_null lenient)
   :: ("min", agg_extremum_by is_null my_order is_Lt)
   :: ("max", agg_extremum_by is_null my_order is_Gt)
   :: ("group_concat", agg_concat_by is_null ",")
@@ -309,13 +348,13 @@ Definition my_supports (f : feature) : bool :=
 
 Definition canon_my (v : value) : value :=
   match v with
-  | Value_string (Some s) => Value_string (Some (lower_s s))
+  | Value_string (Some s) => Value_string (Some (coll_key s))
   | Value_bool (Some b) => Value_Q (Some (Qc_of_Z (if b then 1 else 0)))
   | _ => canon_numeric v
   end.
 
-Definition MySQL : vsem :=
-  mk_vsem "MySQL"
+Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
+  mk_vsem name
           (table_of_list my_pred_table)
           (table_of_list my_symbol_table)
           (table_of_list my_aggregate_table)
@@ -326,4 +365,9 @@ Definition MySQL : vsem :=
           my_order
           canon_my
           true
-          my_supports.
+          supports.
+
+End Collation.
+
+(** MySQL 8 with its default collation [utf8mb4_0900_ai_ci] (no padding). *)
+Definition MySQL : vsem := mysql_vs false "MySQL" my_supports.

@@ -12,3 +12,5 @@ src/.Makefile.d
 src/CoqMakeFile
 src/CoqMakeFile.conf
 src/.CoqMakeFile.d
+src/testing/spec/
+src/testing/spec_slt/

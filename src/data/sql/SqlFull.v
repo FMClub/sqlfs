@@ -927,8 +927,8 @@ Definition mk_row (l : list (attribute * value)) :=
 
 (** Without GROUP BY, is the block nevertheless an aggregate query, with a
     single group? *)
-Definition implicit_group (sa : setA) (s : sselect) (h : scond) :=
-  sselect_has_agg sa s || scond_has_agg sa h.
+Definition implicit_group (sa : setA) (s : sselect) (h : scond) (ex : list sexpr) :=
+  sselect_has_agg sa s || scond_has_agg sa h || existsb (sexpr_has_agg sa) ex.
 
 (** The sort key of a row: a column of the row itself when the key is the name
     of such a column, the key evaluated in the environment of the row
@@ -999,11 +999,11 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
     if Fset.equal (A T) (squery_sort ce q1) (squery_sort ce q2)
     then eval_set_op o sq (eval_squery ce env q1) (eval_squery ce env q2)
     else nil
-  | SQ_Select sp => map (@fst _ _) (eval_sspec ce env sp)
+  | SQ_Select sp => map (@fst _ _) (eval_sspec ce env sp nil)
   | SQ_Order q lo off lim =>
     let rows :=
         match q with
-        | SQ_Select sp => eval_sspec ce env sp
+        | SQ_Select sp => eval_sspec ce env sp (map (fun o => match o with O_By e _ _ => e end) lo)
         | _ => map (fun t => (t, slice_t t :: env)) (eval_squery ce env q)
         end in
     let keys (x : tuple * senv) :=
@@ -1045,7 +1045,7 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
 
 (** The rows of a SELECT block, each of them together with the environment in
     which it has been built, that is the environment of its group. *)
-with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) {struct sp}
+with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {struct sp}
      : list (tuple * senv) :=
   match sp with
   | Select sq s lf w g h =>
@@ -1059,7 +1059,7 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) {struct sp}
     (** GROUP BY *)
     let groups :=
         match g with
-        | G_Fine => if implicit_group sa s h then rows :: nil else map (fun t => t :: nil) rows
+        | G_Fine => if implicit_group sa s h ex then rows :: nil else map (fun t => t :: nil) rows
         | G_By nil => rows :: nil
         | G_By lg => group_on (fun t => map (eval_sexpr ce (slice_t t :: env)) lg) rows
         end in

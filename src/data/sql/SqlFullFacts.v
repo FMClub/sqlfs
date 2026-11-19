@@ -61,7 +61,7 @@ Lemma eval_order_unfold :
     eval_squery ce env (SQ_Order q lo off lim) =
     let rows := 
         match q with
-        | SQ_Select sp => eval_sspec ce env sp
+        | SQ_Select sp => eval_sspec ce env sp (map (fun o => match o with O_By e _ _ => e end) lo)
         | _ => map (fun t => (t, slice_t T t :: env)) (eval_squery ce env q)
         end in
     let keys (x : tuple * senv T) :=

@@ -179,7 +179,46 @@ Definition num_fun1 (conv : value -> option num) (f : num -> num) (l : list valu
   | _ => Value_Z None
   end.
 
+(** * Decimal scales
+
+    MySQL and OceanBase compute the quotient of two numbers, and the average, as decimal
+    numbers whose scale is the scale of the dividend, increased by [div_precision_increment]
+    (4 by default); the result is rounded, ties away from zero. The scale of a number is the
+    number of decimals it needs; the declared scale of a column is not known. *)
+
+(** the number of decimals of [q], at most 40 *)
+Definition dec_scale (q : Qc) : nat :=
+  let d := Zpos (Qden q) in
+  match find (fun s => Z.eqb (Z.modulo (Z.pow 10 (Z.of_nat s)) d) 0) (seq 0 41) with
+  | Some s => s
+  | None => 40%nat
+  end.
+
+Definition num_scale (n : num) : nat := match n with Num_Z _ => 0%nat | Num_Q q => dec_scale q end.
+
+Definition round_scale (q : Qc) (s : nat) : Qc :=
+  let m := Qc_of_Z (Z.pow 10 (Z.of_nat s)) in
+  Qcdiv (Qc_of_Z (Qc_round (Qcmult q m))) m.
+
+Definition num_div_dec (incr : nat) (a b : num) : option num :=
+  if num_is_zero b then None
+  else Some (Num_Q (round_scale (Qcdiv (Qc_of_num a) (Qc_of_num b)) (num_scale a + incr)%nat)).
+
 (** * Strings *)
+
+(** [string_repeat] and [string_of_Z] are those of [Values.v]. *)
+Definition pad_zeros (width : nat) (s : string) : string :=
+  string_repeat (width - String.length s) "0" ++ s.
+
+(** The text of a decimal number, with the decimals it needs: [12.466], [-0.5], [3]. *)
+Definition string_of_dec (q : Qc) : string :=
+  let sc := dec_scale q in
+  let m := Z.pow 10 (Z.of_nat sc) in
+  let scaled := (Qnum q * (m / Zpos (Qden q)))%Z in
+  let ip := (Z.abs scaled / m)%Z in
+  let fp := (Z.abs scaled mod m)%Z in
+  (if Z.ltb scaled 0 then "-" else "") ++ string_of_Z ip
+  ++ (if Nat.eqb sc 0%nat then "" else "." ++ pad_zeros sc (string_of_Z fp)).
 
 Definition lower_s := string_map lower_ascii.
 Definition upper_s := string_map upper_ascii.
@@ -189,7 +228,7 @@ Definition text_of (v : value) : option string :=
   match v with
   | Value_string s => s
   | Value_Z (Some z) => Some (string_of_Z z)
-  | Value_Q (Some q) => Some (string_of_Qc q)
+  | Value_Q (Some q) => Some (string_of_dec q)
   | Value_bool (Some b) => Some (if b then "1" else "0")
   | _ => None
   end.
@@ -312,6 +351,16 @@ Definition agg_avg_by (isnull : value -> bool) (conv : value -> option num) (l :
   | n :: ns => 
     Value_Q (Some (Qcdiv (Qc_of_num (fold_left num_plus ns n)) 
                          (Qc_of_Z (Z.of_nat (S (List.length ns))))))
+  end.
+
+(** the average, as a decimal number of the scale of its arguments plus [incr] *)
+Definition agg_avg_dec (incr : nat) (isnull : value -> bool) (conv : value -> option num) (l : list value) :=
+  match flat_map (fun v => match conv v with Some n => n :: nil | None => nil end) (non_nulls_by isnull l) with
+  | nil => Value_Q None
+  | n :: ns => 
+    let sc := fold_left (fun m x => Nat.max m (num_scale x)) ns (num_scale n) in
+    Value_Q (Some (round_scale (Qcdiv (Qc_of_num (fold_left num_plus ns n)) 
+                                      (Qc_of_Z (Z.of_nat (S (List.length ns))))) (sc + incr)%nat))
   end.
 
 Definition agg_concat_by (isnull : value -> bool) (sep : string) (l : list value) :=
