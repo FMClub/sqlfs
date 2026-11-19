@@ -32,8 +32,13 @@ Open Scope string_scope.
 Definition tidb_supports (f : feature) : bool :=
   match f with
   | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order | F_Grouping_Sets | F_Cube
-  | F_Fetch_Ties | F_Fetch_Percent | F_Bare_Column => false
+  | F_Fetch_Ties | F_Fetch_Percent => false
   | _ => true
   end.
 
-Definition TiDB : vsem := mysql_vs true false "TiDB" tidb_supports.
+(** The default session: [utf8mb4_bin] (PAD SPACE, case sensitive), [ONLY_FULL_GROUP_BY] in
+    [sql_mode] ([mysql.DefaultSQLMode]), [group_concat_max_len] = 1024
+    ([DefGroupConcatMaxLen] in [pkg/sessionctx/vardef/tidb_vars.go]). *)
+Definition tidb_default_session : my_session := mk_my_session true false 4 false true 1024%N.
+
+Definition TiDB : vsem := mysql_vs tidb_default_session "TiDB" tidb_supports.

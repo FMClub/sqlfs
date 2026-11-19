@@ -105,3 +105,4 @@ testing/Test_Recursive.v
 testing/Test_Range.v
 testing/Test_Fetch.v
 testing/Test_MariaDB.v
+testing/Test_Session.v

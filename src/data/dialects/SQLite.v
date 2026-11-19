@@ -269,4 +269,6 @@ Definition SQLite : vsem :=
           lite_order
           canon_lite
           true
-          lite_supports.
+          lite_supports
+          true
+          (fun _ _ => false).

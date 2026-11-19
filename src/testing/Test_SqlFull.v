@@ -432,15 +432,58 @@ Example case_coalesce :
       [VS "dave"; VS "low"; VZ 0]; [VS "erin"; VS "low"; VZ 3] ] = true.
 Proof. check. Qed.
 
-(** Division by zero and the arithmetic over a NULL are NULL; an integer is promoted
-    to a numeric: [SELECT sal / 0 c, sal + NULL s, sal / 3.0 a FROM emp WHERE name = 'alice'] *)
+(** The arithmetic over a NULL is NULL; an integer is promoted to a numeric: 
+    [SELECT sal / NULL c, sal + NULL s, sal / 3.0 a FROM emp WHERE name = 'alice'] *)
 Example arithmetic :
   returns_bag db
     (select_where 
-       [as_ (fn "/" [col sal; int 0]) c; as_ (fn "+" [col sal; cst NullZ]) s;
+       [as_ (fn "/" [col sal; cst NullZ]) c; as_ (fn "+" [col sal; cst NullZ]) s;
         as_ (fn "/" [col sal; cst (VQ 3 1)]) a]
        [from_table "emp"] (pred "=" [col name; str "alice"]))
     [c; s; a] [ [NullZ; NullZ; VQ 5000 3] ] = true.
+Proof. check. Qed.
+
+(** Division by zero is an error in PostgreSQL: the query fails, also when the failing value is
+    not selected ([SELECT name FROM emp WHERE sal / 0 > 1]), but not when the row is filtered out
+    before by a condition which decides ([... WHERE false AND sal / 0 > 1]). *)
+Definition fails q :=
+  match eval_query_result ORN TNull_PostgreSQL (_basesort _ db) (_instance _ db) q with
+  | QR_Error _ => true
+  | QR_Rows _ _ => false
+  end.
+
+Example division_by_zero_fails :
+  fails (select_where [as_ (fn "/" [col sal; int 0]) c] [from_table "emp"] c_true) = true.
+Proof. check. Qed.
+
+Example division_by_zero_in_where_fails :
+  fails (select_where [as_ (col name) name] [from_table "emp"] (pred ">" [fn "/" [col sal; int 0]; int 1])) = true.
+Proof. check. Qed.
+
+Example decided_conjunction_does_not_fail :
+  fails (select_where [as_ (col name) name] [from_table "emp"] 
+           (c_and (pred "=" [int 1; int 2]) (pred ">" [fn "/" [col sal; int 0]; int 1]))) = false.
+Proof. check. Qed.
+
+(** [COALESCE] does not evaluate the arguments after the first non-NULL one, a [CASE] the branch it
+    does not take *)
+Example lazy_coalesce :
+  fails (select_where [as_ (fn "coalesce" [col sal; fn "/" [int 1; int 0]]) c] [from_table "emp"] 
+           (pred "=" [col name; str "alice"])) = false.
+Proof. check. Qed.
+
+Example lazy_case :
+  fails (select_where [as_ (e_case (pred "=" [int 1; int 1]) (int 1) (fn "/" [int 1; int 0])) c] [from_table "emp"] c_true) = false.
+Proof. check. Qed.
+
+(** an aggregate over a failed value fails, even [count( * )] over a failed row *)
+Example failed_row_counted :
+  fails (select_where [as_ (agg "count" (int 1)) c] [from_table "emp"] (pred ">" [fn "/" [col sal; int 0]; int 1])) = true.
+Proof. check. Qed.
+
+(** a scalar subquery with several rows fails (PostgreSQL, MySQL; SQLite takes the first row) *)
+Example scalar_subquery_rows :
+  fails (select_where [as_ (e_sub (select_where [as_ (col sal) sal] [from_table "emp"] c_true)) c] [from_table "emp"] c_true) = true.
 Proof. check. Qed.
 
 (** [SELECT upper(substring(name FROM 1 FOR 1)) || substring(name FROM 2) lbl, 

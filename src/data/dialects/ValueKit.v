@@ -392,6 +392,14 @@ Definition agg_concat_sep_by (isnull : value -> bool) (default : string) (l : li
   if forallb isnull (firsts l) then Value_string None
   else Value_string (Some (concat_pairs isnull default true l)).
 
+(** the first [n] characters of a string (the length limit of [GROUP_CONCAT]) *)
+Definition truncate_text (n : N) (v : value) : value :=
+  match v with
+  | Value_string (Some s) => 
+    if N.leb (N.of_nat (String.length s)) n then v else Value_string (Some (String.substring 0 (N.to_nat n) s))
+  | _ => v
+  end.
+
 (** variance, population or sample *)
 Definition agg_var_by (isnull : value -> bool) (conv : value -> option num) (sample : bool) (l : list value) :=
   let ns := flat_map (fun v => match conv v with Some n => n :: nil | None => nil end) (non_nulls_by isnull l) in

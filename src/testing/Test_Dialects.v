@@ -54,7 +54,11 @@ Definition nrows (d : vsem) (q : squery) := List.length (run d q).
 Definition veq (a b : NullValues.value) : bool :=
   match NullValues.is_null a, NullValues.is_null b with
   | true, true => true
-  | false, false => match NullValues.sql_compare a b with Some Eq => true | _ => false end
+  | false, false => 
+    match a, b with
+    | NullValues.Value_Err m1, NullValues.Value_Err m2 => String.eqb m1 m2
+    | _, _ => match NullValues.sql_compare a b with Some Eq => true | _ => false end
+    end
   | _, _ => false
   end.
 
@@ -67,8 +71,19 @@ Definition values_are (mk : vsem -> sexpr) (expected : list NullValues.value) : 
 Definition same (e : sexpr) := fun (_ : vsem) => e.
 
 (** the condition is true, in each dialect *)
+Definition fails (d : vsem) (q : squery) : bool :=
+  match eval_query_result ORN (dialect_of d) (_basesort _ db) (_instance _ db) (to_dialect d q) with
+  | QR_Error _ => true
+  | _ => false
+  end.
+
 Definition holds_in (cond : scond) : list bool :=
-  map (fun d => Nat.eqb (nrows d (select_where [as_ (int 1) x] [] cond)) 1) all.
+  map (fun d => let q := select_where [as_ (int 1) x] [] cond in
+                andb (negb (fails d q)) (Nat.eqb (nrows d q) 1)) all.
+
+(** the evaluation of the condition fails, in each dialect *)
+Definition fails_in (cond : scond) : list bool :=
+  map (fun d => fails d (select_where [as_ (int 1) x] [] cond)) all.
 
 (** * Arithmetic *)
 
@@ -82,17 +97,22 @@ Example div_negative :
   values_are (same (fn "/" [int (-7); int 2])) [VZ (-3); VQ (-7) 2; VZ (-3); VQ (-7) 2; VQ (-7) 2] = true.
 Proof. check. Qed.
 
+(** Division by zero fails in PostgreSQL and Oracle, and is NULL in MySQL (with a warning: its
+    [ERROR_FOR_DIVISION_BY_ZERO] only applies to [INSERT] and [UPDATE]) and in SQLite. *)
 Example div_zero : 
-  values_are (same (fn "/" [int 1; int 0])) [NullZ; NullZ; NullZ; NullZ; NullZ] = true.
+  values_are (same (fn "/" [int 1; int 0])) 
+    [NullValues.Value_Err "division by zero"; NullZ; NullZ; NullZ; 
+     NullValues.Value_Err "ORA-01476: divisor is equal to zero"] = true.
 Proof. check. Qed.
 
-(** The remainder has the sign of the dividend; [mod(5, 0)] is NULL, but 5 in Oracle. *)
+(** The remainder has the sign of the dividend; [mod(5, 0)] fails in PostgreSQL, is NULL in MySQL and
+    SQLite, and 5 in Oracle. *)
 Example mod_negative : 
   values_are (same (fn "mod" [int (-5); int 3])) [VZ (-2); VZ (-2); VZ (-2); VZ (-2); VZ (-2)] = true.
 Proof. check. Qed.
 
 Example mod_zero : 
-  values_are (same (fn "mod" [int 5; int 0])) [NullZ; NullZ; NullZ; NullZ; VZ 5] = true.
+  values_are (same (fn "mod" [int 5; int 0])) [NullValues.Value_Err "division by zero"; NullZ; NullZ; NullZ; VZ 5] = true.
 Proof. check. Qed.
 
 (** Rounding is away from zero; in SQLite the result is a real. *)
@@ -134,9 +154,13 @@ Example string_number_not_eq :
   holds_in (c_not (pred "=" [str "1"; int 1])) = [false; false; true; false; false].
 Proof. check. Qed.
 
-(** MySQL reads the prefix of a string which is used as a number. *)
+(** MySQL reads the prefix of a string which is used as a number; Oracle fails ([ORA-01722]). *)
 Example string_prefix : 
   holds_in (pred "=" [str "12abc"; int 12]) = [false; true; false; true; false].
+Proof. check. Qed.
+
+Example string_prefix_fails : 
+  fails_in (pred "=" [str "12abc"; int 12]) = [false; false; false; false; true].
 Proof. check. Qed.
 
 (** The empty string is NULL in Oracle. *)

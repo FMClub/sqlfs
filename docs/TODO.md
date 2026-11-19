@@ -18,7 +18,7 @@ Rules for all items (from the project's standing instructions):
 
 These change the type of values or of results, so they come first: every function of Phase 2 depends on them.
 
-### 1.1 Results with errors (I3, ledger 14)
+### 1.1 Results with errors (I3, ledger 14) — DONE
 - **What**: a query may fail (division by zero in PostgreSQL, `CAST('a' AS INT)` in strict modes, integer overflow, a scalar
   subquery which returns two rows, `cte_max_recursion_depth` exceeded). Today these are NULL.
 - **How**: add to the `dialect` record an error value, `error : error_kind -> value`, and `is_error : value -> bool`; make `E_Fun`, `E_Agg`, `E_Case`, `E_Cond`,
@@ -106,7 +106,16 @@ Split `value` into exact decimal with scale, binary floating point, and fixed-wi
 - **Sources**: PostgreSQL `src/backend/parser/parse_coerce.c`, `parse_oper.c`; MySQL `sql/item_cmpfunc.cc` (`Arg_comparator`), `sql/field.cc`; TiDB `pkg/expression/builtin_cast.go`, `pkg/types/etc.go`.
 - **Depends on**: 1.2–1.8.
 
-### 1.10 `sql_mode` and session variables as parameters
+### 1.10 `sql_mode` and session variables as parameters — DONE for the MySQL family
+
+Done: `my_session` (`MySQL.v`) with the default collation (padding, case), `div_precision_increment`,
+`PIPES_AS_CONCAT`, `ONLY_FULL_GROUP_BY`, `group_concat_max_len`; default sessions of MySQL, MariaDB,
+TiDB, OceanBase MySQL mode, Percona, PolarDB from their sources (`Test_Session.v`). The variables which
+only change parsing (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, `HIGH_NOT_PRECEDENCE`) have no counterpart in
+the abstract syntax. Still to come with the items they concern: `time_zone`, `DateStyle` (1.5),
+`extra_float_digits` (1.2.2), `REAL_AS_FLOAT` (1.2.2), `NO_UNSIGNED_SUBTRACTION` (1.2.3), MariaDB
+`sql_mode=ORACLE` (4.3), `tidb_*` and `ob_*` variables that change results (4.4, 4.8).
+
 - **What**: a record `session` with the variables that change query results: `sql_mode` flags (`ANSI_QUOTES`, `PIPES_AS_CONCAT`, `ONLY_FULL_GROUP_BY`, `STRICT_TRANS_TABLES`, `NO_BACKSLASH_ESCAPES`, `PAD_CHAR_TO_FULL_LENGTH`,
   `REAL_AS_FLOAT`, `ERROR_FOR_DIVISION_BY_ZERO`, `ORACLE` in MariaDB, `NO_UNSIGNED_SUBTRACTION`), `div_precision_increment`, `group_concat_max_len`, `time_zone`, `default_collation`, `sql_auto_is_null`,
   PostgreSQL `standard_conforming_strings`, `DateStyle`, `extra_float_digits`, `search_path`, TiDB `tidb_*` that change results, OceanBase `ob_*`.

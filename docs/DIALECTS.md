@@ -54,10 +54,12 @@ section). `planned` means that it is not modelled yet.
 | `ANY`/`ALL` subqueries | yes | yes | no | yes | yes | done |
 | Conditions are values (booleans) | boolean | integers 1/0 | integers 1/0 | integers 1/0 | no | done (`F_Cond_Value`, `truth_of_value`) |
 | String vs. number in a comparison | UNKNOWN (an error in PostgreSQL) | string read as a number | different: numbers < strings | as MySQL | string converted, UNKNOWN if not a number | done |
-| Prefix of a string read as a number (`'12abc'`) | no | yes | yes | yes | no (error) | done |
+| Prefix of a string read as a number (`'12abc'`) | no | yes | yes | yes | no: `ORA-01722` | done |
 | `/` on integers | integer, truncated | decimal, scale of the dividend + 4, rounded | integer, truncated | as MySQL (but see below) | exact | done |
-| Division by zero | error (NULL here) | NULL | NULL | NULL (no `ERROR_FOR_DIVISION_BY_ZERO` by default) | error (NULL here) | done |
-| `mod(x, 0)` | error (NULL here) | NULL | NULL | NULL | `x` (source) | done |
+| Division by zero | error | NULL | NULL | NULL (no `ERROR_FOR_DIVISION_BY_ZERO` by default) | error (`ORA-01476`) | done |
+| `mod(x, 0)` | error | NULL | NULL | NULL | `x` (source) | done |
+| Invalid cast / string used as a number | error (`invalid input syntax`) | prefix read, warning | prefix read | prefix read | error (`ORA-01722`) | done |
+| Scalar subquery with several rows | error | error | value of the first row | error | error | done |
 | `\|\|` | concatenation | logical OR | concatenation | logical OR (test suite) | concatenation, NULL is `''` (source) | done |
 | `CONCAT` and NULL | ignores NULL | NULL | ignores NULL | NULL (test suite) | `NULL \|\| x` is `x` (source) | done |
 | `''` and NULL | different | different | different | different | the same (source: `is_null_oracle`) | done |

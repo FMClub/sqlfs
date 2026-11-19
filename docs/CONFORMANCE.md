@@ -42,13 +42,17 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 545 queries are translated and replayed, 539 give
-the recorded result. The 6 which do not:
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 570 queries are translated and replayed, 561 give
+the recorded result. The 9 which do not:
 
 | Case | Reason | Status |
 |---|---|---|
-| `func_length:13,17,18,19,20` | `length(0.00)` is 4: a decimal keeps the scale of its literal; a rational forgets its trailing zeros | known limitation (decimals have no scale) |
-| `datatype_java:7` | `4/3 = 1.333333333` is true although `4/3` is displayed `1.3333`: OceanBase computes decimal quotients with more internal digits than MySQL | known deviation of OceanBase |
+| `func_length:14,18,19,20,21` | `length(0.00)` is 4: a decimal keeps the scale of its literal; a rational forgets its trailing zeros | TODO 1.2.1 (decimal scale) |
+| `datatype_java:8` | `4/3 = 1.333333333` is true although `4/3` is displayed `1.3333`: OceanBase computes decimal quotients with more internal digits than MySQL | TODO 1.2.1 |
+| `func_group_1:57,58` | `sum` of a `FLOAT` column: the engine sums single-precision values (`147.57999897003174`) | TODO 1.2.2 (floating point) |
+
+Since TODO 1.1, a query on which the model fails is printed `ERROR`, so a failure of the model can never
+pass for a NULL; no query of the suite fails in the model.
 
 **sqllogictest** (queries are selected for an engine by the directives):
 

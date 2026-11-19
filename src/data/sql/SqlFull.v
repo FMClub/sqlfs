@@ -217,7 +217,26 @@ Record dialect : Type :=
       (** the function symbols, the predicates and the aggregates which the dialect has *)
       known_symbol : symb -> bool;
       known_predicate : predicate -> bool;
-      known_aggregate : aggregate -> bool
+      known_aggregate : aggregate -> bool;
+      (** * Errors
+
+          The evaluation of an expression may fail (division by zero in PostgreSQL, an invalid
+          conversion, a scalar subquery with several rows): the failure is a value, [error k],
+          which is never NULL, and which the evaluation never loses (see [row_error]). *)
+      is_error : value -> bool;
+      error : string -> value;
+      (** an attribute which no query uses, to mark a failed row which has no attribute *)
+      err_attr : attribute;
+      (** the function symbols which do not evaluate all their arguments ([COALESCE], [IF],
+          [NVL2], ...): only their first argument propagates an error, the others are given to
+          the function, which returns them only when it selects them *)
+      lazy_symbol : symb -> bool;
+      (** a predicate which fails on these arguments (a comparison which the dialect cannot
+          perform) *)
+      pred_error : predicate -> list value -> bool;
+      (** a scalar subquery which returns several rows: the value of the first row (SQLite)
+          rather than an error (the other dialects) *)
+      scalar_first_row : bool
     }.
 
 Hypothesis O : dialect.
@@ -709,6 +728,23 @@ Fixpoint lookup (env : senv) (a : attribute) : value :=
     NULL has the type of [a]. *)
 Definition store (a : attribute) (v : value) := if is_null O v then null_of a else v.
 
+(** * Failed rows
+
+    A row which holds an error value is the trace of a failure: the query which produces it
+    fails. The evaluation keeps such rows wherever it would drop a row (filters, joins, set
+    operations, [LIMIT]), so that a failure is never lost, and [eval_query_result] reports it. *)
+Definition row_error (t : tuple) : bool := existsb (fun a => is_error O (dot T t a)) ({{{labels T t}}}).
+
+(** the failed version of a row: all its attributes, and [err_attr], are errors *)
+Definition err_row (t : tuple) : tuple :=
+  mk_tuple T (Fset.union (A T) (labels T t) (Fset.singleton (A T) (err_attr O))) (fun _ => error O "error").
+
+(** [r] is the result of an operation on rows [all]: if [r] lost the failed rows of [all], add them *)
+Definition keep_errors (r all : list tuple) : list tuple :=
+  if existsb row_error r then r else r ++ map err_row (filter row_error all).
+
+Definition first_error (l : list value) : option value := find (is_error O) l.
+
 (** * Columns and aggregates *)
 
 (** The columns which an expression reads from the blocks which enclose it: its own
@@ -1164,7 +1200,11 @@ Definition eval_wsem (a : attribute) (w : wsem)
            (sorted : list tuple) (gidx : list nat) (rk : list (option Q)) (i : nat) (t : tuple) : value :=
   match w with
   | WS_Agg ag sq arg fr =>
-    interp_aggregate T ag (quantify sq (map arg (frame_rows fr sorted gidx rk i)))
+    let vs := map arg (frame_rows fr sorted gidx rk i) in
+    match first_error vs with
+    | Some err => err
+    | None => interp_aggregate T ag (quantify sq vs)
+    end
   | WS_Row_Number => value_of_Z O (Z.of_nat (S i))
   | WS_Rank =>
     let gi := nth i gidx 0 in
@@ -1246,8 +1286,8 @@ Definition cross_product (l1 l2 : list tuple) :=
     the join. *)
 Definition eval_join (jt : join_type) (s1 s2 : setA)
            (l1 : list tuple) (right : tuple -> list tuple) (l2 : list tuple)
-           (on : tuple -> bool) : list tuple :=
-  let matches t1 := filter on (map (join_tuple T t1) (right t1)) in
+           (on : tuple -> bool) (mark : tuple -> tuple) : list tuple :=
+  let matches t1 := map mark (filter on (map (join_tuple T t1) (right t1))) in
   let inner := flat_map matches l1 in
   let left_outer :=
       flat_map (fun t1 => match matches t1 with
@@ -1350,40 +1390,65 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
                   end)
   | E_Const v => v
   | E_Col a => lookup env a
-  | E_Fun f l => interp_symbol T f (map (eval_sexpr ce env) l)
+  | E_Fun f l => 
+    let vs := map (eval_sexpr ce env) l in
+    match first_error (if lazy_symbol O f then firstn 1 vs else vs) with
+    | Some err => err
+    | None => interp_symbol T f vs
+    end
   | E_Agg ag sq e c =>
-    let vals :=
-        match agg_env (sexpr_cols ce e ++ scond_cols ce c) env with
-        | nil => nil
-        | (sa, g, _) :: env' =>
-          map (fun t => eval_sexpr ce ((sa, t :: nil, nil) :: env') e)
-              (filter (fun t => is_true3 (eval_scond ce ((sa, t :: nil, nil) :: env') c)) g)
-        end in
-    interp_aggregate T ag (quantify sq vals)
+    match agg_env (sexpr_cols ce e ++ scond_cols ce c) env with
+    | nil => interp_aggregate T ag nil
+    | (sa, g, _) :: env' =>
+      let renv t := (sa, t :: nil, nil) :: env' in
+      if existsb row_error g || existsb (fun t => scond_raises ce (renv t) c) g
+      then error O "error"
+      else
+        let vals := map (fun t => eval_sexpr ce (renv t) e) 
+                        (filter (fun t => is_true3 (eval_scond ce (renv t) c)) g) in
+        match first_error vals with
+        | Some err => err
+        | None => interp_aggregate T ag (quantify sq vals)
+        end
+    end
   | E_AggX ag sq e sep lo c =>
     let cols := sexpr_cols ce e ++ scond_cols ce c ++ 
                 (match sep with Some s => sexpr_cols ce s | None => nil end) ++
                 flat_map (fun o => match o with O_By e _ _ => sexpr_cols ce e end) lo in
-    let vals :=
-        match agg_env cols env with
-        | nil => nil
-        | (sa, g, _) :: env' =>
-          let renv t := (sa, t :: nil, nil) :: env' in
-          let rows := filter (fun t => is_true3 (eval_scond ce (renv t) c)) g in
-          let keys t := map (fun o => match o with O_By k _ _ => eval_sexpr ce (renv t) k end) lo in
-          let sorted := sort_on (map sorder_spec lo) keys rows in
-          flat_map (fun t => eval_sexpr ce (renv t) e ::
-                             match sep with Some s => eval_sexpr ce (renv t) s :: nil | None => nil end) sorted
-        end in
-    interp_aggregate T ag (match sep with Some _ => vals | None => quantify sq vals end)
-  | E_Case c e1 e2 =>
-    if is_true3 (eval_scond ce env c) then eval_sexpr ce env e1 else eval_sexpr ce env e2
-  | E_Cond c => value_of_truth O (eval_scond ce env c)
-  | E_Sub q =>
-    match eval_squery ce env q with
-    | t :: nil => match {{{labels T t}}} with a :: nil => dot T t a | _ => null O end
-    | _ => null O
+    match agg_env cols env with
+    | nil => interp_aggregate T ag nil
+    | (sa, g, _) :: env' =>
+      let renv t := (sa, t :: nil, nil) :: env' in
+      if existsb row_error g || existsb (fun t => scond_raises ce (renv t) c) g
+      then error O "error"
+      else
+        let rows := filter (fun t => is_true3 (eval_scond ce (renv t) c)) g in
+        let keys t := map (fun o => match o with O_By k _ _ => eval_sexpr ce (renv t) k end) lo in
+        let sorted := sort_on (map sorder_spec lo) keys rows in
+        let vals := flat_map (fun t => eval_sexpr ce (renv t) e ::
+                                       match sep with Some s => eval_sexpr ce (renv t) s :: nil | None => nil end) sorted in
+        match first_error (vals ++ flat_map keys rows) with
+        | Some err => err
+        | None => interp_aggregate T ag (match sep with Some _ => vals | None => quantify sq vals end)
+        end
     end
+  | E_Case c e1 e2 =>
+    if scond_raises ce env c then error O "error"
+    else if is_true3 (eval_scond ce env c) then eval_sexpr ce env e1 else eval_sexpr ce env e2
+  | E_Cond c => 
+    if scond_raises ce env c then error O "error" else value_of_truth O (eval_scond ce env c)
+  | E_Sub q =>
+    let rows := eval_squery ce env q in
+    if existsb row_error rows then error O "error"
+    else
+      match rows with
+      | nil => null O
+      | t :: rest => 
+        match rest, scalar_first_row O with
+        | _ :: _, false => error O "subquery returns more than one row"
+        | _, _ => match {{{labels T t}}} with a :: nil => dot T t a | _ => null O end
+        end
+      end
   end
 
 with eval_scond (ce : cte_env) (env : senv) (c : scond) {struct c} : bool3 :=
@@ -1410,6 +1475,37 @@ with eval_scond (ce : cte_env) (env : senv) (c : scond) {struct c} : bool3 :=
     end
   end
 
+(** Does the evaluation of the condition fail? A connective fails when one of its operands fails
+    and the other one does not decide the result ([FALSE AND error] is [FALSE], [TRUE OR error]
+    is [TRUE]): the order of evaluation is unspecified in SQL, and this is the only choice which
+    does not depend on it. *)
+with scond_raises (ce : cte_env) (env : senv) (c : scond) {struct c} : bool :=
+  match c with
+  | C_Conj a c1 c2 =>
+    let r1 := scond_raises ce env c1 in
+    let r2 := scond_raises ce env c2 in
+    let decides x := 
+        match a with
+        | And_F => is_true3 (Bool.negb (B T) (eval_scond ce env x))
+        | Or_F => is_true3 (eval_scond ce env x)
+        end in
+    (r1 && negb (negb r2 && decides c2)) || (r2 && negb (negb r1 && decides c1))
+  | C_Not c => scond_raises ce env c
+  | C_True => false
+  | C_Pred p l => 
+    let vs := map (eval_sexpr ce env) l in
+    existsb (is_error O) vs || pred_error O p vs
+  | C_Expr e => is_error O (eval_sexpr ce env e)
+  | C_Quant qtf p l q la =>
+    let vs := map (eval_sexpr ce env) l in
+    let rows := eval_squery ce env q in
+    existsb (is_error O) vs || existsb row_error rows ||
+    existsb (fun t => pred_error O p (vs ++ map (dot T t) la)) rows
+  | C_In l q la =>
+    existsb (is_error O) (map (eval_sexpr ce env) l) || existsb row_error (eval_squery ce env q)
+  | C_Exists q => existsb row_error (eval_squery ce env q)
+  end
+
 with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tuple :=
   match q with
   | SQ_Table r =>
@@ -1419,7 +1515,9 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
     end
   | SQ_Set o sq q1 q2 =>
     if Fset.equal (A T) (squery_sort ce q1) (squery_sort ce q2)
-    then eval_set_op o sq (eval_squery ce env q1) (eval_squery ce env q2)
+    then let l1 := eval_squery ce env q1 in
+         let l2 := eval_squery ce env q2 in
+         keep_errors (eval_set_op o sq l1 l2) (l1 ++ l2)
     else nil
   | SQ_Select sp => map (@fst _ _) (eval_sspec ce env sp nil)
   | SQ_Order q lo off lim =>
@@ -1436,7 +1534,9 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
                         | None => eval_sexpr ce (snd x) e
                         end
                       end) lo in
-    map (@fst _ _) (offset_limit off lim (sort_on (map sorder_spec lo) keys rows))
+    let rows := map (fun x => if existsb (is_error O) (keys x) then (err_row (fst x), snd x) else x) rows in
+    keep_errors (map (@fst _ _) (offset_limit off lim (sort_on (map sorder_spec lo) keys rows)))
+                (map (@fst _ _) rows)
   | SQ_Fetch q lo off ties percent n =>
     let rows :=
         match q with
@@ -1452,6 +1552,7 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
                         end
                       end) lo in
     let specs := map sorder_spec lo in
+    let rows := map (fun x => if existsb (is_error O) (keys x) then (err_row (fst x), snd x) else x) rows in
     let sorted := sort_on specs keys rows in
     let after := match off with Some k => skipn (N.to_nat k) sorted | None => sorted end in
     let count := if percent
@@ -1474,7 +1575,7 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
              | nil => nil
              end
         else nil in
-    map (@fst _ _) (first ++ extra)
+    keep_errors (map (@fst _ _) (first ++ extra)) (map (@fst _ _) rows)
   | SQ_Window q lw =>
     let compiled :=
         map (fun w =>
@@ -1498,7 +1599,9 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
                      | W_Last_Value e fr => WS_Last (ev e) fr
                      | W_Nth_Value e n fr => WS_Nth (ev e) n fr
                      end in
-                 eval_window part (map sorder_spec lo) keys a f'
+                 fun rows =>
+                   eval_window part (map sorder_spec lo) keys a f'
+                     (map (fun t => if existsb (is_error O) (part t ++ keys t) then err_row t else t) rows)
                end) lw in
     fold_left (fun rows w => w rows) compiled (eval_squery ce env q)
   | SQ_With r q1 q2 =>
@@ -1519,7 +1622,11 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
                let new' := if is_distinct sq then eval_set_op Diff Set_Distinct new acc else new in
                loop n' (acc ++ new') new'
              end
-           | _ => acc
+           | _ => 
+             (* the recursion has not reached a fixpoint within [rec_fuel] steps: MySQL, MariaDB, TiDB
+                and OceanBase fail ([cte_max_recursion_depth]); PostgreSQL and SQLite do not
+                terminate, which is also a failure of the evaluation *)
+             match work with nil => acc | _ => acc ++ err_row (null_tuple sa) :: nil end
            end) rec_fuel base base in
     eval_squery ((r, (sa, res)) :: ce) env q3
   end
@@ -1534,10 +1641,27 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
     let sa := Fset.Union (A T) (map (sfrom_sort ce) lf) in
     (** FROM: the product of the items *)
     let from :=
-        fold_left cross_product (map (eval_sfrom ce env) lf) (empty_tuple T :: nil) in
-    (** WHERE *)
-    let rows := filter (fun t => is_true3 (eval_scond ce (slice_t t :: env) w)) from in
-    (** GROUP BY *)
+        fold_left (fun l1 l2 => keep_errors (cross_product l1 l2) (l1 ++ l2))
+                  (map (eval_sfrom ce env) lf) (empty_tuple T :: nil) in
+    (** WHERE: a row on which the condition fails is kept as a failed row *)
+    let rows := 
+        flat_map (fun t => if row_error t || scond_raises ce (slice_t t :: env) w then err_row t :: nil
+                           else if is_true3 (eval_scond ce (slice_t t :: env) w) then t :: nil 
+                           else nil) from in
+    (** GROUP BY: a row whose grouping key fails is a failed row *)
+    let gkeys (t : tuple) : list value :=
+        match g with
+        | G_Fine => nil
+        | G_By lg => map (eval_sexpr ce (slice_t t :: env)) lg
+        | G_Sets ss => 
+          (fix go (ss : list (list sexpr)) : list value :=
+             match ss with
+             | nil => nil
+             | l :: r => map (eval_sexpr ce (slice_t t :: env)) l ++ go r
+             end) ss
+        | G_Rollup l | G_Cube l => map (eval_sexpr ce (slice_t t :: env)) l
+        end in
+    let rows := map (fun t => if existsb (is_error O) (gkeys t) then err_row t else t) rows in
     let plain_groups :=
         match g with
         | G_Fine => if implicit_group ce sa s h ex then rows :: nil else map (fun t => t :: nil) rows
@@ -1594,22 +1718,30 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
         | _ => map (fun grp => (grp, nil)) plain_groups
         end in
     let genvs := map (fun gh => slice_gs sa (fst gh) (snd gh) :: env) groupings in
-    (** HAVING *)
-    let genvs := filter (fun ge => is_true3 (eval_scond ce ge h)) genvs in
+    (** HAVING: a group which holds a failed row, or on which the condition fails, gives a failed row *)
+    let flagged := 
+        map (fun ge => (ge, match ge with 
+                            | (_, gr, _) :: _ => existsb row_error gr 
+                            | nil => false 
+                            end || scond_raises ce ge h)) genvs in
+    let flagged := filter (fun x => snd x || is_true3 (eval_scond ce (fst x) h)) flagged in
     (** SELECT *)
     let out :=
-        map (fun ge =>
-               (match s with
-                | S_Star =>
-                  match ge with
-                  | (_, t :: _, _) :: _ => t
-                  | _ => null_tuple sa
-                  end
-                | S_List l =>
-                  mk_row (map (fun x => match x with
-                                        | S_As e a => (a, eval_sexpr ce ge e)
-                                        end) l)
-                end, ge)) genvs in
+        map (fun (x : senv * bool) =>
+               let ge := fst x in
+               let row := 
+                   match s with
+                   | S_Star =>
+                     match ge with
+                     | (_, t :: _, _) :: _ => t
+                     | _ => null_tuple sa
+                     end
+                   | S_List l =>
+                     mk_row (map (fun it => match it with
+                                           | S_As e a => (a, eval_sexpr ce ge e)
+                                           end) l)
+                   end in
+               (if snd x then err_row row else row, ge)) flagged in
     (** DISTINCT *)
     match sq with
     | Set_All => out
@@ -1619,13 +1751,20 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
 
 with eval_sfrom (ce : cte_env) (env : senv) (f : sfrom) {struct f} : list tuple :=
   match f with
-  | Fr_Query q rho => map (rename_tuple rho) (eval_squery ce env q)
+  | Fr_Query q rho => 
+    map (fun t => let t' := rename_tuple rho t in if row_error t && negb (row_error t') then err_row t' else t')
+        (eval_squery ce env q)
   | Fr_Join jt lateral f1 f2 c =>
     let l1 := eval_sfrom ce env f1 in
     let l2 := eval_sfrom ce env f2 in
     let right t1 := if lateral then eval_sfrom ce (slice_t t1 :: env) f2 else l2 in
-    eval_join jt (sfrom_sort ce f1) (sfrom_sort ce f2) l1 right l2
-              (fun t => is_true3 (eval_scond ce (slice_t t :: env) c))
+    let bad t := scond_raises ce (slice_t t :: env) c in
+    (** a combination on which the condition fails, or which holds a failed row, is kept as a failed row *)
+    keep_errors 
+      (eval_join jt (sfrom_sort ce f1) (sfrom_sort ce f2) l1 right l2
+                 (fun t => row_error t || bad t || is_true3 (eval_scond ce (slice_t t :: env) c))
+                 (fun t => if bad t then err_row t else t))
+      (l1 ++ l2)
   end.
 
 (** * The semantics of a query
@@ -1636,6 +1775,15 @@ with eval_sfrom (ce : cte_env) (env : senv) (f : sfrom) {struct f} : list tuple 
 Definition eval_query_list (q : squery) : list tuple := eval_squery nil nil q.
 
 Definition eval_query_bag (q : squery) : bagT := Febag.mk_bag BTupleT (eval_query_list q).
+
+(** The result of a query: its rows, or a failure. *)
+Inductive query_result : Type :=
+  | QR_Rows : list tuple -> query_result
+  | QR_Error : query_result.
+
+Definition eval_query_result (q : squery) : query_result :=
+  let l := eval_query_list q in
+  if existsb row_error l then QR_Error else QR_Rows l.
 
 Definition sort_of_query (q : squery) : setA := squery_sort nil q.
 

@@ -68,9 +68,20 @@ correctness currently rests on about 130 examples checked by computation
 
 ## I3. Runtime errors are modelled by NULL
 
-**Current state**: the semantics is a total function. Division by zero, an
+**Status: resolved (TODO 1.1).** A failure is a value (`Value_Err`, dialect fields `is_error`,
+`error`); functions propagate it (lazily for `COALESCE`, `IF`, `NVL2`, ...: only their first
+argument); `scond_raises` says whether a condition fails (a connective fails only if the other
+operand does not decide the result, since SQL leaves the order of evaluation unspecified); every
+operation which drops rows keeps the failed ones (`keep_errors`, `err_row`), so a failure is never
+lost; `eval_query_result` returns `QR_Error` or `QR_Rows`. Errors produced: division and modulo by
+zero and invalid casts in PostgreSQL; division by zero and `ORA-01722` (invalid number, also in
+comparisons) in Oracle mode; a scalar subquery with several rows (but SQLite takes the first row);
+a recursion which does not terminate within `rec_fuel`. Integer overflow comes with TODO 1.2.3.
+The kind of an error is kept in the value but not compared with the engine's message.
+
+**Former state**: the semantics was a total function. Division by zero, an
 invalid cast, and a scalar subquery returning several rows are runtime errors
-in SQL; here they all yield NULL.
+in SQL; here they all yielded NULL.
 
 **Problem**: this differs from most database systems (a query that fails is
 given a result).
@@ -185,7 +196,7 @@ known gap and its status; it is updated by every pull request which touches one 
 | 11 | Floating-point numbers (IEEE rounding, `NaN`, `Infinity`, `-0`) | open: values are exact rationals |
 | 12 | Dates, times, timestamps, intervals, time zones | open |
 | 13 | Integer ranges, overflow, `BIGINT UNSIGNED` | open |
-| 14 | Runtime errors (division by zero in PostgreSQL, invalid casts) are NULL here (I3) | open: needs a result type with errors |
+| 14 | Runtime errors (division by zero in PostgreSQL, invalid casts) are NULL here (I3) | resolved (TODO 1.1) |
 | 15 | Regular expressions (`~`, `REGEXP`, `REGEXP_LIKE`, `REGEXP_REPLACE`) | open |
 | 16 | JSON and arrays | open |
 | 17 | Collations beyond case folding and padding (accent folding, `utf8mb4_unicode_ci`, locale collations of PostgreSQL) | open |

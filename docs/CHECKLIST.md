@@ -36,7 +36,7 @@ updates it.
 - [ ] Output column naming (derived names of unnamed expressions), duplicate column names (I4: positional semantics)
 - [ ] Views, `INFORMATION_SCHEMA` / catalog queries (as tables with the engine's contents)
 - [ ] Non-determinism: `RANDOM`, `NOW`, session variables, `LIMIT` without `ORDER BY`, ties in `ORDER BY`, bare columns (a set of results, not one)
-- [ ] Errors as results (I3): division by zero, invalid casts, overflow, scalar subquery returning several rows, recursion limits
+- [x] Errors as results (I3): division by zero, invalid casts, scalar subquery returning several rows, recursion limits (TODO 1.1); overflow with 1.2.3
 
 ## B. Values and types (the dialect-specific heart)
 
@@ -81,7 +81,7 @@ The tables have 40-60 entries per dialect; each engine has several hundred. For 
       TiDB's new-collation framework; MariaDB `sql_mode=ORACLE`; PolarDB-X and the PostgreSQL/Oracle editions of PolarDB; TiDB `tidb_*` variables that change semantics
 - [ ] Oracle database itself, SQL Server, DuckDB, ClickHouse, CockroachDB, Snowflake, BigQuery (not in the target list; list here to decide)
 - [ ] Per-version differences: MySQL 5.7 vs 8.0 vs 8.4, PostgreSQL 12..17, SQLite 3.x, MariaDB 10/11/12, TiDB 6/7/8, OceanBase 3/4 (feature flags per version)
-- [ ] Session/system variables that change query results (`sql_mode`, `div_precision_increment`, `group_concat_max_len`, `lc_collation`, `tidb_*`, `ob_*`, `standard_conforming_strings`)
+- [~] Session/system variables that change query results: MySQL family done (`sql_mode` flags `PIPES_AS_CONCAT`, `ONLY_FULL_GROUP_BY`, `div_precision_increment`, `group_concat_max_len`, collation); `time_zone`, float display, `tidb_*`, `ob_*`, MariaDB `ORACLE` mode to come
 - [ ] Bare columns in aggregate queries: the value (SQLite's row of `min`/`max`, MySQL/MariaDB arbitrary row), as a set of allowed results
 - [ ] Functional dependencies for `ONLY_FULL_GROUP_BY` (keys, `PRIMARY KEY`, `UNIQUE NOT NULL`), checks inside subqueries
 

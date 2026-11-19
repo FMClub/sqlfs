@@ -24,4 +24,4 @@ Definition polar_supports (f : feature) : bool :=
   | _ => my_supports f
   end.
 
-Definition PolarDB : vsem := mysql_vs false true "PolarDB for MySQL" polar_supports.
+Definition PolarDB : vsem := mysql_vs my_default_session "PolarDB for MySQL" polar_supports.

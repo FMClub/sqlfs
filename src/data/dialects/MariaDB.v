@@ -42,4 +42,9 @@ Definition maria_supports (f : feature) : bool :=
   | _ => true
   end.
 
-Definition MariaDB : vsem := mysql_vs true true "MariaDB" maria_supports.
+(** The default session: [utf8mb4_uca1400_ai_ci] (PAD SPACE, case insensitive), no
+    [ONLY_FULL_GROUP_BY] nor [PIPES_AS_CONCAT] in [sql_mode], [group_concat_max_len] = 1048576
+    ([Sys_group_concat_max_len] in [sql/sys_vars.cc]). *)
+Definition maria_default_session : my_session := mk_my_session true true 4 false false 1048576%N.
+
+Definition MariaDB : vsem := mysql_vs maria_default_session "MariaDB" maria_supports.

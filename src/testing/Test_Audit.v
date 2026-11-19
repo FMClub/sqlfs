@@ -63,7 +63,8 @@ Example row_eq_2 : P "row=" [VZ 1; NullZ; VZ 1; NullZ] = unknown3. Proof. check.
 Example plus_null : veq (F "+" [VZ 1; NullZ]) NullZ = true. Proof. check. Qed.
 Example div_int : veq (F "/" [VZ (-7); VZ 2]) (VZ (-3)) = true. Proof. check. Qed.
 Example mod_int : veq (F "%" [VZ (-7); VZ 2]) (VZ (-1)) = true. Proof. check. Qed.
-Example div_zero : veq (F "/" [VZ 7; VZ 0]) NullZ = true. Proof. check. Qed.
+(** PostgreSQL: division by zero is an error *)
+Example div_zero : veq (F "/" [VZ 7; VZ 0]) (NullValues.Value_Err "division by zero") = true. Proof. check. Qed.
 Example div_num : veq (F "/" [VZ 7; VQ 2 1]) (VQ 7 2) = true. Proof. check. Qed.
 Example round_1 : veq (F "round" [VQ 5 2]) (VZ 3) = true. Proof. check. Qed.
 Example round_2 : veq (F "round" [VQ (-5) 2]) (VZ (-3)) = true. Proof. check. Qed.
@@ -102,7 +103,8 @@ Example upper_1 : veq (F "upper" [VS "Sql 92"]) (VS "SQL 92") = true. Proof. che
 
 (** Casts. *)
 Example cast_1 : veq (F "cast_int" [VS " -42 "]) (VZ (-42)) = true. Proof. check. Qed.
-Example cast_2 : veq (F "cast_int" [VS "4x"]) NullZ = true. Proof. check. Qed.
+(** PostgreSQL: [CAST('4x' AS INT)] is an error *)
+Example cast_2 : veq (F "cast_int" [VS "4x"]) (NullValues.Value_Err "invalid input syntax for type integer") = true. Proof. check. Qed.
 Example cast_3 : veq (F "cast_numeric" [VS "-12.50"]) (VQ (-25) 2) = true. Proof. check. Qed.
 Example cast_4 : veq (F "cast_string" [VZ (-42)]) (VS "-42") = true. Proof. check. Qed.
 Example cast_5 : veq (F "cast_int" [VQ 7 2]) (VZ 4) = true. Proof. check. Qed.

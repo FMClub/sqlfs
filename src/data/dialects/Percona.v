@@ -20,4 +20,4 @@ Open Scope string_scope.
     [sql_mode], [INTERSECT] and [EXCEPT] with [ALL], [LATERAL], [WITH ROLLUP] only).
     The extra functions do not change the evaluation of the queries of [SqlFull]; they are
     not in the tables. *)
-Definition Percona : vsem := mysql_vs false true "Percona Server for MySQL" my_supports.
+Definition Percona : vsem := mysql_vs my_default_session "Percona Server for MySQL" my_supports.
