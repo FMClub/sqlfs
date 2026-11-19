@@ -175,7 +175,10 @@ Fixpoint eval_sql_query_ext env (sq : sql_query_ext) {struct sq} : bagT :=
                 Bool.is_true 
                 _ 
                 (eval_sql_formula eval_sql_query_ext (env_t T env t) f1)) 
-            (List.fold_right (eval_sql_ext_join_item env) (Febag.elements (Fecol.CBag (CTuple T)) elsq) jq)) in
+            (** the joins are applied from left to right, so that the condition of a
+                join may refer to the attributes of all the items which precede it *)
+            (List.fold_left (fun br ji => eval_sql_ext_join_item env ji br) jq 
+                            (Febag.elements (Fecol.CBag (CTuple T)) elsq))) in
     (** computation of the groups grouped according to gby *)
        let lg1 := make_groups env cc gby in
        (** discarding groups according the having clause f2 *)

@@ -39,8 +39,13 @@ data/sql/Sql.v
 data/sql/SqlExt.v
 data/sql/SqlAlgebra.v
 data/sql/SqlAlgebraExt.v
+data/sql/SqlFull.v
+data/sql/SqlFullFacts.v
 data/proof_of_concept/TuplesImpl.v
 data/proof_of_concept/Values.v
 data/proof_of_concept/GenericInstance.v
 data/proof_of_concept/SqlSyntax.v
 data/proof_of_concept/Movie.v
+data/proof_of_concept/SqlFullSyntax.v
+testing/Test_SqlFull.v
+testing/Test_Audit.v

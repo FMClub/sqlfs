@@ -11,8 +11,11 @@
 (**                                                                                 *)
 (************************************************************************************)
 
-Require Import Arith NArith ZArith String List.
+Require Import Arith NArith ZArith String List Ascii QArith Qcanon Qround DecimalString.
 Require Import OrderedSet FiniteSet Bool3.
+
+Close Scope Q_scope.
+Close Scope Qc_scope.
 
 Definition option_compare (A : Type) (c : A -> A -> comparison) x y :=
   match x, y with
@@ -31,7 +34,8 @@ Hypothesis OVal : Oset.Rcd value.
 Inductive type := 
  | type_string 
  | type_Z
- | type_bool.
+ | type_bool
+ | type_Q.
 
 Open Scope N_scope.
 
@@ -41,6 +45,7 @@ Definition N_of_type :=
     | type_string => 0
     | type_Z => 1
     | type_bool => 2
+    | type_Q => 3
     end.
 
 Definition OT : Oset.Rcd type.
@@ -119,13 +124,23 @@ End Sec.
 
 Module NullValues.
 
-(** Embedding several coq datatypes (corresponding to domains) into a single uniform
-    type for values.
+(** * Values
+
+    Embedding several coq datatypes (corresponding to SQL domains) into a single
+    uniform type for values. Each domain is lifted with [option], [None] being
+    the SQL NULL of that domain.
+
+    - [Value_string] : CHAR / VARCHAR / TEXT
+    - [Value_Z]      : SMALLINT / INTEGER / BIGINT (unbounded, no overflow)
+    - [Value_bool]   : BOOLEAN
+    - [Value_Q]      : NUMERIC / DECIMAL / REAL, idealised as exact canonical
+                       rationals (no rounding, no overflow)
 *)
 Inductive value : Set :=
   | Value_string : option string -> value
   | Value_Z : option Z -> value
-  | Value_bool : option bool -> value.
+  | Value_bool : option bool -> value
+  | Value_Q : option Qc -> value.
 
 Register value as datacert.value.type.
 Register Value_string as datacert.value.Value_string.
@@ -137,46 +152,65 @@ match v with
   | Value_string _  => type_string
   | Value_Z _ => type_Z
   | Value_bool _ => type_bool
+  | Value_Q _ => type_Q
   end.
 
-(** Default values for each type. *)
+(** Default values for each type: the NULL of that type. *)
 Definition default_value d :=
   match d with
     | type_string => Value_string None
     | type_Z => Value_Z None
     | type_bool => Value_bool None
+    | type_Q => Value_Q None
   end.
 
-(** injection of domain names into natural numbers in order to
-    build an ordering on them.
-*)
-
+Definition is_null v :=
+  match v with
+  | Value_string None | Value_Z None | Value_bool None | Value_Q None => true
+  | _ => false
+  end.
 
 (** Comparison over values, in order to build an ordered type over values, and then
-    finite sets.
+    finite sets. This is the _structural_ order used for grouping, DISTINCT and set
+    operations (where two NULLs are not distinct); it is not the SQL comparison
+    predicate, see [sql_compare] below.
 *)
 
+Definition OQc : Oset.Rcd Qc.
+split with Qccompare.
+- intros a1 a2; case_eq (Qccompare a1 a2); intro H.
+  + apply Qceq_alt; assumption.
+  + intro K; subst a2.
+    rewrite (proj1 (Qceq_alt a1 a1) (refl_equal _)) in H; discriminate H.
+  + intro K; subst a2.
+    rewrite (proj1 (Qceq_alt a1 a1) (refl_equal _)) in H; discriminate H.
+- intros a1 a2 a3 H12 H23.
+  apply Qclt_alt; apply Qclt_trans with a2; apply Qclt_alt; assumption.
+- intros a1 a2; unfold Qccompare; rewrite Qcompare_antisym; apply refl_equal.
+Defined.
+
+Definition value_rank v : N :=
+  match v with
+  | Value_string _ => 0%N
+  | Value_Z _ => 1%N
+  | Value_bool _ => 2%N
+  | Value_Q _ => 3%N
+  end.
 
 Definition value_compare x y :=
   match x, y with
     | Value_string s1, Value_string s2 => option_compare _ string_compare s1 s2
-    | Value_string _, Value_Z _
-    | Value_string _, Value_bool _ => Lt
-
-    | Value_Z _, Value_string _ => Gt
     | Value_Z z1, Value_Z z2 => option_compare _ Z.compare z1 z2
-    | Value_Z _, Value_bool _ => Lt
-
-    | Value_bool _, Value_string _
-    | Value_bool _, Value_Z _ => Gt
     | Value_bool b1, Value_bool b2 => option_compare _ bool_compare b1 b2
+    | Value_Q q1, Value_Q q2 => option_compare _ Qccompare q1 q2
+    | _, _ => N.compare (value_rank x) (value_rank y)
   end.
 
 Definition OVal : Oset.Rcd value.
 split with value_compare.
 - (* 1/3 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ]] [[s2 | ] | [z2 | ] | [b2 | ]];
-    try discriminate; simpl; trivial.
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ]];
+    simpl; try discriminate; trivial.
   + generalize (Oset.eq_bool_ok Ostring s1 s2); simpl; case (string_compare s1 s2).
     * apply (f_equal (fun x => Value_string (Some x))).
     * intros H1 H2; injection H2; apply H1.
@@ -189,138 +223,781 @@ split with value_compare.
     * apply (f_equal (fun x => Value_bool (Some x))).
     * intros H1 H2; injection H2; apply H1.
     * intros H1 H2; injection H2; apply H1.
+  + generalize (Oset.eq_bool_ok OQc q1 q2); simpl; case (Qccompare q1 q2).
+    * apply (f_equal (fun x => Value_Q (Some x))).
+    * intros H1 H2; injection H2; apply H1.
+    * intros H1 H2; injection H2; apply H1.
 - (* 1/2 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ]] [[s2 | ] | [z2 | ] | [b2 | ]] [[s3 | ] | [z3 | ] | [b3 | ]]; trivial; try discriminate; simpl.
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ]]
+         [[s3 | ] | [z3 | ] | [b3 | ] | [q3 | ]]; simpl; trivial; try discriminate.
   + apply (Oset.compare_lt_trans Ostring).
   + apply (Oset.compare_lt_trans OZ).
   + apply (Oset.compare_lt_trans Obool).
+  + apply (Oset.compare_lt_trans OQc).
 - (* 1/1 *)
-  intros [[s1 | ] | [z1 | ] | [b1 | ]] [[s2 | ] | [z2 | ] | [b2 | ]]; trivial; simpl.
+  intros [[s1 | ] | [z1 | ] | [b1 | ] | [q1 | ]] [[s2 | ] | [z2 | ] | [b2 | ] | [q2 | ]];
+    simpl; trivial.
   + apply (Oset.compare_lt_gt Ostring).
   + apply (Oset.compare_lt_gt OZ).
   + apply (Oset.compare_lt_gt Obool).
+  + apply (Oset.compare_lt_gt OQc).
 Defined.
 
 Definition FVal := Fset.build OVal.
 
-Definition interp_predicate p :=
-  match p with
-    | Predicate "<" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil =>
-            match Z.compare a1 a2 with Lt => true3 | _ => false3 end
-          | _ => unknown3
-        end
-    | Predicate "<=" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil =>
-            match Z.compare a1 a2 with Gt => false3 | _ => true3 end
-          | _ => unknown3
-        end
-    | Predicate ">" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil =>
-            match Z.compare a1 a2 with Gt => true3 | _ => false3 end
-          | _ => unknown3
-        end
-    | Predicate ">=" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil =>
-            match Z.compare a1 a2 with Lt => false3 | _ => true3 end
-          | _ => unknown3
-        end
-    | Predicate "=" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil =>
-            match Z.compare a1 a2 with Eq => true3 | _ => false3 end
-          | Value_string (Some s1) :: Value_string (Some s2) :: nil =>
-            match string_compare s1 s2 with Eq => true3 | _ => false3 end
-          | _ => unknown3
-        end
-    | Predicate "<>" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil =>
-            match Z.compare a1 a2 with Eq => false3 | _ => true3 end
-          | Value_string (Some s1) :: Value_string (Some s2) :: nil =>
-            match string_compare s1 s2 with Eq => false3 | _ => true3 end
-          | _ => unknown3
-        end
-   | _ => fun _ => unknown3
+Definition value_eqb v1 v2 :=
+  match value_compare v1 v2 with Eq => true | _ => false end.
+
+(** * Truth values as values, and conversely *)
+
+Definition value_of_bool3 (b : bool3) :=
+  match b with
+  | true3 => Value_bool (Some true)
+  | false3 => Value_bool (Some false)
+  | unknown3 => Value_bool None
   end.
 
-Definition interp_symbol f :=
+(** A value used as a condition: anything which is not TRUE or FALSE is UNKNOWN. *)
+Definition bool3_of_value v :=
+  match v with
+  | Value_bool (Some true) => true3
+  | Value_bool (Some false) => false3
+  | _ => unknown3
+  end.
+
+Definition bool3_of_bool (b : bool) := if b then true3 else false3.
+
+Definition andb3 := Bool.andb Bool3.
+Definition orb3 := Bool.orb Bool3.
+Definition negb3 := Bool.negb Bool3.
+
+(** * The numeric tower: integers are implicitly promoted to rationals. *)
+
+Inductive num : Set :=
+  | Num_Z : Z -> num
+  | Num_Q : Qc -> num.
+
+Definition Qc_of_Z (z : Z) : Qc := Q2Qc (inject_Z z).
+
+Definition Qc_of_num n := match n with Num_Z z => Qc_of_Z z | Num_Q q => q end.
+
+Definition num_of_value v :=
+  match v with
+  | Value_Z (Some z) => Some (Num_Z z)
+  | Value_Q (Some q) => Some (Num_Q q)
+  | _ => None
+  end.
+
+Definition value_of_num n :=
+  match n with Num_Z z => Value_Z (Some z) | Num_Q q => Value_Q (Some q) end.
+
+Definition is_Q v := match v with Value_Q _ => true | _ => false end.
+
+(** The NULL resulting from an arithmetic operation over [l]: numeric as soon as
+    one of the arguments is numeric, integer otherwise. *)
+Definition null_num (l : list value) :=
+  if existsb is_Q l then Value_Q None else Value_Z None.
+
+(** Binary arithmetic. [fz] and [fq] are partial: [None] models a runtime error
+    (e.g. division by zero), which this total semantics maps to NULL. *)
+Definition arith2 (fz : Z -> Z -> option Z) (fq : Qc -> Qc -> option Qc) (l : list value) :=
+  match l with
+  | v1 :: v2 :: nil =>
+    match num_of_value v1, num_of_value v2 with
+    | Some (Num_Z a), Some (Num_Z b) => Value_Z (fz a b)
+    | Some a, Some b => Value_Q (fq (Qc_of_num a) (Qc_of_num b))
+    | _, _ => null_num l
+    end
+  | _ => null_num l
+  end.
+
+Definition arith1 (fz : Z -> option Z) (fq : Qc -> option Qc) (l : list value) :=
+  match l with
+  | v1 :: nil =>
+    match num_of_value v1 with
+    | Some (Num_Z a) => Value_Z (fz a)
+    | Some (Num_Q a) => Value_Q (fq a)
+    | None => null_num l
+    end
+  | _ => null_num l
+  end.
+
+Definition Qc_is_zero (q : Qc) := match Qccompare q (Qc_of_Z 0) with Eq => true | _ => false end.
+
+Definition Qc_floor (q : Qc) : Z := Qfloor q.
+Definition Qc_ceiling (q : Qc) : Z := Qceiling q.
+(** truncation towards zero *)
+Definition Qc_trunc (q : Qc) : Z := Z.quot (Qnum q) (Zpos (Qden q)).
+(** rounding to the nearest integer, ties away from zero *)
+Definition Qc_round (q : Qc) : Z :=
+  match Qccompare q (Qc_of_Z 0) with
+  | Lt => Z.opp (Qfloor (Qplus (Qopp q) (1 # 2)))
+  | _ => Qfloor (Qplus q (1 # 2))
+  end.
+
+Definition Zpower_opt (a b : Z) : option Z :=
+  match b with
+  | Zneg _ => None
+  | _ => Some (Z.pow a b)
+  end.
+
+Definition Qcpower_opt (a b : Qc) : option Qc :=
+  (* only integral exponents are supported *)
+  if Pos.eqb (Qden b) 1
+  then match Qnum b with
+       | Z0 => Some (Qc_of_Z 1)
+       | Zpos p => Some (Qcpower a (Pos.to_nat p))
+       | Zneg p => if Qc_is_zero a then None else Some (Qcinv (Qcpower a (Pos.to_nat p)))
+       end
+  else None.
+
+(** * SQL comparison
+
+    [sql_compare v1 v2] is [None] when one of the arguments is NULL, or when the
+    two values are not comparable (a typing error in SQL); the comparison
+    predicates are then UNKNOWN. *)
+Definition sql_compare v1 v2 : option comparison :=
+  match v1, v2 with
+  | Value_string (Some s1), Value_string (Some s2) => Some (string_compare s1 s2)
+  | Value_bool (Some b1), Value_bool (Some b2) => Some (bool_compare b1 b2)
+  | _, _ =>
+    match num_of_value v1, num_of_value v2 with
+    | Some (Num_Z a), Some (Num_Z b) => Some (Z.compare a b)
+    | Some a, Some b => Some (Qccompare (Qc_of_num a) (Qc_of_num b))
+    | _, _ => None
+    end
+  end.
+
+Definition cmp3 (test : comparison -> bool) v1 v2 :=
+  match sql_compare v1 v2 with
+  | Some c => bool3_of_bool (test c)
+  | None => unknown3
+  end.
+
+Definition is_Eq c := match c with Eq => true | _ => false end.
+Definition is_Lt c := match c with Lt => true | _ => false end.
+Definition is_Gt c := match c with Gt => true | _ => false end.
+
+Definition sql_eq3 := cmp3 is_Eq.
+Definition sql_lt3 := cmp3 is_Lt.
+Definition sql_le3 := cmp3 (fun c => negb (is_Gt c)).
+
+(** The total order used by ORDER BY, MIN and MAX on non-NULL values: the SQL
+    comparison when it is defined, the structural order otherwise. *)
+Definition sql_order v1 v2 : comparison :=
+  match sql_compare v1 v2 with
+  | Some c => c
+  | None => value_compare v1 v2
+  end.
+
+(** IS NOT DISTINCT FROM: NULL-safe equality, never UNKNOWN. *)
+Definition not_distinct v1 v2 :=
+  match is_null v1, is_null v2 with
+  | true, true => true
+  | false, false => match sql_compare v1 v2 with Some Eq => true | _ => false end
+  | _, _ => false
+  end.
+
+Definition binary3 (f : value -> value -> bool3) (l : list value) :=
+  match l with
+  | v1 :: v2 :: nil => f v1 v2
+  | _ => unknown3
+  end.
+
+Definition unary3 (f : value -> bool3) (l : list value) :=
+  match l with
+  | v1 :: nil => f v1
+  | _ => unknown3
+  end.
+
+(** Row-wise equality [(a1, ..., an) = (b1, ..., bn)], the arguments being given
+    as [a1 :: ... :: an :: b1 :: ... :: bn :: nil]. *)
+Fixpoint row_eq3 (l1 l2 : list value) :=
+  match l1, l2 with
+  | nil, nil => true3
+  | v1 :: l1, v2 :: l2 => andb3 (sql_eq3 v1 v2) (row_eq3 l1 l2)
+  | _, _ => unknown3
+  end.
+
+Definition split_half (l : list value) :=
+  let n := Nat.div2 (List.length l) in (firstn n l, skipn n l).
+
+(** [x IN (v1, ..., vn)] *)
+Definition in_list3 (l : list value) :=
+  match l with
+  | nil => unknown3
+  | x :: l => fold_left (fun acc v => orb3 acc (sql_eq3 x v)) l false3
+  end.
+
+(** * Strings *)
+
+Open Scope string_scope.
+
+(** LIKE patterns: [%] matches any sequence of characters, [_] any single
+    character, and a backslash escapes the next character of the pattern. *)
+Fixpoint like_match (p : string) : string -> bool :=
+  match p with
+  | EmptyString => fun s => match s with EmptyString => true | _ => false end
+  | String "%" p' =>
+    fix star (s : string) : bool :=
+      like_match p' s || match s with EmptyString => false | String _ s' => star s' end
+  | String "_" p' =>
+    fun s => match s with EmptyString => false | String _ s' => like_match p' s' end
+  | String "\" (String c p') =>
+    fun s => match s with
+             | EmptyString => false
+             | String c' s' => Ascii.eqb c c' && like_match p' s'
+             end
+  | String c p' =>
+    fun s => match s with
+             | EmptyString => false
+             | String c' s' => Ascii.eqb c c' && like_match p' s'
+             end
+  end.
+
+Definition like3 v p :=
+  match v, p with
+  | Value_string (Some s), Value_string (Some p) => bool3_of_bool (like_match p s)
+  | _, _ => unknown3
+  end.
+
+Definition upper_ascii (c : ascii) :=
+  let n := nat_of_ascii c in
+  if Nat.leb 97 n && Nat.leb n 122 then ascii_of_nat (n - 32) else c.
+
+Definition lower_ascii (c : ascii) :=
+  let n := nat_of_ascii c in
+  if Nat.leb 65 n && Nat.leb n 90 then ascii_of_nat (n + 32) else c.
+
+Fixpoint string_map (f : ascii -> ascii) (s : string) :=
+  match s with
+  | EmptyString => EmptyString
+  | String c s => String (f c) (string_map f s)
+  end.
+
+Fixpoint string_rev_aux (s acc : string) :=
+  match s with
+  | EmptyString => acc
+  | String c s => string_rev_aux s (String c acc)
+  end.
+
+Definition string_rev s := string_rev_aux s EmptyString.
+
+Fixpoint string_ltrim (s : string) :=
+  match s with
+  | String " " s' => string_ltrim s'
+  | _ => s
+  end.
+
+Definition string_rtrim s := string_rev (string_ltrim (string_rev s)).
+
+Fixpoint string_replace_aux (n : nat) (from to s : string) :=
+  match n with
+  | O => s
+  | S n =>
+    match s with
+    | EmptyString => EmptyString
+    | String c s' =>
+      if String.prefix from s
+      then to ++ string_replace_aux n from to
+                   (String.substring (String.length from)
+                                     (String.length s - String.length from) s)
+      else String c (string_replace_aux n from to s')
+    end
+  end.
+
+Definition string_replace (s from to : string) :=
+  match from with
+  | EmptyString => s
+  | _ => string_replace_aux (S (String.length s)) from to s
+  end.
+
+Fixpoint string_repeat (n : nat) (s : string) :=
+  match n with
+  | O => EmptyString
+  | S n => s ++ string_repeat n s
+  end.
+
+(** SUBSTRING (s FROM start FOR len), 1-based as in SQL. *)
+Definition sql_substring (s : string) (start : Z) (len : option Z) :=
+  let total := Z.of_nat (String.length s) in
+  let stop := match len with
+              | Some l => (start + l)%Z
+              | None => (total + 1)%Z
+              end in
+  let start' := Z.max start 1 in
+  let stop' := Z.min stop (total + 1)%Z in
+  if (stop' <=? start')%Z
+  then EmptyString
+  else String.substring (Z.to_nat (start' - 1)) (Z.to_nat (stop' - start')) s.
+
+Definition string_of_Z (z : Z) : string := NilZero.string_of_int (Z.to_int z).
+
+Definition Z_of_string (s : string) : option Z :=
+  match s with
+  | EmptyString | String "-" EmptyString => None
+  | _ => match NilZero.int_of_string s with
+         | Some i => Some (Z.of_int i)
+         | None => None
+         end
+  end.
+
+Definition string_of_Qc (q : Qc) : string :=
+  if Pos.eqb (Qden q) 1
+  then string_of_Z (Qnum q)
+  else string_of_Z (Qnum q) ++ "/" ++ string_of_Z (Zpos (Qden q)).
+
+(** Decimal literals: [-]digits[.digits] *)
+Definition Qc_of_string (s : string) : option Qc :=
+  match String.index 0 "." s with
+  | None => match Z_of_string s with Some z => Some (Qc_of_Z z) | None => None end
+  | Some i =>
+    let ip := String.substring 0 i s in
+    let fp := String.substring (S i) (String.length s - S i) s in
+    let neg := String.prefix "-" ip in
+    let ip' := match ip with
+               | EmptyString => Some 0%Z
+               | String "-" EmptyString => Some 0%Z
+               | _ => Z_of_string ip
+               end in
+    match ip', fp with
+    | Some a, EmptyString => Some (Qc_of_Z a)
+    | Some a, _ =>
+      match NilZero.uint_of_string fp with
+      | Some u =>
+        let den := Z.pow 10 (Z.of_nat (String.length fp)) in
+        let frac := Z.of_uint u in
+        let n := (Z.abs a * den + frac)%Z in
+        Some (Q2Qc (Qmake (if neg then Z.opp n else n) (Z.to_pos den)))
+      | None => None
+      end
+    | None, _ => None
+    end
+  end.
+
+Definition bool_of_string (s : string) : option bool :=
+  let s := string_map lower_ascii s in
+  if (String.eqb s "true" || String.eqb s "t" || String.eqb s "yes" || String.eqb s "1")%bool
+  then Some true
+  else if (String.eqb s "false" || String.eqb s "f" || String.eqb s "no" || String.eqb s "0")%bool
+       then Some false
+       else None.
+
+(** * Casts. A cast which fails at runtime in SQL yields NULL here. *)
+
+Definition cast_Z v :=
+  Value_Z
+    match v with
+    | Value_Z z => z
+    | Value_Q (Some q) => Some (Qc_round q)
+    | Value_string (Some s) => Z_of_string (string_rtrim (string_ltrim s))
+    | Value_bool (Some b) => Some (if b then 1%Z else 0%Z)
+    | _ => None
+    end.
+
+Definition cast_Q v :=
+  Value_Q
+    match v with
+    | Value_Q q => q
+    | Value_Z (Some z) => Some (Qc_of_Z z)
+    | Value_string (Some s) => Qc_of_string (string_rtrim (string_ltrim s))
+    | _ => None
+    end.
+
+Definition cast_string v :=
+  Value_string
+    match v with
+    | Value_string s => s
+    | Value_Z (Some z) => Some (string_of_Z z)
+    | Value_Q (Some q) => Some (string_of_Qc q)
+    | Value_bool (Some b) => Some (if b then "true" else "false")
+    | _ => None
+    end.
+
+Definition cast_bool v :=
+  Value_bool
+    match v with
+    | Value_bool b => b
+    | Value_Z (Some z) => Some (negb (Z.eqb z 0))
+    | Value_string (Some s) => bool_of_string (string_rtrim (string_ltrim s))
+    | _ => None
+    end.
+
+(** * Interpretation of predicates
+
+    All the comparison predicates follow the three-valued logic of SQL: they are
+    UNKNOWN as soon as one of their arguments is NULL. The IS predicates are
+    two-valued. *)
+
+Definition between3 (l : list value) :=
+  match l with
+  | x :: lo :: hi :: nil => andb3 (sql_le3 lo x) (sql_le3 x hi)
+  | _ => unknown3
+  end.
+
+Definition predicate_table : list (string * (list value -> bool3)) :=
+     ("=", binary3 sql_eq3)
+  :: ("<>", binary3 (fun a b => negb3 (sql_eq3 a b)))
+  :: ("!=", binary3 (fun a b => negb3 (sql_eq3 a b)))
+  :: ("<", binary3 sql_lt3)
+  :: ("<=", binary3 sql_le3)
+  :: (">", binary3 (fun a b => sql_lt3 b a))
+  :: (">=", binary3 (fun a b => sql_le3 b a))
+  :: ("is null", unary3 (fun v => bool3_of_bool (is_null v)))
+  :: ("is not null", unary3 (fun v => bool3_of_bool (negb (is_null v))))
+  :: ("is true", unary3 (fun v => bool3_of_bool (value_eqb v (Value_bool (Some true)))))
+  :: ("is not true", unary3 (fun v => bool3_of_bool (negb (value_eqb v (Value_bool (Some true))))))
+  :: ("is false", unary3 (fun v => bool3_of_bool (value_eqb v (Value_bool (Some false)))))
+  :: ("is not false", unary3 (fun v => bool3_of_bool (negb (value_eqb v (Value_bool (Some false))))))
+  :: ("is unknown", unary3 (fun v => bool3_of_bool (value_eqb v (Value_bool None))))
+  :: ("is not unknown", unary3 (fun v => bool3_of_bool (negb (value_eqb v (Value_bool None)))))
+  :: ("is distinct from", binary3 (fun a b => bool3_of_bool (negb (not_distinct a b))))
+  :: ("is not distinct from", binary3 (fun a b => bool3_of_bool (not_distinct a b)))
+  :: ("between", between3)
+  :: ("not between", fun l => negb3 (between3 l))
+  :: ("like", binary3 like3)
+  :: ("not like", binary3 (fun a b => negb3 (like3 a b)))
+  :: ("in", in_list3)
+  :: ("not in", fun l => negb3 (in_list3 l))
+  :: ("row=", fun l => let (l1, l2) := split_half l in row_eq3 l1 l2)
+  :: ("row<>", fun l => let (l1, l2) := split_half l in negb3 (row_eq3 l1 l2))
+  :: ("true", fun _ => true3)
+  :: ("false", fun _ => false3)
+  :: ("unknown", fun _ => unknown3)
+  :: nil.
+
+Fixpoint string_assoc (A : Type) (s : string) (l : list (string * A)) : option A :=
+  match l with
+  | nil => None
+  | (s', a) :: l => if String.eqb s s' then Some a else string_assoc A s l
+  end.
+
+(** A predicate which is not in the table is UNKNOWN. *)
+Definition interp_predicate p : list value -> bool3 :=
+  match p with
+  | Predicate s =>
+    match string_assoc _ s predicate_table with
+    | Some f => f
+    | None => fun _ => unknown3
+    end
+  end.
+
+(** * Interpretation of function symbols *)
+
+Definition strict_string1 (f : string -> value) (l : list value) :=
+  match l with
+  | Value_string (Some s) :: nil => f s
+  | _ => Value_string None
+  end.
+
+Definition string_fun1 (f : string -> string) :=
+  strict_string1 (fun s => Value_string (Some (f s))).
+
+Fixpoint coalesce (l : list value) :=
+  match l with
+  | nil => Value_Z None
+  | v :: nil => v
+  | v :: l => if is_null v then coalesce l else v
+  end.
+
+(** CASE WHEN c1 THEN v1 ... WHEN cn THEN vn [ELSE e] END, the arguments being
+    [c1 :: v1 :: ... :: cn :: vn :: nil] or [c1 :: v1 :: ... :: cn :: vn :: e :: nil].
+    Without ELSE branch, the result is the NULL of the type of the first branch. *)
+Fixpoint case_when (d : value) (l : list value) :=
+  match l with
+  | nil => d
+  | e :: nil => e
+  | c :: v :: l => match bool3_of_value c with true3 => v | _ => case_when d l end
+  end.
+
+Definition sql_case (l : list value) :=
+  match l with
+  | _ :: v :: _ => case_when (default_value (type_of_value v)) l
+  | _ => case_when (Value_Z None) l
+  end.
+
+(** GREATEST / LEAST ignore NULLs (PostgreSQL); they are NULL only when all
+    their arguments are. *)
+Definition pick (keep : comparison -> bool) (a b : value) :=
+  if is_null a then b
+  else if is_null b then a
+       else if keep (sql_order a b) then a else b.
+
+Definition extremum (keep : comparison -> bool) (l : list value) :=
+  match l with
+  | nil => Value_Z None
+  | v :: l => fold_left (pick keep) l v
+  end.
+
+Definition concat_ws (l : list value) :=
+  (* CONCAT ignores NULLs *)
+  Value_string
+    (Some (fold_left
+             (fun acc v => match cast_string v with
+                           | Value_string (Some s) => acc ++ s
+                           | _ => acc
+                           end) l EmptyString)).
+
+Definition symbol_table : list (string * (list value -> value)) :=
+  let plus := arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)) in
+  let minus := arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b)) in
+  let mult := arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b)) in
+  let opp := arith1 (fun a => Some (- a)%Z) (fun a => Some (Qcopp a)) in
+  (* integer division truncates towards zero; division by zero is NULL *)
+  let div := arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
+                    (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b)) in
+  let modulo := arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
+                       (fun _ _ => None) in
+     ("plus", plus) :: ("+", plus)
+  :: ("minus", minus) :: ("-", minus)
+  :: ("mult", mult) :: ("*", mult)
+  :: ("opp", opp) :: ("neg", opp)
+  :: ("div", div) :: ("/", div)
+  :: ("mod", modulo) :: ("%", modulo)
+  :: ("abs", arith1 (fun a => Some (Z.abs a))
+                    (fun a => Some (match Qccompare a (Qc_of_Z 0) with Lt => Qcopp a | _ => a end)))
+  :: ("sign", arith1 (fun a => Some (Z.sgn a))
+                     (fun a => Some (Qc_of_Z (match Qccompare a (Qc_of_Z 0) with
+                                              | Lt => (-1)%Z | Eq => 0%Z | Gt => 1%Z end))))
+  :: ("power", arith2 Zpower_opt Qcpower_opt)
+  :: ("floor", fun l => match l with
+                        | Value_Q (Some q) :: nil => Value_Z (Some (Qc_floor q))
+                        | Value_Z z :: nil => Value_Z z
+                        | _ => Value_Z None end)
+  :: ("ceil", fun l => match l with
+                       | Value_Q (Some q) :: nil => Value_Z (Some (Qc_ceiling q))
+                       | Value_Z z :: nil => Value_Z z
+                       | _ => Value_Z None end)
+  :: ("round", fun l => match l with
+                        | Value_Q (Some q) :: nil => Value_Z (Some (Qc_round q))
+                        | Value_Z z :: nil => Value_Z z
+                        | _ => Value_Z None end)
+  :: ("trunc", fun l => match l with
+                        | Value_Q (Some q) :: nil => Value_Z (Some (Qc_trunc q))
+                        | Value_Z z :: nil => Value_Z z
+                        | _ => Value_Z None end)
+  :: ("greatest", extremum is_Gt)
+  :: ("least", extremum is_Lt)
+  (* conditional expressions *)
+  :: ("coalesce", coalesce)
+  :: ("nullif", fun l => match l with
+                         | v1 :: v2 :: nil =>
+                           match sql_eq3 v1 v2 with
+                           | true3 => default_value (type_of_value v1)
+                           | _ => v1
+                           end
+                         | _ => Value_Z None end)
+  :: ("case", sql_case)
+  (* boolean connectives, on boolean values *)
+  :: ("and", fun l => value_of_bool3
+                        (fold_left (fun acc v => andb3 acc (bool3_of_value v)) l true3))
+  :: ("or", fun l => value_of_bool3
+                       (fold_left (fun acc v => orb3 acc (bool3_of_value v)) l false3))
+  :: ("not", fun l => match l with
+                      | v :: nil => value_of_bool3 (negb3 (bool3_of_value v))
+                      | _ => Value_bool None end)
+  (* strings *)
+  :: ("||", fun l => match l with
+                     | Value_string (Some s1) :: Value_string (Some s2) :: nil =>
+                       Value_string (Some (s1 ++ s2))
+                     | _ => Value_string None end)
+  :: ("concat", concat_ws)
+  :: ("length", strict_string1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  :: ("char_length", strict_string1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  :: ("upper", string_fun1 (string_map upper_ascii))
+  :: ("lower", string_fun1 (string_map lower_ascii))
+  :: ("trim", string_fun1 (fun s => string_rtrim (string_ltrim s)))
+  :: ("ltrim", string_fun1 string_ltrim)
+  :: ("rtrim", string_fun1 string_rtrim)
+  :: ("reverse", string_fun1 string_rev)
+  :: ("substring", fun l => match l with
+                            | Value_string (Some s) :: Value_Z (Some i) :: nil =>
+                              Value_string (Some (sql_substring s i None))
+                            | Value_string (Some s) :: Value_Z (Some i) :: Value_Z (Some n) :: nil =>
+                              if (n <? 0)%Z then Value_string None
+                              else Value_string (Some (sql_substring s i (Some n)))
+                            | _ => Value_string None end)
+  :: ("left", fun l => match l with
+                       | Value_string (Some s) :: Value_Z (Some n) :: nil =>
+                         Value_string (Some (String.substring 0 (Z.to_nat n) s))
+                       | _ => Value_string None end)
+  :: ("right", fun l => match l with
+                        | Value_string (Some s) :: Value_Z (Some n) :: nil =>
+                          let k := Nat.min (Z.to_nat n) (String.length s) in
+                          Value_string (Some (String.substring (String.length s - k) k s))
+                        | _ => Value_string None end)
+  :: ("replace", fun l => match l with
+                          | Value_string (Some s) :: Value_string (Some from)
+                                                  :: Value_string (Some to) :: nil =>
+                            Value_string (Some (string_replace s from to))
+                          | _ => Value_string None end)
+  :: ("repeat", fun l => match l with
+                         | Value_string (Some s) :: Value_Z (Some n) :: nil =>
+                           Value_string (Some (string_repeat (Z.to_nat n) s))
+                         | _ => Value_string None end)
+  (* POSITION (sub IN s): 1-based, 0 when [sub] does not occur in [s] *)
+  :: ("position", fun l => match l with
+                           | Value_string (Some sub) :: Value_string (Some s) :: nil =>
+                             Value_Z (Some (match String.index 0 sub s with
+                                            | Some i => Z.of_nat (S i)
+                                            | None => 0%Z
+                                            end))
+                           | _ => Value_Z None end)
+  (* casts *)
+  :: ("cast_int", fun l => match l with v :: nil => cast_Z v | _ => Value_Z None end)
+  :: ("cast_numeric", fun l => match l with v :: nil => cast_Q v | _ => Value_Q None end)
+  :: ("cast_string", fun l => match l with v :: nil => cast_string v | _ => Value_string None end)
+  :: ("cast_bool", fun l => match l with v :: nil => cast_bool v | _ => Value_bool None end)
+  :: nil.
+
+(** A function symbol which is not in the table of functions, but which is the
+    name of a predicate, is that predicate seen as a boolean-valued function:
+    this is what allows conditions to occur inside expressions, for instance as
+    the guards of a CASE. Any other symbol yields NULL. *)
+Definition interp_symbol f : list value -> value :=
   match f with
-    | Symbol _ "plus" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil => Value_Z (Some (Zplus a1 a2))
-          | _ => Value_Z None end
-    | Symbol _ "mult" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil => Value_Z (Some (Zmult a1 a2))
-          | _ => Value_Z None end
-    | Symbol _ "minus" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: Value_Z (Some a2) :: nil => Value_Z (Some (Zminus a1 a2))
-          | _ => Value_Z None end
-    | Symbol _ "opp" =>
-      fun l =>
-        match l with
-          | Value_Z (Some a1) :: nil => Value_Z (Some (Z.opp a1))
-          | _ => Value_Z None end
+    | Symbol _ s =>
+      match string_assoc _ s symbol_table with
+      | Some g => g
+      | None =>
+        match string_assoc _ s predicate_table with
+        | Some p => fun l => value_of_bool3 (p l)
+        | None => fun _ => Value_Z None
+        end
+      end
     | CstVal _ v =>
       fun l =>
         match l with
           | nil => v
           | _ => default_value (type_of_value v)
         end
-    | _ => fun _ => Value_Z None
   end.
 
-Definition interp_aggregate a l :=
+(** * Interpretation of aggregates
+
+    Except for COUNT( * ), aggregates ignore NULLs. Except for the two COUNT, the
+    aggregate of an empty collection (or of a collection of NULLs) is NULL. *)
+
+Definition non_nulls (l : list value) := filter (fun v => negb (is_null v)) l.
+
+(** The NULL of the type of the values in [l]; the type of an empty collection
+    is not known, and defaults to integer. *)
+Definition null_like (l : list value) :=
+  match l with
+  | v :: _ => default_value (type_of_value v)
+  | nil => Value_Z None
+  end.
+
+Fixpoint value_dedup (l : list value) :=
+  match l with
+  | nil => nil
+  | v :: l => v :: filter (fun v' => negb (value_eqb v v')) (value_dedup l)
+  end.
+
+Definition value_plus v1 v2 :=
+  arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)) (v1 :: v2 :: nil).
+
+Definition agg_sum (l : list value) :=
+  match non_nulls l with
+  | nil => null_like l
+  | v :: l' => fold_left value_plus l' v
+  end.
+
+Definition agg_avg (l : list value) :=
+  let nn := non_nulls l in
+  match nn with
+  | nil => Value_Q None
+  | _ =>
+    match num_of_value (agg_sum nn) with
+    | Some s => Value_Q (Some (Qcdiv (Qc_of_num s) (Qc_of_Z (Z.of_nat (List.length nn)))))
+    | None => Value_Q None
+    end
+  end.
+
+Definition agg_extremum (keep : comparison -> bool) (l : list value) :=
+  match non_nulls l with
+  | nil => null_like l
+  | v :: l' => fold_left (pick keep) l' v
+  end.
+
+Definition agg_bool (op : bool -> bool -> bool) (l : list value) :=
+  match non_nulls l with
+  | Value_bool (Some b) :: l' =>
+    Value_bool (Some (fold_left (fun acc v => match v with
+                                              | Value_bool (Some b) => op acc b
+                                              | _ => acc
+                                              end) l' b))
+  | _ => Value_bool None
+  end.
+
+Definition agg_string (sep : string) (l : list value) :=
+  match non_nulls l with
+  | Value_string (Some s) :: l' =>
+    Value_string (Some (fold_left (fun acc v => match v with
+                                                | Value_string (Some s) => acc ++ sep ++ s
+                                                | _ => acc
+                                                end) l' s))
+  | _ => Value_string None
+  end.
+
+(** Population and sample variance, computed exactly. *)
+Definition agg_var (sample : bool) (l : list value) :=
+  let nn := non_nulls l in
+  let n := Qc_of_Z (Z.of_nat (List.length nn)) in
+  let sq := map (fun v => arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b))
+                                 (v :: v :: nil)) nn in
+  match nn, num_of_value (agg_sum nn), num_of_value (agg_sum sq) with
+  | _ :: _, Some s, Some s2 =>
+    let s := Qc_of_num s in
+    let s2 := Qc_of_num s2 in
+    let num := Qcminus s2 (Qcdiv (Qcmult s s) n) in
+    let den := if sample then Qcminus n (Qc_of_Z 1) else n in
+    if Qc_is_zero den then Value_Q None else Value_Q (Some (Qcdiv num den))
+  | _, _, _ => Value_Q None
+  end.
+
+Definition agg_bit (op : Z -> Z -> Z) (l : list value) :=
+  match non_nulls l with
+  | Value_Z (Some z) :: l' =>
+    Value_Z (Some (fold_left (fun acc v => match v with
+                                           | Value_Z (Some z) => op acc z
+                                           | _ => acc
+                                           end) l' z))
+  | _ => Value_Z None
+  end.
+
+Definition aggregate_table : list (string * (list value -> value)) :=
+     ("count", fun l => Value_Z (Some (Z.of_nat (List.length (non_nulls l)))))
+  :: ("count(*)", fun l => Value_Z (Some (Z.of_nat (List.length l))))
+  :: ("sum", agg_sum)
+  :: ("avg", agg_avg)
+  :: ("min", agg_extremum is_Lt)
+  :: ("max", agg_extremum is_Gt)
+  :: ("bool_and", agg_bool andb)
+  :: ("every", agg_bool andb)
+  :: ("bool_or", agg_bool orb)
+  :: ("string_agg", agg_string "")
+  :: ("group_concat", agg_string ",")
+  :: ("var_pop", agg_var false)
+  :: ("var_samp", agg_var true)
+  :: ("variance", agg_var true)
+  :: ("bit_and", agg_bit Z.land)
+  :: ("bit_or", agg_bit Z.lor)
+  :: nil.
+
+(** An aggregate name of the form ["distinct f"] is the aggregate ["f"] applied
+    after duplicate elimination, that is [f(DISTINCT e)]. *)
+Definition interp_aggregate a (l : list value) :=
   match a with
-    | Aggregate "count" => Value_Z (Some (Z_of_nat (List.length l)))
-    | Aggregate "sum" =>
-      Value_Z (Some (fold_left (fun acc x => match x with Value_Z (Some x) => (acc + x)%Z | _ => acc end) l 0%Z))
-    | Aggregate "max" =>
-      Value_Z (Some (
-      if forallb
-           (fun x =>
-              match x with
-              | Value_Z _ => true
-              | _ => false
-              end) l then
-        let l' := filter
-                   (fun x =>
-                      match x with
-                      | Value_Z (Some _) => true
-                      | _ => false
-                      end) l in
-        match l' with
-        | (Value_Z (Some z0)) :: l1 =>
-          (fold_left (fun acc x => match x with 
-                                          | Value_Z (Some x) => (Z.max acc x)%Z 
-                                          | _ => acc end) l1 z0%Z)
-        | _ =>  0%Z
-        end
-      else
-         0%Z))
-    | Aggregate "avg" =>
-      Value_Z
-        (Some (let sum :=
-                   fold_left (fun acc x => match x with
-                                           | Value_Z (Some x) => (acc + x)%Z
-                                           | _ => acc end) l 0%Z in
-               Z.quot sum (Z_of_nat (List.length l))))
-    | Aggregate _ => Value_Z None
+  | Aggregate s =>
+    let (s', l') :=
+        if String.prefix "distinct " s
+        then (String.substring 9 (String.length s - 9) s, value_dedup l)
+        else (s, l) in
+    match string_assoc _ s' aggregate_table with
+    | Some f => f l'
+    | None => Value_Z None
+    end
   end.
 
 End NullValues.
