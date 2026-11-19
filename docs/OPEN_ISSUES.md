@@ -125,11 +125,9 @@ Still open:
 - **Decimal scale**: a decimal keeps the number of decimals of its literal (`length(0.00)` is 4).
   `Value_Q` is a rational and forgets it; a value which carries its scale would also fix the
   display of `4/3` and the type of `sum` and `avg`.
-- **Aggregate of a correlated subquery**: an aggregate whose argument is a subquery which reads
-  columns of an outer block belongs to that outer block (case `optimizer_subquery_bug:48`).
-  `sexpr_cols` ignores the columns of subqueries.
-- **Acceptance of a query by the names** of its functions and aggregates, `ONLY_FULL_GROUP_BY`,
-  and the bare columns of SQLite (the value of an arbitrary row, or the row of the `min`/`max`).
+- **Acceptance of a query**: the constructs and the names of functions, predicates and aggregates are
+  checked (`accepted_by`); `ONLY_FULL_GROUP_BY` and the bare columns of SQLite (the value of an
+  arbitrary row, or the row of the `min`/`max`) are not.
 - **Constructs of the dialects which `SqlFull` does not have**: `RANGE` window frames with an
   offset, `ROLLUP`, `CUBE` and `GROUPING SETS` (PostgreSQL, OceanBase, Oracle), `WITH RECURSIVE`,
   `FETCH FIRST ... WITH TIES` and `PERCENT` (Oracle mode), `ORDER BY` inside `string_agg`.

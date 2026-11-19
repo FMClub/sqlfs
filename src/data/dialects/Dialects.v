@@ -108,6 +108,25 @@ Definition TD (d : vsem) : Tuple.Rcd :=
            Values.predicate _ Values.aggregate OP (OSymbol _ NullValues.OVal) OAgg Bool3.Bool3
            (vs_interp_predicate d) (vs_interp_symbol d) (vs_interp_aggregate d).
 
+Definition is_some {A : Type} (o : option A) : bool := match o with Some _ => true | None => false end.
+
+(** A function symbol is known if it is a function of the dialect or one of its predicates
+    (which a dialect can use as a boolean function). *)
+Definition vs_known_symbol (d : vsem) (f : Values.symbol value) : bool :=
+  match f with
+  | Values.Symbol _ s => orb (is_some (vs_symb d s)) (is_some (vs_pred d s))
+  | Values.CstVal _ _ => true
+  end.
+
+Definition vs_known_predicate (d : vsem) (p : Values.predicate) : bool :=
+  match p with Values.Predicate s => is_some (vs_pred d s) end.
+
+Definition vs_known_aggregate (d : vsem) (a : Values.aggregate) : bool :=
+  match a with
+  | Values.Aggregate s => 
+    is_some (vs_agg d (if String.prefix "distinct " s then String.substring 9 (String.length s - 9) s else s))
+  end.
+
 Definition dialect_of (d : vsem) : dialect (TD d) :=
   mk_dialect (TD d)
              (vs_is_null d)
@@ -119,7 +138,10 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (fun z => NullValues.Value_Z (Some z))
              (vs_canon d)
              (vs_nulls_smallest d)
-             (vs_supports d).
+             (vs_supports d)
+             (vs_known_symbol d)
+             (vs_known_predicate d)
+             (vs_known_aggregate d).
 
 (** * Moving a query to a dialect
 

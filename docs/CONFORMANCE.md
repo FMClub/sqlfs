@@ -42,14 +42,13 @@ because of the integer division).
 
 ## Results
 
-**OceanBase, MySQL mode** (`OceanBaseMySQL`): 545 queries are translated and replayed, 538 give
-the recorded result. The 7 which do not:
+**OceanBase, MySQL mode** (`OceanBaseMySQL`): 545 queries are translated and replayed, 539 give
+the recorded result. The 6 which do not:
 
 | Case | Reason | Status |
 |---|---|---|
 | `func_length:13,17,18,19,20` | `length(0.00)` is 4: a decimal keeps the scale of its literal; a rational forgets its trailing zeros | known limitation (decimals have no scale) |
 | `datatype_java:7` | `4/3 = 1.333333333` is true although `4/3` is displayed `1.3333`: OceanBase computes decimal quotients with more internal digits than MySQL | known deviation of OceanBase |
-| `optimizer_subquery_bug:48` | an aggregate whose argument is a correlated subquery belongs to the outer block, because of the columns which the subquery reads | open (to model in `agg_env`) |
 
 **sqllogictest** (queries are selected for an engine by the directives):
 
@@ -77,6 +76,9 @@ The conformance runs found, and fixed, defects which the examples written by han
 
 - the quotient of decimals and `avg` are rounded to the scale of the dividend plus
   `div_precision_increment` (`4/3` is `1.3333`, `avg(1,2,5)` is `2.6667`);
+- an aggregate belongs to the innermost block which binds a column of its argument, also when
+  the column is read by a subquery in the argument (`sum((select sum(c1) from t1))` aggregates the
+  rows of the outer block);
 - an aggregate in `ORDER BY` makes the query an aggregate query with a single group
   (`SELECT 1 FROM t ORDER BY avg(a)` returns one row);
 - the text of a decimal (`length(12.466)`), and `LOCATE` with a start position;

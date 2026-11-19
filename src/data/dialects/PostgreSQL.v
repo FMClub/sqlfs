@@ -48,7 +48,7 @@ Definition PostgreSQL : vsem :=
   mk_vsem "PostgreSQL"
           (table_of_list predicate_table)
           (table_of_list pg_symbol_table)
-          (table_of_list aggregate_table)
+          (table_of_list (filter (fun p => negb (String.eqb (fst p) "group_concat")) aggregate_table))
           is_null
           bool3_of_value
           value_of_bool3
