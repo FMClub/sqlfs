@@ -279,6 +279,15 @@ Targets: every function of the table is either modelled or has an explicit exclu
   - Oracle `KEEP` (syntax, Phase 3);
   - ordered-set aggregates (2.6).
 - **2.6 Ordered-set and hypothetical-set aggregates**: `percentile_cont`, `percentile_disc`, `mode`, `rank/dense_rank/percent_rank/cume_dist(args) WITHIN GROUP`, `MEDIAN` (Oracle, MariaDB window); new syntax `E_AggWithin` carrying the direct arguments and the `WITHIN GROUP (ORDER BY ..)`.
+  **Status: DONE**. Documentation is in `docs/functions/aggregates.md` (second part) and tests in
+  `src/testing/Test_OrderedSet.v`. No new core node was needed: `E_AggX` carries the direct argument in its
+  second slot and the `WITHIN GROUP` ordering as its `ORDER BY`. The translator reads
+  `WITHIN GROUP (ORDER BY e [ASC|DESC])`.
+
+  Not modelled:
+  - several sort keys or several direct arguments;
+  - arrays of fractions;
+  - MariaDB's window `MEDIAN` (windows: Phase 3).
 - **2.7 Date and time functions**: per family (see 1.5): `extract`, `date_trunc`, `date_add/sub`, `adddate`, `datediff`, `timestampdiff`, `date_format`, `to_char`/`to_date`/`to_timestamp`, `str_to_date`, `strftime`, `julianday`, `now`/`current_*`, `age`, `make_date`, `interval` arithmetic, `last_day`, `add_months`, `months_between`.
 - **2.8 JSON and array functions**: see 1.6/1.7: `json_extract`, `json_set`, `json_array`, `json_object`, `json_contains`, `json_length`, `jsonb_*`, `array_*`, `unnest`, `ANY(array)`.
 - **2.9 System and information functions**: `version`, `current_user`, `database`, `current_schema`, `connection_id`, `found_rows`, `last_insert_id`, `row_count`: environment-supplied constants.

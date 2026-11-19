@@ -173,3 +173,117 @@ Definition json_object_agg (kind : nat) (isnull : value -> bool) (key : value ->
       then Value_J (Some (("{ " ++ String.concat ", " (map (fun m => text_compact (JStr (fst m)) ++ " : " ++ text_compact (snd m)) members) ++ " }")%string, 1%nat))
       else VJ 0 (JObj members)
   end.
+
+(** * Ordered-set and hypothetical-set aggregates (TODO 2.6)
+
+    [percentile_cont (f) WITHIN GROUP (ORDER BY x)] is [E_AggX] with [x], the direct argument [f] in the
+    place of the separator, and the [ORDER BY]: the aggregate receives [x1; f; x2; f; ...] in the order of
+    the group. *)
+Definition sorted_args (isnull : value -> bool) (l : list value) : option value * list value :=
+  match pairs_of l with
+  | nil => (None, nil)
+  | (_, f) :: _ => (Some f, filter (fun v => negb (isnull v)) (map fst (pairs_of l)))
+  end.
+
+(** [percentile_cont]: the value at the position [1 + f (n - 1)], interpolated between its neighbours;
+    PostgreSQL computes in [double precision], each operation rounded ([percentile_cont_float8_final]);
+    [exact] (Oracle) keeps the exact value *)
+Definition percentile_cont_agg (exact : bool) (isnull : value -> bool) (conv : value -> option num) (l : list value) : value :=
+  match sorted_args isnull l with
+  | (Some f, xs) =>
+    match qc_of conv f with
+    | Some fq =>
+      if Qc_lt_bool fq (Qc_of_Z 0) || Qc_lt_bool (Qc_of_Z 1) fq then Value_Err "percentile value is not between 0 and 1"
+      else let qs := flat_map (fun v => match qc_of conv v with Some q => [q] | None => nil end) xs in
+           match qs with
+           | nil => if exact then Value_Q None else Value_F None
+           | _ =>
+             let n := List.length qs in
+             let r64 (q : Qc) : Qc := snd (round_q binary64 (this q)) in
+             let pos := if exact then Qcmult fq (Qc_of_Z (Z.of_nat (n - 1))) else r64 (Qcmult fq (Qc_of_Z (Z.of_nat (n - 1)))) in
+             let lo := Qc_floor pos in
+             let hi := Qc_ceiling pos in
+             let a := nth (Z.to_nat lo) qs (Qc_of_Z 0) in
+             let b := nth (Z.to_nat hi) qs (Qc_of_Z 0) in
+             if exact then Value_Q (Some (Qcplus a (Qcmult (Qcminus b a) (Qcminus pos (Qc_of_Z lo)))))
+             else let a := r64 a in let b := r64 b in
+                  if Z.eqb lo hi then to_float false a
+                  else to_float false (Qcplus a (r64 (Qcmult (r64 (Qcminus b a)) (r64 (Qcminus pos (Qc_of_Z lo))))))
+           end
+    | None => if isnull f then Value_F None else Value_Err "invalid percentile"
+    end
+  | (None, _) => Value_F None
+  end.
+
+(** [percentile_disc]: the first value whose position in the group is at least [f n] *)
+Definition percentile_disc_agg (isnull : value -> bool) (conv : value -> option num) (l : list value) : value :=
+  match sorted_args isnull l with
+  | (Some f, xs) =>
+    match qc_of conv f with
+    | Some fq =>
+      if Qc_lt_bool fq (Qc_of_Z 0) || Qc_lt_bool (Qc_of_Z 1) fq then Value_Err "percentile value is not between 0 and 1"
+      else match xs with
+           | nil => Value_Z None
+           | _ => let k := Z.max 1 (Qc_ceiling (Qcmult fq (Qc_of_Z (Z.of_nat (List.length xs))))) in
+                  nth (Z.to_nat (k - 1)) xs (Value_Z None)
+           end
+    | None => if isnull f then Value_Z None else Value_Err "invalid percentile"
+    end
+  | (None, _) => Value_Z None
+  end.
+
+(** [mode ()]: the most frequent value; of several, the first in the order of the group *)
+Definition mode_agg (isnull : value -> bool) (eq : value -> value -> bool) (l : list value) : value :=
+  let xs := filter (fun v => negb (isnull v)) l in
+  let count v := List.length (filter (eq v) xs) in
+  match xs with
+  | nil => Value_Z None
+  | x :: r => fold_left (fun best v => if Nat.ltb (count best) (count v) then v else best) r x
+  end.
+
+(** the hypothetical-set aggregates: the rank that the row [h] would have in the group ordered by [order]
+    ([desc]: descending, the NULLs first, as in PostgreSQL's default; ascending, the NULLs last) *)
+Definition hyp_agg (which : string) (desc : bool) (isnull : value -> bool) (order : value -> value -> comparison)
+           (l : list value) : value :=
+  match pairs_of l with
+  | nil => if String.eqb which "rank" || String.eqb which "dense_rank" then Value_Z (Some 1)
+           else to_float false (if String.eqb which "cume_dist" then Qc_of_Z 1 else Qc_of_Z 0)
+  | (_, h) :: _ =>
+    let xs := map fst (pairs_of l) in
+    let n := List.length xs in
+    let before (x : value) : bool :=
+        if isnull x then desc && negb (isnull h)
+        else if isnull h then negb desc
+        else match order x h with Lt => negb desc | Gt => desc | Eq => false end in
+    let peer (x : value) : bool :=
+        (isnull x && isnull h) || (negb (isnull x) && negb (isnull h) && match order x h with Eq => true | _ => false end) in
+    let nb := List.length (filter before xs) in
+    let np := List.length (filter peer xs) in
+    match which with
+    | "rank" => Value_Z (Some (Z.of_nat (S nb)))
+    | "dense_rank" =>
+      let fix distinct (acc : list value) (r : list value) :=
+          match r with
+          | nil => List.length acc
+          | x :: r' => if existsb (fun y => (isnull x && isnull y) ||
+                                            (negb (isnull x) && negb (isnull y) && match order x y with Eq => true | _ => false end)) acc
+                       then distinct acc r' else distinct (x :: acc) r'
+          end in
+      Value_Z (Some (Z.of_nat (S (distinct nil (filter before xs)))))
+    | "percent_rank" => if Nat.eqb n 0 then to_float false (Qc_of_Z 0)
+                        else to_float false (Qcdiv (Qc_of_Z (Z.of_nat nb)) (Qc_of_Z (Z.of_nat n)))
+    | "cume_dist" => to_float false (Qcdiv (Qc_of_Z (Z.of_nat (nb + np + 1))) (Qc_of_Z (Z.of_nat (S n))))
+    | _ => Value_Err "function does not exist"
+    end
+  end%string.
+
+Definition ordered_set_table (exact : bool) (isnull : value -> bool) (conv : value -> option num)
+           (order : value -> value -> comparison) : list (string * (list value -> value)) :=
+  let eq a b := match order a b with Eq => true | _ => false end in
+     ("percentile_cont", percentile_cont_agg exact isnull conv)
+  :: ("percentile_disc", percentile_disc_agg isnull conv)
+  :: ("mode", mode_agg isnull eq)
+  :: ("median", fun l => percentile_cont_agg exact isnull conv (flat_map (fun v => [v; Value_Q (Some (Qcdiv (Qc_of_Z 1) (Qc_of_Z 2)))]) l))
+  :: flat_map (fun w => [(("hyp_" ++ w ++ "_asc")%string, hyp_agg w false isnull order);
+                         (("hyp_" ++ w ++ "_desc")%string, hyp_agg w true isnull order)])
+              ["rank"; "dense_rank"; "percent_rank"; "cume_dist"]%string.

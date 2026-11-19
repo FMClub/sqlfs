@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns.
+Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns Aggregates.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -463,7 +463,8 @@ Definition ora_aggregate_table : list (string * (list value -> value)) :=
   :: ("variance", agg_var_by ora_isnull strict_conv true)
   :: ("var_samp", agg_var_by ora_isnull strict_conv true)
   :: ("var_pop", agg_var_by ora_isnull strict_conv false)
-  :: nil.
+  (* [PERCENTILE_CONT], [PERCENTILE_DISC], [MEDIAN] (exact [NUMBER]), the hypothetical ranks *)
+  :: ordered_set_table true ora_isnull strict_conv ora_order.
 
 (** The constructs of OceanBase in Oracle mode, from its documentation (the repository
     [oceanbase-doc], pages of the SQL reference of the Oracle mode): [UNION [ALL]], [INTERSECT]

@@ -42,3 +42,23 @@ An empty group gives the following results:
   the last digit can differ.
 - The statistics of Oracle mode (`VARIANCE` …) are exact rationals. Oracle's `NUMBER` precision (38–40
   significant digits) is Phase 4.
+
+# Ordered-set and hypothetical-set aggregates (TODO 2.6)
+
+`f (args) WITHIN GROUP (ORDER BY e [ASC | DESC])` is represented by the existing node `E_AggX`. The
+ordered expression `e` is the argument, the direct argument takes the place of the separator, and the
+`WITHIN GROUP` ordering is the aggregate's `ORDER BY`. The aggregate receives `e1; f; e2; f; …` in the
+order of the group. No new core syntax is needed. Tests are in `src/testing/Test_OrderedSet.v`.
+
+| Aggregate | PostgreSQL | Oracle mode | MySQL family | SQLite | Notes |
+|---|---|---|---|---|---|
+| `percentile_cont(f)` | M (`double precision`, each operation rounded as in `percentile_cont_float8_final`) | M (exact `NUMBER`) | — | — (extension) | position `1 + f (n - 1)`, linear interpolation; `f` outside [0, 1] is an error |
+| `percentile_disc(f)` | M (the value itself) | M | — | — | the first value at position `>= f n` |
+| `mode()` | M | — | — | — | the most frequent value; on a tie, the first in the group's order |
+| `MEDIAN(x)` | — | M (`percentile_cont(0.5)`) | — (MariaDB: window function only) | — | |
+| `rank`, `dense_rank`, `percent_rank`, `cume_dist (args) WITHIN GROUP` | M (`ASC`: NULLs last; `DESC`: NULLs first, PostgreSQL's defaults) | M | — | — | the rank the hypothetical row would have |
+
+Known limits:
+- `WITHIN GROUP (ORDER BY … NULLS FIRST|LAST)` is not translated (the translator skips it).
+- Ordered-set aggregates with several sort keys or several direct arguments (`rank(a, b) WITHIN GROUP (ORDER BY x, y)`) are not modelled.
+- `percentile_cont` of intervals and arrays of fractions (`percentile_cont(ARRAY[…])`) are not modelled.
