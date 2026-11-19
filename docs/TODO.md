@@ -56,10 +56,20 @@ Split `value` into exact decimal with scale, binary floating point, and fixed-wi
   (a verified soft-float, or use the Flocq library if it is acceptable as a dependency; decide and record). Rules per dialect: PostgreSQL `float4`/`float8` text output (shortest round-trip, `extra_float_digits`),
   `NaN` sorts greatest and equals itself; MySQL `DOUBLE`, `FLOAT`, `REAL` (`REAL_AS_FLOAT` mode), no `NaN` stored; SQLite `REAL` (no `NaN`, becomes NULL); Oracle `BINARY_DOUBLE` vs `NUMBER`.
   *Done when*: `0.1+0.2` is `0.30000000000000004` where the engine gives it; sqllogictest `R` columns match without the `%.3f` rounding being relied on for non-trivial cases.
-- **1.2.3 Integer types and overflow.** Types `TINYINT`..`BIGINT`, `UNSIGNED`, PostgreSQL `int2/int4/int8`, SQLite 64-bit with float promotion on overflow, Oracle `NUMBER`.
+- **1.2.3 Integer types and overflow. — DONE** (`Value_I (z, w)`: PostgreSQL `smallint`/`integer` and MySQL
+  `BIGINT UNSIGNED`; `Value_Z` is the 64-bit `bigint`. PostgreSQL: the result has the wider type, overflow is an error,
+  literals are `integer`, `bigint` or `numeric` by size, `CAST` to each width; MySQL: `BIGINT` arithmetic, unsigned when
+  an operand is unsigned, overflow is an error, literals above 2^63 - 1 are unsigned and above 2^64 - 1 decimal,
+  `CAST(... AS UNSIGNED)` modulo 2^64; SQLite: an overflow gives a `REAL`, `sum` fails with `integer overflow`;
+  translator: PostgreSQL integer columns and MySQL unsigned columns; tests `Test_Integer.v`. Open:
+  `NO_UNSIGNED_SUBTRACTION`, `TINYINT`/`MEDIUMINT` column ranges on insertion (DML), Oracle `NUMBER` precision.)
+  Original plan: Types `TINYINT`..`BIGINT`, `UNSIGNED`, PostgreSQL `int2/int4/int8`, SQLite 64-bit with float promotion on overflow, Oracle `NUMBER`.
   Rules: arithmetic overflow is an error (MySQL: `BIGINT value is out of range`), `BIGINT UNSIGNED` minus gives error unless `NO_UNSIGNED_SUBTRACTION`, `abs(INT_MIN)`, literal typing (smallest type that fits).
   *Done when*: `SELECT 9223372036854775807 + 1` is an error in PostgreSQL/MySQL and a float in SQLite.
-- **1.2.4 Numeric text.** Output of numbers as text for `CAST(.. AS CHAR)` and concatenation per dialect (`1e+20`, `1.0E10`, trailing zeros).
+- **1.2.4 Numeric text. — DONE with 1.2.1 and 1.2.2** (decimals print their scale, floats the text of each engine,
+  integers their digits; open: the Oracle-mode text of a `NUMBER` below 1 (`.5` in Oracle Database), which the
+  OceanBase formatter (`ObNumber::format`, no trailing zeros in Oracle mode) does not establish either way.)
+  Original plan: Output of numbers as text for `CAST(.. AS CHAR)` and concatenation per dialect (`1e+20`, `1.0E10`, trailing zeros).
 - **Depends on**: 1.1.
 
 ### 1.3 Strings: collations, charsets, padding

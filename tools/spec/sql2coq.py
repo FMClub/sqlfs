@@ -491,12 +491,21 @@ class P:
             self.need_kw('as')
             ty = self.peek()[1].lower()
             self.i += 1
+            args = []
             if self.op('('):
+                self.i += 1
                 while not self.eat_op(')'):
+                    t = self.peek()
+                    if t[0] == 'num':
+                        args.append(int(t[1]))
                     self.i += 1
             if ty == 'unsigned' or ty == 'signed':
                 self.eat_kw('integer') or self.eat_kw('int')
             self.need_op(')')
+            if ty in ('decimal', 'numeric') and (args or ENGINE == 'mysql'):
+                # DECIMAL(p, s); DECIMAL(p) is DECIMAL(p, 0); DECIMAL is DECIMAL(10, 0) in the MySQL family
+                p_, s_ = (args + [10, 0][len(args):])[:2] if args else (10, 0)
+                return ('cast_dec', p_, s_, e)
             return ('cast', ty, e)
         if self.kw('exists') and self.peek(1) == ('op', '('):
             self.i += 2
@@ -591,6 +600,9 @@ def attr(kind, name):
 
 # the size of FLOAT: binary32 in the MySQL family, binary64 in SQLite and PostgreSQL (set by slt2coq)
 FLOAT_BITS = 32
+# the engine whose types are used: 'mysql' (the MySQL family) or 'postgresql' or 'sqlite' (set by slt2coq)
+ENGINE = 'mysql'
+
 # the size of REAL: binary64 in the MySQL family (without REAL_AS_FLOAT) and SQLite, binary32 in PostgreSQL
 REAL_BITS = 64
 
@@ -749,9 +761,15 @@ class Tr:
             return '(e_sub %s)' % cq
         if k == 'row':
             raise Skip('row value')
+        if k == 'cast_dec':
+            return '(fn "cast_decimal" [%s; (int %d); (int %d)])' % (self.ex(e[3]), e[1], e[2])
         if k == 'cast':
             ty = e[1]
-            f = {'signed': 'cast_int', 'unsigned': 'cast_int', 'integer': 'cast_int', 'int': 'cast_int', 'bigint': 'cast_int', 'smallint': 'cast_int', 'char': 'cast_string', 'varchar': 'cast_string', 'text': 'cast_string', 'decimal': 'cast_numeric', 'numeric': 'cast_numeric', 'real': 'cast_numeric', 'float': 'cast_numeric', 'double': 'cast_numeric'}.get(ty)
+            f = {'signed': 'cast_int', 'unsigned': 'cast_unsigned', 'integer': 'cast_int', 'int': 'cast_int', 'bigint': 'cast_int', 'smallint': 'cast_int', 'char': 'cast_string', 'varchar': 'cast_string', 'text': 'cast_string', 'decimal': 'cast_numeric', 'numeric': 'cast_numeric', 'real': 'cast_double', 'float': 'cast_double', 'double': 'cast_double'}.get(ty)
+            if ENGINE == 'postgresql':
+                f = {'bigint': 'cast_bigint', 'smallint': 'cast_smallint', 'real': 'cast_float4', 'float': 'cast_float8', 'double': 'cast_float8'}.get(ty, f)
+            if ENGINE == 'sqlite':
+                f = {'real': 'cast_real', 'float': 'cast_real', 'double': 'cast_real'}.get(ty, f)
             if f is None:
                 raise Skip('cast type ' + ty)
             return '(fn "%s" [%s])' % (f, self.ex(e[2]))
@@ -1205,10 +1223,14 @@ def parse_create(toks):
                     break
                 elif t[0] == 'eof':
                     raise Skip('eof')
+                elif t[0] in ('id', 'kw') and t[1].lower() == 'unsigned' and ty in NUM_TYPES and ENGINE == 'mysql':
+                    width = ('uns', ty)
                 elif t[0] in ('id', 'kw') and t[1].lower() in ('collate', 'charset', 'character', 'zerofill', 'default', 'auto_increment', 'generated', 'as', 'binary', 'unsigned', 'on', 'check', 'references'):
                     raise Skip('column option ' + t[1])
                 p.i += 1
             cols.append((cname, kind))
+            if width is None and ENGINE == 'postgresql' and ty in ('int', 'integer', 'smallint', 'int4', 'int2'):
+                width = ('pgint', 16 if ty in ('smallint', 'int2') else 32)
             limits.append(width if width is not None else INT_RANGES.get(ty))
         if p.eat_op(','):
             continue
@@ -1237,7 +1259,7 @@ def conv_value(lit, kind, limit=None):
     """The Coq value which is stored, with the conversion of the column type."""
     if lit[0] == 'str' and isinstance(limit, int) and len(lit[1]) > limit:
         raise Skip('truncation')
-    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] not in ('dec', 'flt') and '.' not in lit[1] and 'e' not in lit[1].lower() and not (limit[0] <= int(lit[1]) <= limit[1]):
+    if lit[0] == 'num' and isinstance(limit, tuple) and limit[0] not in ('dec', 'flt', 'uns', 'pgint') and '.' not in lit[1] and 'e' not in lit[1].lower() and not (limit[0] <= int(lit[1]) <= limit[1]):
         raise Skip('out of range')
     if lit[0] == 'null':
         return {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[kind]
@@ -1251,6 +1273,14 @@ def conv_value(lit, kind, limit=None):
     if kind == 'Z':
         if '.' in txt:
             raise Skip('decimal into int column')
+        if isinstance(limit, tuple) and limit[0] == 'uns':
+            if int(txt) < 0 or int(txt) >= 2 ** {'tinyint': 8, 'smallint': 16, 'mediumint': 24, 'int': 32, 'integer': 32}.get(limit[1], 64):
+                raise Skip('out of range')
+            return 'VU (%s)' % txt
+        if isinstance(limit, tuple) and limit[0] == 'pgint':
+            if not (-2 ** (limit[1] - 1) <= int(txt) < 2 ** (limit[1] - 1)):
+                raise Skip('out of range')
+            return '(NullValues.Value_I (Some ((%s)%%Z, %d%%nat)))' % (txt, limit[1])
         return 'VZ (%s)' % txt
     if isinstance(limit, tuple) and limit[0] == 'dec':
         return 'VD (%s) %d' % (round_to_scale(txt, limit[1]), limit[1])

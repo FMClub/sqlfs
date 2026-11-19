@@ -219,6 +219,7 @@ def main():
     # FLOAT is a binary32 in MySQL, a binary64 in SQLite and PostgreSQL
     m.FLOAT_BITS = 32 if opts['--engine'] == 'mysql' else 64
     m.REAL_BITS = 32 if opts['--engine'] == 'postgresql' else 64
+    m.ENGINE = {'postgresql': 'postgresql', 'sqlite': 'sqlite'}.get(opts['--engine'], 'mysql')
     outdir = opts['--outdir']
     os.makedirs(outdir, exist_ok=True)
     for path in args:

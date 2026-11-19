@@ -102,13 +102,15 @@ Example position_1 : veq (F "position" [VS "na"; VS "banana"]) (VZ 3) = true. Pr
 Example upper_1 : veq (F "upper" [VS "Sql 92"]) (VS "SQL 92") = true. Proof. check. Qed.
 
 (** Casts. *)
-Example cast_1 : veq (F "cast_int" [VS " -42 "]) (VZ (-42)) = true. Proof. check. Qed.
+(** [CAST(... AS INTEGER)] is an [int4] *)
+Example cast_1 : veq (F "cast_int" [VS " -42 "]) (VI (-42)) = true. Proof. check. Qed.
 (** PostgreSQL: [CAST('4x' AS INT)] is an error *)
 Example cast_2 : veq (F "cast_int" [VS "4x"]) (NullValues.Value_Err "invalid input syntax for type integer") = true. Proof. check. Qed.
 (** a numeric keeps the scale of its text *)
 Example cast_3 : veq (F "cast_numeric" [VS "-12.50"]) (VD (-1250) 2) = true. Proof. check. Qed.
 Example cast_4 : veq (F "cast_string" [VZ (-42)]) (VS "-42") = true. Proof. check. Qed.
-Example cast_5 : veq (F "cast_int" [VQ 7 2]) (VZ 4) = true. Proof. check. Qed.
+Example cast_5 : veq (F "cast_int" [VQ 7 2]) (VI 4) = true. Proof. check. Qed.
+Example cast_6 : veq (F "cast_int" [VZ 3000000000]) (NullValues.Value_Err "integer out of range") = true. Proof. check. Qed.
 
 (** Aggregates: NULLs are ignored, and the aggregate of nothing is NULL, but for
     the counts. *)

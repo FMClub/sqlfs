@@ -41,7 +41,7 @@ updates it.
 ## B. Values and types (the dialect-specific heart)
 
 - [~] Numbers: integers and exact rationals (done); decimal scale ([x], TODO 1.2.1), IEEE floats ([x], TODO 1.2.2),
-      integer ranges and overflow (`TINYINT` .. `BIGINT`, `UNSIGNED`) ([ ]), `numeric(p,s)` rounding on cast ([ ])
+      integer ranges and overflow ([x], TODO 1.2.3), `numeric(p,s)` rounding on cast ([x])
 - [~] Strings: byte-wise and case-insensitive/`PAD SPACE` collations (done); **accent folding and `utf8mb4_0900_ai_ci`, `utf8mb4_unicode_ci`,
       `uca1400`, PostgreSQL locale/ICU collations, `COLLATE` clauses and collation precedence** ([ ]); charsets and encodings, `BINARY` strings, `bytea`, blobs ([ ]);
       `CHAR(n)` vs `VARCHAR(n)` padding and length limits ([ ])

@@ -400,6 +400,8 @@ Definition rat_of_value (v : value) : option Q :=
   | Value_Z (Some z) => Some (inject_Z z)
   | Value_Q (Some q) => Some (this q)
   | Value_D (Some (q, _, _)) => Some (this q)
+  | Value_I (Some (z, _)) => Some (inject_Z z)
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (this q) else None
   | _ => None
   end.
 
@@ -689,6 +691,59 @@ Definition bool_of_string (s : string) : option bool :=
        then Some false
        else None.
 
+(** * Integers of fixed width
+
+    A [Value_Z] is a 64-bit integer ([bigint], [BIGINT]); a [Value_I (z, w)] an integer of width
+    [w] (16, 32) or an unsigned 64-bit integer ([w] = 1, MySQL). *)
+Definition int_parts (v : value) : option (Z * nat) :=
+  match v with
+  | Value_Z (Some z) => Some (z, 64%nat)
+  | Value_I (Some (z, w)) => Some (z, w)
+  | _ => None
+  end.
+
+Definition int_range_ok (w : nat) (z : Z) : bool :=
+  match w with
+  | 16%nat => (Z.leb (-32768) z && Z.leb z 32767)%bool
+  | 32%nat => (Z.leb (-2147483648) z && Z.leb z 2147483647)%bool
+  | 1%nat => (Z.leb 0 z && Z.leb z 18446744073709551615)%bool
+  | _ => (Z.leb (-9223372036854775808) z && Z.leb z 9223372036854775807)%bool
+  end.
+
+Definition VInt (w : nat) (z : Z) : value := if Nat.eqb w 64 then Value_Z (Some z) else Value_I (Some (z, w)).
+
+(** [Value_I] as a [Value_Z], for the functions which do not depend on the width *)
+Definition widen (v : value) : value :=
+  match v with Value_I (Some (z, _)) => Value_Z (Some z) | Value_I None => Value_Z None | _ => v end.
+
+(** The integer arithmetic of PostgreSQL ([int.c], [int8.c]): the result has the wider type of
+    the operands, and a result out of its range is an error ([smallint out of range], ...). *)
+Definition pg_int_error (w : nat) : value :=
+  Value_Err (match w with 16%nat => "smallint out of range" | 32%nat => "integer out of range" | _ => "bigint out of range" end).
+
+Definition pg_int2 (f : Z -> Z -> Z) (old : list value -> value) (l : list value) : value :=
+  match l with
+  | v1 :: v2 :: nil =>
+    match int_parts v1, int_parts v2 with
+    | Some (a, w1), Some (b, w2) => 
+      let w := Nat.max w1 w2 in
+      let r := f a b in
+      if int_range_ok w r then VInt w r else pg_int_error w
+    | _, _ => old (map widen l)
+    end
+  | _ => old (map widen l)
+  end.
+
+Definition pg_int1 (f : Z -> Z) (old : list value -> value) (l : list value) : value :=
+  match l with
+  | v :: nil =>
+    match int_parts v with
+    | Some (a, w) => let r := f a in if int_range_ok w r then VInt w r else pg_int_error w
+    | None => old (map widen l)
+    end
+  | _ => old (map widen l)
+  end.
+
 (** * Binary floating-point numbers *)
 
 Definition fmt_of (w32 : bool) : format := if w32 then binary32 else binary64.
@@ -750,6 +805,7 @@ Definition float_value (v : value) : option (fspecial * Qc * bool) :=
   match v with
   | Value_F _ => float_parts v
   | Value_Z (Some z) => Some (F_Finite, Qc_of_Z z, false)
+  | Value_I (Some (z, _)) => Some (F_Finite, Qc_of_Z z, false)
   | Value_Q (Some q) => Some (F_Finite, q, false)
   | Value_D (Some (q, _, _)) => Some (F_Finite, q, false)
   | _ => None
@@ -839,6 +895,7 @@ Definition dec_of_value (v : value) : option (Qc * nat * nat) :=
   match v with
   | Value_D d => d
   | Value_Z (Some z) => Some (Qc_of_Z z, 0%nat, 0%nat)
+  | Value_I (Some (z, _)) => Some (Qc_of_Z z, 0%nat, 0%nat)
   | Value_Q (Some q) => Some (q, qc_scale q, qc_scale q)
   | _ => None
   end.
@@ -984,6 +1041,7 @@ Definition cast_string v :=
     match v with
     | Value_string s => s
     | Value_Z (Some z) => Some (string_of_Z z)
+    | Value_I (Some (z, _)) => Some (string_of_Z z)
     | Value_Q (Some q) => Some (string_of_Qc q)
     | Value_D (Some (q, _, sc)) => Some (dec_text q sc)
     | Value_F _ => pg_float_text v
@@ -1057,7 +1115,7 @@ Definition interp_predicate p : list value -> bool3 :=
   match p with
   | Predicate s =>
     match string_assoc _ s predicate_table with
-    | Some f => f
+    | Some f => fun l => f (map widen l)
     | None => fun _ => unknown3
     end
   end.
@@ -1118,10 +1176,10 @@ Definition concat_ws (l : list value) :=
                            | _ => acc
                            end) l EmptyString)).
 
-Definition symbol_table : list (string * (list value -> value)) :=
-  let plus := pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)))) in
-  let minus := pg_flt2 "-" Qcminus (pg_dec2 pg_dec_minus (arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b)))) in
-  let mult := pg_flt2 "*" Qcmult (pg_dec2 pg_dec_mult (arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b)))) in
+Definition symbol_table_raw : list (string * (list value -> value)) :=
+  let plus := pg_int2 Z.add (pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b))))) in
+  let minus := pg_int2 Z.sub (pg_flt2 "-" Qcminus (pg_dec2 pg_dec_minus (arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b))))) in
+  let mult := pg_int2 Z.mul (pg_flt2 "*" Qcmult (pg_dec2 pg_dec_mult (arith2 (fun a b => Some (a * b)%Z) (fun a b => Some (Qcmult a b))))) in
   let opp l := match l with
                | Value_D (Some (q, f, sc)) :: nil => VDec (Qcopp q) f sc
                | Value_F (Some (x, k)) :: nil => 
@@ -1134,7 +1192,7 @@ Definition symbol_table : list (string * (list value -> value)) :=
                  | F_NegInf => VF w (F_PosInf, x)
                  | F_NaN => VF w (F_NaN, x)
                  end
-               | _ => arith1 (fun a => Some (- a)%Z) (fun a => Some (Qcopp a)) l
+               | _ => pg_int1 Z.opp (arith1 (fun a => Some (- a)%Z) (fun a => Some (Qcopp a))) l
                end in
   (* integer division truncates towards zero; division by zero is NULL *)
   (** division and modulo by zero are errors ([ERRCODE_DIVISION_BY_ZERO], [src/backend/utils/adt/int.c], [numeric.c]) *)
@@ -1148,10 +1206,10 @@ Definition symbol_table : list (string * (list value -> value)) :=
         end
       | _ => f l
       end in
-  let div := by_zero (pg_flt2 "/" Qcdiv (pg_dec2 pg_dec_div (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
-                    (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b))))) in
-  let modulo := by_zero (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
-                       (fun _ _ => None)) in
+  let div := by_zero (pg_int2 Z.quot (pg_flt2 "/" Qcdiv (pg_dec2 pg_dec_div (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
+                    (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b)))))) in
+  let modulo := by_zero (pg_int2 Z.rem (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
+                       (fun _ _ => None))) in
      ("plus", plus) :: ("+", plus)
   :: ("minus", minus) :: ("-", minus)
   :: ("mult", mult) :: ("*", mult)
@@ -1291,10 +1349,40 @@ Definition symbol_table : list (string * (list value -> value)) :=
                                             end))
                            | _ => Value_Z None end)
   (* casts *)
-  :: ("cast_int", fun l => match l with v :: nil => cast_Z v | _ => Value_Z None end)
+  (* [integer] ([int4]), [smallint], [bigint]: the value must be in the range of the type *)
+  :: ("cast_int", fun l => match l with 
+                           | v :: nil => match cast_Z (widen v) with
+                                         | Value_Z (Some z) => if int_range_ok 32 z then VInt 32 z else pg_int_error 32
+                                         | Value_Z None => Value_I None
+                                         | r => r end
+                           | _ => Value_I None end)
+  :: ("cast_smallint", fun l => match l with 
+                                | v :: nil => match cast_Z (widen v) with
+                                              | Value_Z (Some z) => if int_range_ok 16 z then VInt 16 z else pg_int_error 16
+                                              | Value_Z None => Value_I None
+                                              | r => r end
+                                | _ => Value_I None end)
+  :: ("cast_bigint", fun l => match l with 
+                              | v :: nil => match cast_Z (widen v) with
+                                            | Value_Z (Some z) => if int_range_ok 64 z then VInt 64 z else pg_int_error 64
+                                            | r => r end
+                              | _ => Value_Z None end)
   :: ("cast_numeric", fun l => match l with v :: nil => cast_Q v | _ => Value_Q None end)
   :: ("cast_string", fun l => match l with v :: nil => cast_string v | _ => Value_string None end)
   :: ("cast_bool", fun l => match l with v :: nil => cast_bool v | _ => Value_bool None end)
+  (* [CAST(x AS numeric(p, s))]: rounded to [s] decimals, ties away from zero; an error when the
+     integral part has more than [p - s] digits ([apply_typmod] in [numeric.c]) *)
+  :: ("cast_decimal", fun l => match l with
+                               | v :: Value_Z (Some p) :: Value_Z (Some sc) :: nil =>
+                                 match dec_of_value (widen (match v with Value_F _ => cast_Q v | _ => v end)) with
+                                 | Some (q, _, _) =>
+                                   let s' := Z.to_nat sc in
+                                   let r := dec_round q s' in
+                                   if match Qccompare (Qc_of_Z (Z.abs (Qc_trunc r))) (Qc_of_Z (Z.pow 10 (p - sc))) with Lt => true | _ => false end
+                                   then VDec r s' s' else Value_Err "numeric field overflow"
+                                 | None => Value_D None
+                                 end
+                               | _ => Value_D None end)
   :: ("cast_float8", fun l => match l with v :: nil => cast_float false v | _ => Value_F None end)
   :: ("cast_float4", fun l => match l with v :: nil => cast_float true v | _ => Value_F None end)
   :: nil.
@@ -1303,6 +1391,16 @@ Definition symbol_table : list (string * (list value -> value)) :=
     name of a predicate, is that predicate seen as a boolean-valued function:
     this is what allows conditions to occur inside expressions, for instance as
     the guards of a CASE. Any other symbol yields NULL. *)
+(** the functions whose result depends on the width of their integer arguments: the arithmetic, the
+    casts, and the functions which return one of their arguments *)
+Definition width_names : list string :=
+  "+" :: "-" :: "*" :: "/" :: "%" :: "plus" :: "minus" :: "mult" :: "div" :: "mod" :: "opp" :: "neg"
+      :: "cast_int" :: "cast_smallint" :: "cast_bigint" :: "coalesce" :: "nullif" :: "greatest" :: "least" :: "case" :: nil.
+
+Definition symbol_table : list (string * (list value -> value)) :=
+  map (fun p => if existsb (String.eqb (fst p)) width_names then p else (fst p, fun l => (snd p) (map widen l)))
+      symbol_table_raw.
+
 Definition interp_symbol f : list value -> value :=
   match f with
     | Symbol _ s =>
@@ -1310,7 +1408,7 @@ Definition interp_symbol f : list value -> value :=
       | Some g => g
       | None =>
         match string_assoc _ s predicate_table with
-        | Some p => fun l => value_of_bool3 (p l)
+        | Some p => fun l => value_of_bool3 (p (map widen l))
         | None => fun _ => Value_Z None
         end
       end
@@ -1452,7 +1550,8 @@ Definition interp_aggregate a (l : list value) :=
         then (String.substring 9 (String.length s - 9) s, value_dedup l)
         else (s, l) in
     match string_assoc _ s' aggregate_table with
-    | Some f => f l'
+    (* [min] and [max] keep the type; [sum] of [smallint] and [integer] is a [bigint] *)
+    | Some f => f (if (String.eqb s' "min" || String.eqb s' "max")%bool then l' else map widen l')
     | None => Value_Z None
     end
   end.

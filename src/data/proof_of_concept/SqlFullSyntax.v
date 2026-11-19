@@ -113,6 +113,10 @@ Definition VZ (z : Z) := NullValues.Value_Z (Some z).
 Definition VS (s : string) := NullValues.Value_string (Some s).
 Definition VB (b : bool) := NullValues.Value_bool (Some b).
 Definition VQ (n : Z) (d : positive) := NullValues.Value_Q (Some (Q2Qc (Qmake n d))).
+(** an [integer] ([int4]) of PostgreSQL *)
+Definition VI (z : Z) := NullValues.Value_I (Some (z, 32%nat)).
+(** a [BIGINT UNSIGNED] of MySQL *)
+Definition VU (z : Z) := NullValues.Value_I (Some (z, 1%nat)).
 (** a decimal literal: [VD 150 2] is [1.50] *)
 Definition VD (n : Z) (s : nat) := NullValues.dec_lit n s.
 (** the float nearest to [n * 10^e], binary32 if [w32]: [VFl false 15 (-1)] is the double [1.5] *)

@@ -362,6 +362,17 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                | v :: nil => match lenient v with Some n => Value_Q (Some (Qc_of_num n)) | None => Value_Q None end
                                | _ => Value_Q None end)
   :: ("cast_string", fun l => match l with v :: nil => Value_string (text_of v) | _ => Value_string None end)
+  :: ("cast_decimal", fun l => match l with 
+                               | v :: p :: s :: nil => match z_arg p, z_arg s with
+                                                       | Some p, Some s => my_cast_decimal p s v
+                                                       | _, _ => Value_D None end
+                               | _ => Value_D None end)
+  (* [CAST(x AS UNSIGNED)]: the value modulo 2^64 ([Item_func_unsigned]) *)
+  :: ("cast_unsigned", fun l => match l with 
+                                | v :: nil => match z_arg v with 
+                                              | Some z => Value_I (Some (Z.modulo z 18446744073709551616, 1%nat)) 
+                                              | None => Value_I None end
+                                | _ => Value_I None end)
   :: ("cast_double", fun l => match l with v :: nil => my_double (match lenient v with Some n => value_of_num n | None => Value_Q None end) | _ => Value_F None end)
   :: nil.
 
@@ -425,7 +436,12 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           (fun f => match f with F_Bare_Column => negb (ms_only_full_group_by ss) | _ => supports f end)
           false
           (fun _ _ => false)
-          (fun v => v).
+          (* an integer literal is a [BIGINT], a [BIGINT UNSIGNED] above 2^63 - 1, a [DECIMAL] above 2^64 - 1 *)
+          (fun v => match v with
+                    | Value_Z (Some z) => if int_range_ok 64 z then v 
+                                          else if int_range_ok 1 z then Value_I (Some (z, 1%nat))
+                                          else VDec (Qc_of_Z z) 0 0
+                    | _ => v end).
 
 End Collation.
 

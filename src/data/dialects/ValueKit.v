@@ -62,6 +62,7 @@ Definition lenient (v : value) : option num :=
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
   | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
+  | Value_I (Some (z, _)) => Some (Num_Z z)
   | Value_bool (Some b) => Some (Num_Z (if b then 1%Z else 0%Z))
   | Value_string (Some s) => Some (parse_prefix s)
   | _ => None
@@ -75,6 +76,7 @@ Definition strict_conv (v : value) : option num :=
   | Value_Q (Some q) => Some (Num_Q q)
   | Value_D (Some (q, _, _)) => Some (Num_Q q)
   | Value_F (Some (q, k)) => if Nat.leb (Nat.div k 2) 1 then Some (Num_Q q) else None
+  | Value_I (Some (z, _)) => Some (Num_Z z)
   | Value_string (Some s) => 
     let (n, ok) := parse_number s in if ok then Some n else None
   | _ => None
@@ -232,6 +234,7 @@ Definition text_of (v : value) : option string :=
   match v with
   | Value_string s => s
   | Value_Z (Some z) => Some (string_of_Z z)
+  | Value_I (Some (z, _)) => Some (string_of_Z z)
   | Value_Q (Some q) => Some (string_of_dec q)
   | Value_D (Some (q, _, s)) => Some (dec_text q s)
   (* a float, as the MySQL family prints it ([my_gcvt]) *)
@@ -421,6 +424,7 @@ Inductive mnum : Type :=
 Definition mclass (v : value) : option mnum :=
   match v with
   | Value_Z (Some z) => Some (MI z)
+  | Value_I (Some (z, _)) => Some (MI z)
   | Value_bool (Some b) => Some (MI (if b then 1%Z else 0%Z))
   | Value_D (Some (q, f, s)) => Some (MD q f s)
   | Value_Q (Some q) => Some (MD q (dec_scale q) (dec_scale q))
@@ -488,7 +492,14 @@ Definition my_arith2 (fi : option (Z -> Z -> Z)) (fd : Qc * nat * nat -> Qc * na
   match l with
   | v1 :: v2 :: nil =>
     match mclass v1, mclass v2, fi with
-    | Some (MI a), Some (MI b), Some f => Value_Z (Some (f a b))
+    (* [BIGINT] arithmetic; unsigned when an operand is [BIGINT UNSIGNED]; out of range is an error
+       ([ER_DATA_OUT_OF_RANGE], [Item_func_plus::int_op], ...) *)
+    | Some (MI a), Some (MI b), Some f => 
+      let r := f a b in
+      let unsigned := existsb (fun v => match v with Value_I (Some (_, 1%nat)) => true | _ => false end) l in
+      if unsigned 
+      then (if int_range_ok 1 r then Value_I (Some (r, 1%nat)) else Value_Err "BIGINT UNSIGNED value is out of range")
+      else (if int_range_ok 64 r then Value_Z (Some r) else Value_Err "BIGINT value is out of range")
     | _, _, _ =>
     match mclass v1, mclass v2 with
     (* each operand is converted to a double, then the operation is done on doubles *)
@@ -548,6 +559,20 @@ Definition my_agg_avg (incr : nat) (isnull : value -> bool) (l : list value) : v
        | Some d => my_ddiv incr d (Qc_of_Z (Z.of_nat (List.length (non_nulls_by isnull l))), 0%nat, 0%nat)
        | None => Value_D None
        end.
+
+(** [CAST(x AS DECIMAL(p, s))] in the MySQL family: rounded to [s] decimals, ties away from zero; a value
+    out of the range of the type is the largest value of the type ([my_decimal2decimal] with
+    [E_DEC_OVERFLOW], a warning in a [SELECT]) *)
+Definition my_cast_decimal (p s : Z) (v : value) : value :=
+  match lenient v with
+  | Some n =>
+    let s' := Z.to_nat s in
+    let r := dec_round (Qc_of_num n) s' in
+    let mx := Qcminus (Qc_of_Z (Z.pow 10 (p - s))) (Qcdiv (Qc_of_Z 1) (Qc_of_Z (Z.pow 10 s))) in
+    let r := match Qccompare r mx with Gt => mx | _ => match Qccompare r (Qcopp mx) with Lt => Qcopp mx | _ => r end end in
+    VDec r s' s'
+  | None => Value_D None
+  end.
 
 (** variance, population or sample *)
 Definition agg_var_by (isnull : value -> bool) (conv : value -> option num) (sample : bool) (l : list value) :=
