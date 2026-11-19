@@ -335,6 +335,7 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
   :: ("min", agg_extremum_by is_null my_order is_Lt)
   :: ("max", agg_extremum_by is_null my_order is_Gt)
   :: ("group_concat", agg_concat_by is_null ",")
+  :: ("group_concat_sep", agg_concat_sep_by is_null ",")
   :: ("bit_and", agg_bit_by is_null Z.land)
   :: ("bit_or", agg_bit_by is_null Z.lor)
   :: ("var_pop", agg_var_by is_null lenient false)

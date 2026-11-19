@@ -246,6 +246,7 @@ Definition ora_aggregate_table : list (string * (list value -> value)) :=
   :: ("min", agg_extremum_by ora_isnull ora_order is_Lt)
   :: ("max", agg_extremum_by ora_isnull ora_order is_Gt)
   :: ("listagg", agg_concat_by ora_isnull "")
+  :: ("listagg_sep", agg_concat_sep_by ora_isnull "")
   :: ("variance", agg_var_by ora_isnull strict_conv true)
   :: ("var_samp", agg_var_by ora_isnull strict_conv true)
   :: ("var_pop", agg_var_by ora_isnull strict_conv false)

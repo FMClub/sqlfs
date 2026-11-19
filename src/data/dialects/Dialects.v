@@ -172,6 +172,10 @@ Fixpoint sexpr_to (e : sexpr T1 relname) {struct e} : sexpr T2 relname :=
   | E_Col _ _ a => E_Col T2 relname a
   | E_Fun f l => @E_Fun T2 relname f (map sexpr_to l)
   | E_Agg ag sq e c => @E_Agg T2 relname ag sq (sexpr_to e) (scond_to c)
+  | E_AggX ag sq e sep lo c => 
+    @E_AggX T2 relname ag sq (sexpr_to e) 
+            (match sep with Some s => Some (sexpr_to s) | None => None end) 
+            (map sorder_to lo) (scond_to c)
   | E_Case c e1 e2 => @E_Case T2 relname (scond_to c) (sexpr_to e1) (sexpr_to e2)
   | E_Cond c => @E_Cond T2 relname (scond_to c)
   | E_Sub q => @E_Sub T2 relname (squery_to q)

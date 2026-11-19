@@ -189,8 +189,10 @@ known gap and its status; it is updated by every pull request which touches one 
 | 15 | Regular expressions (`~`, `REGEXP`, `REGEXP_LIKE`, `REGEXP_REPLACE`) | open |
 | 16 | JSON and arrays | open |
 | 17 | Collations beyond case folding and padding (accent folding, `utf8mb4_unicode_ci`, locale collations of PostgreSQL) | open |
-| 18 | Ordered-set aggregates (`percentile_cont`, `mode`), `ORDER BY` / `SEPARATOR` in `group_concat` / `string_agg`, multi-argument aggregates | open |
-| 19 | `NATURAL` and `USING` joins, `DISTINCT ON`, table functions (`generate_series`), `TABLE` and `VALUES` as statements | open (some are derived forms) |
+| 18 | `ORDER BY` and separator inside `group_concat` / `string_agg` / `listagg` (`E_AggX`; aggregates `group_concat_sep`, `string_agg_sep`, `listagg_sep`) | resolved |
+| 18b | Ordered-set aggregates (`percentile_cont`, `percentile_disc`, `mode`), other multi-argument aggregates | open |
+| 19 | `DISTINCT ON` (derived form `distinct_on`, by `ROW_NUMBER`), `NATURAL` join (derived form `from_natural_join`, existing) | resolved as derived forms |
+| 19b | `USING` joins, table functions (`generate_series`), `TABLE` as a statement | open |
 | 20 | SQLite: bare column in an aggregate query with `min` / `max` | open |
 | 21 | `ROW` values and row comparison with more than one column outside `IN` | open |
 | 22 | Static typing and well-formedness of queries (I5) | open |

@@ -238,6 +238,11 @@ Inductive sexpr : Type :=
   (** [agg ([ALL | DISTINCT] e) FILTER (WHERE c)]; [c] is [C_True] when there is
       no FILTER, and COUNT( * ) is the count of any constant. *)
   | E_Agg : aggregate -> set_quantifier -> sexpr -> scond -> sexpr
+  (** an aggregate with a second argument and an [ORDER BY]: [string_agg (e, sep ORDER BY ...)],
+      [group_concat (e ORDER BY ... SEPARATOR sep)], [listagg (e, sep) WITHIN GROUP (ORDER BY ...)].
+      The rows of the group are sorted by the keys, then the aggregate is applied to the list
+      [e1, sep1, e2, sep2, ...] when there is a separator, to [e1, e2, ...] otherwise. *)
+  | E_AggX : aggregate -> set_quantifier -> sexpr -> option sexpr -> list sorder -> scond -> sexpr
   (** [CASE WHEN c THEN e1 ELSE e2 END]: contrarily to a function symbol, only
       one of the branches is evaluated. The general CASE is a cascade of those. *)
   | E_Case : scond -> sexpr -> sexpr -> sexpr
@@ -441,7 +446,7 @@ with bare_c (gs : list sexpr) (c : scond) {struct c} : bool :=
 (** Does the expression contain an aggregate of the block (not inside a subquery)? *)
 Fixpoint has_agg_syn (e : sexpr) {struct e} : bool :=
   match e with
-  | E_Agg _ _ _ _ => true
+  | E_Agg _ _ _ _ | E_AggX _ _ _ _ _ _ => true
   | E_Fun _ l => (fix go (l : list sexpr) : bool := match l with nil => false | x :: r => has_agg_syn x || go r end) l
   | E_Case c e1 e2 => has_agg_c c || has_agg_syn e1 || has_agg_syn e2
   | E_Cond c => has_agg_c c
@@ -493,6 +498,11 @@ Fixpoint sexpr_uses (e : sexpr) {struct e} : list use :=
   | E_Fun f l => U_Symbol f :: flat_map sexpr_uses l
   | E_Agg ag _ e c => 
     U_Agg ag :: sexpr_uses e ++ scond_uses c ++
+    match c with C_True => nil | _ => (U_Feature F_Filter_Agg) :: nil end
+  | E_AggX ag _ e sep lo c => 
+    U_Agg ag :: sexpr_uses e ++ scond_uses c ++
+    (match sep with Some s => sexpr_uses s | None => nil end) ++
+    flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo ++
     match c with C_True => nil | _ => (U_Feature F_Filter_Agg) :: nil end
   | E_Case c e1 e2 => scond_uses c ++ sexpr_uses e1 ++ sexpr_uses e2
   | E_Cond c => (U_Feature F_Cond_Value) :: scond_uses c
@@ -710,6 +720,10 @@ Fixpoint sexpr_cols (ce : cte_env) (e : sexpr) {struct e} : list attribute :=
   | E_Col a => a :: nil
   | E_Fun _ l => flat_map (sexpr_cols ce) l
   | E_Agg _ _ e c => sexpr_cols ce e ++ scond_cols ce c
+  | E_AggX _ _ e sep lo c => 
+    sexpr_cols ce e ++ scond_cols ce c ++
+    (match sep with Some s => sexpr_cols ce s | None => nil end) ++
+    flat_map (fun o => match o with O_By e _ _ => sexpr_cols ce e end) lo
   | E_Case c e1 e2 => scond_cols ce c ++ sexpr_cols ce e1 ++ sexpr_cols ce e2
   | E_Cond c => scond_cols ce c
   | E_Sub q => squery_cols ce q
@@ -803,6 +817,13 @@ Fixpoint sexpr_foreign (ce : cte_env) (sa bound : setA) (e : sexpr) {struct e} :
     | nil => false
     | cols => existsb (fun x => x inS? sa) cols && negb (existsb (fun x => x inS? bound) cols)
     end
+  | E_AggX _ _ a sep lo c =>
+    match sexpr_cols ce a ++ scond_cols ce c ++ 
+          (match sep with Some s => sexpr_cols ce s | None => nil end) ++
+          flat_map (fun o => match o with O_By e _ _ => sexpr_cols ce e end) lo with
+    | nil => false
+    | cols => existsb (fun x => x inS? sa) cols && negb (existsb (fun x => x inS? bound) cols)
+    end
   | E_Case c e1 e2 => 
     scond_foreign ce sa bound c || sexpr_foreign ce sa bound e1 || sexpr_foreign ce sa bound e2
   | E_Cond c => scond_foreign ce sa bound c
@@ -853,6 +874,13 @@ Fixpoint sexpr_has_agg (ce : cte_env) (sa : setA) (e : sexpr) : bool :=
   | E_Fun _ l => existsb (sexpr_has_agg ce sa) l
   | E_Agg _ _ e c =>
     match sexpr_cols ce e ++ scond_cols ce c with
+    | nil => true
+    | cols => existsb (fun a => a inS? sa) cols
+    end
+  | E_AggX _ _ e sep lo c =>
+    match sexpr_cols ce e ++ scond_cols ce c ++ 
+          (match sep with Some s => sexpr_cols ce s | None => nil end) ++
+          flat_map (fun o => match o with O_By e _ _ => sexpr_cols ce e end) lo with
     | nil => true
     | cols => existsb (fun a => a inS? sa) cols
     end
@@ -1332,6 +1360,22 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
               (filter (fun t => is_true3 (eval_scond ce ((sa, t :: nil, nil) :: env') c)) g)
         end in
     interp_aggregate T ag (quantify sq vals)
+  | E_AggX ag sq e sep lo c =>
+    let cols := sexpr_cols ce e ++ scond_cols ce c ++ 
+                (match sep with Some s => sexpr_cols ce s | None => nil end) ++
+                flat_map (fun o => match o with O_By e _ _ => sexpr_cols ce e end) lo in
+    let vals :=
+        match agg_env cols env with
+        | nil => nil
+        | (sa, g, _) :: env' =>
+          let renv t := (sa, t :: nil, nil) :: env' in
+          let rows := filter (fun t => is_true3 (eval_scond ce (renv t) c)) g in
+          let keys t := map (fun o => match o with O_By k _ _ => eval_sexpr ce (renv t) k end) lo in
+          let sorted := sort_on (map sorder_spec lo) keys rows in
+          flat_map (fun t => eval_sexpr ce (renv t) e ::
+                             match sep with Some s => eval_sexpr ce (renv t) s :: nil | None => nil end) sorted
+        end in
+    interp_aggregate T ag (match sep with Some _ => vals | None => quantify sq vals end)
   | E_Case c e1 e2 =>
     if is_true3 (eval_scond ce env c) then eval_sexpr ce env e1 else eval_sexpr ce env e2
   | E_Cond c => value_of_truth O (eval_scond ce env c)

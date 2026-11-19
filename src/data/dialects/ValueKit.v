@@ -369,6 +369,29 @@ Definition agg_concat_by (isnull : value -> bool) (sep : string) (l : list value
   | s :: ss => Value_string (Some (fold_left (fun acc x => acc ++ sep ++ x) ss s))
   end.
 
+(** The aggregate of [E_AggX] with a separator: the argument is the list [v1, sep1, v2, sep2, ...]
+    of the sorted rows. The NULL values are ignored, and the separator which precedes a value is
+    that of its row (a NULL separator is [default]). *)
+Fixpoint concat_pairs (isnull : value -> bool) (default : string) (first : bool) (l : list value) : string :=
+  match l with
+  | v :: s :: r =>
+    if isnull v then concat_pairs isnull default first r
+    else match text_of v with
+         | None => concat_pairs isnull default first r
+         | Some t => 
+           (if first then "" else match text_of s with Some x => if isnull s then default else x | None => default end) ++ t ++
+           concat_pairs isnull default false r
+         end
+  | _ => ""
+  end.
+
+Fixpoint firsts (l : list value) : list value :=
+  match l with v :: _ :: r => v :: firsts r | _ => nil end.
+
+Definition agg_concat_sep_by (isnull : value -> bool) (default : string) (l : list value) :=
+  if forallb isnull (firsts l) then Value_string None
+  else Value_string (Some (concat_pairs isnull default true l)).
+
 (** variance, population or sample *)
 Definition agg_var_by (isnull : value -> bool) (conv : value -> option num) (sample : bool) (l : list value) :=
   let ns := flat_map (fun v => match conv v with Some n => n :: nil | None => nil end) (non_nulls_by isnull l) in

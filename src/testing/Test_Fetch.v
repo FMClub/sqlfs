@@ -62,3 +62,36 @@ Proof. check. Qed.
 
 Example accepted_percent : acceptance (fetch None false true 2%N) = [false; false; false; false; true].
 Proof. check. Qed.
+
+(** * Aggregates with a separator and an ORDER BY *)
+
+Definition words := values_ [c0] [[int 3]; [int 1]; [int 2]].
+
+Definition ordered_concat f sep dir :=
+  select_where [as_ (agg_x f (col c0) sep [o_by (col c0) dir]) (Attr_Z "c1")] [from_as words [(c0, c0)]] c_true.
+
+(** [group_concat (c0 ORDER BY c0 DESC SEPARATOR '-')] *)
+Example group_concat_ordered :
+  shown MySQL (select_where [as_ (agg_x "group_concat_sep" (col c0) (Some (str "-")) [o_by (col c0) Desc]) c0] [from_as words [(c0, c0)]] c_true) = ["3-2-1"].
+Proof. check. Qed.
+
+(** [string_agg (c0, ', ' ORDER BY c0)] *)
+Example string_agg_ordered :
+  shown PostgreSQL (select_where [as_ (agg_x "string_agg_sep" (col c0) (Some (str ", ")) [o_by (col c0) Asc]) c0] [from_as words [(c0, c0)]] c_true) = ["1, 2, 3"].
+Proof. check. Qed.
+
+Example listagg_ordered :
+  shown OceanBaseOracle (select_where [as_ (agg_x "listagg" (col c0) None [o_by (col c0) Asc]) c0] [from_as words [(c0, c0)]] c_true) = ["123"].
+Proof. check. Qed.
+
+(** * DISTINCT ON *)
+
+Notation c1' := (Attr_Z "c1").
+
+Definition kv := values_ [c0; c1'] [[int 1; int 5]; [int 1; int 3]; [int 2; int 7]].
+
+Example distinct_on_first :
+  map (fun t => map (fun i => show_value (dot (TD PostgreSQL) t (out_attr i))) (seq 0 2))
+      (run PostgreSQL (select_where [as_ (col c0) c0; as_ (col c1') c1'] [from_query (distinct_on kv [c0; c1'] [col c0] [o_by (col c1') Asc] (Attr_Z "rn"))] c_true))
+  = [["1"; "3"]; ["2"; "7"]].
+Proof. check. Qed.
