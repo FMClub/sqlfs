@@ -17,17 +17,25 @@ Require Import Values TuplesImpl GenericInstance SqlSyntax.
 Close Scope Q_scope.
 Close Scope Qc_scope.
 
-(** * What SqlFull needs to know about the values of NullValues *)
+(** * Dialects
 
-Definition TNull_ops : ops TNull :=
-  mk_ops TNull
-         NullValues.is_null
-         (NullValues.Value_Z None)
-         NullValues.bool3_of_value
-         NullValues.value_of_bool3
-         NullValues.sql_eq3
-         NullValues.sql_order
-         (fun z => NullValues.Value_Z (Some z)).
+    What SqlFull needs to know about the values of NullValues, for a dialect which, like
+    PostgreSQL, compares strings byte by byte and puts the NULLs last. *)
+
+Definition PostgreSQL : dialect TNull :=
+  mk_dialect TNull
+             NullValues.is_null
+             (NullValues.Value_Z None)
+             NullValues.bool3_of_value
+             NullValues.value_of_bool3
+             NullValues.sql_eq3
+             NullValues.sql_order
+             (fun z => NullValues.Value_Z (Some z))
+             (fun v => v)
+             false
+             (fun _ => true).
+
+Definition TNull_ops := PostgreSQL.
 
 (** * Evaluation in a database state *)
 

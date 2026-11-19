@@ -18,7 +18,7 @@ Section Sec.
 Hypothesis T : Tuple.Rcd.
 Hypothesis relname : Type.
 Hypothesis ORN : Oset.Rcd relname.
-Hypothesis O : ops T.
+Hypothesis O : dialect T.
 
 Import Tuple.
 
@@ -224,7 +224,7 @@ Lemma union_all_spec :
 Proof.
 intros ce env q1 q2 H.
 change ((if Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN basesort ce q2)
-         then eval_set_op T Union Set_All (eval_squery ce env q1) (eval_squery ce env q2)
+         then eval_set_op O Union Set_All (eval_squery ce env q1) (eval_squery ce env q2)
          else nil) = eval_squery ce env q1 ++ eval_squery ce env q2).
 rewrite H; apply refl_equal.
 Qed.

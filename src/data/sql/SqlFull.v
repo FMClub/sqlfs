@@ -128,32 +128,70 @@ Notation BTupleT := (Fecol.CBag (CTuple T)).
 Notation bagT := (Febag.bag BTupleT).
 Notation bool3 := (Bool.b (B T)).
 
-(** * What SQL needs to know about values
+(** * Dialects
 
-    [Tuple.Rcd] gives an abstract type of values, with a default value for each
-    type (the NULL of that type), and the interpretation of the predicates, of
-    the function symbols and of the aggregates. The following record gathers
-    what the constructs of this file need on top of that. *)
-Record ops : Type :=
-  mk_ops
+    SQL is a family of languages. What is common to all of them is the structure of
+    the queries and the three-valued logic; they differ by what is a value and by
+    the way values are compared and combined (the instance [Tuple.Rcd], see
+    [Values.v] and [Dialects.v]), and by the few aspects of the evaluation of
+    queries which are recorded here. The record [dialect] gathers what the constructs
+    of this file need to know. *)
+
+(** The constructs of the language which are not supported by all the dialects. *)
+Inductive feature : Type :=
+  | F_Right_Join
+  | F_Full_Join
+  | F_Lateral
+  | F_Intersect
+  | F_Except
+  (** [INTERSECT ALL] and [EXCEPT ALL] *)
+  | F_Intersect_All
+  | F_Except_All
+  | F_Window
+  (** window frames in [GROUPS] mode *)
+  | F_Frame_Groups
+  (** [agg(...) FILTER (WHERE ...)] *)
+  | F_Filter_Agg
+  (** [NULLS FIRST] and [NULLS LAST] in [ORDER BY] *)
+  | F_Nulls_Order
+  (** [e op ANY (q)], [e op ALL (q)] *)
+  | F_Any_All
+  | F_With
+  (** [(e1, ..., en) IN (q)] with [n > 1] *)
+  | F_Row_In.
+
+Record dialect : Type :=
+  mk_dialect
     {
       (** is this value a NULL? *)
       is_null : value -> bool;
       (** a NULL, used when no type is known *)
       null : value;
-      (** the truth value of a (boolean) value used as a condition *)
+      (** the truth value of a value used as a condition *)
       truth_of_value : value -> bool3;
-      (** the (boolean) value of a condition used as an expression *)
+      (** the value of a condition used as an expression *)
       value_of_truth : bool3 -> value;
       (** the equality predicate [=] of SQL, used by IN *)
       eq3 : value -> value -> bool3;
       (** the total order on the values which are not NULL, used by ORDER BY *)
       order : value -> value -> comparison;
       (** integers as values, used by the ranking window functions *)
-      value_of_Z : Z -> value
+      value_of_Z : Z -> value;
+      (** The key of a value for the operations which identify values which are
+          not distinct without being equal: [GROUP BY], [DISTINCT], the set operations
+          and [DISTINCT] aggregates. It is the identity when the comparison of strings is
+          deterministic, and for instance the case folding of a string with a case
+          insensitive collation. Two NULLs have the same key. *)
+      canon : value -> value;
+      (** Are NULLs the smallest values of [ORDER BY] (MySQL, SQLite) or the largest ones
+          (PostgreSQL, Oracle)? This is only the default: it can be overridden by 
+          [NULLS FIRST] and [NULLS LAST] in the dialects which have them. *)
+      nulls_smallest : bool;
+      (** the constructs which the dialect supports *)
+      supports : feature -> bool
     }.
 
-Hypothesis O : ops.
+Hypothesis O : dialect.
 
 (** * Syntax *)
 
@@ -283,6 +321,104 @@ Definition SQ_Values (la : list attribute) (rows : list (list sexpr)) :=
 
 (** [f1 CROSS JOIN f2] *)
 Definition Fr_Cross f1 f2 := Fr_Join J_Inner false f1 f2 C_True.
+
+(** * The constructs which a query uses
+
+    [squery_features q] lists the constructs of [q] which are not supported by all the
+    dialects. A dialect accepts [q] if it supports all of them. *)
+
+Definition nulls_features (o : sorder) : list feature :=
+  match o with
+  | O_By _ _ Nulls_Default => nil
+  | O_By _ _ _ => F_Nulls_Order :: nil
+  end.
+
+Definition frame_bound_is_groups (f : frame) : list feature :=
+  match f with Frame_Groups _ _ => F_Frame_Groups :: nil | Frame_Rows _ _ => nil end.
+
+Fixpoint sexpr_features (e : sexpr) {struct e} : list feature :=
+  match e with
+  | E_Const _ | E_Col _ => nil
+  | E_Fun _ l => flat_map sexpr_features l
+  | E_Agg _ _ e c => 
+    sexpr_features e ++ scond_features c ++
+    match c with C_True => nil | _ => F_Filter_Agg :: nil end
+  | E_Case c e1 e2 => scond_features c ++ sexpr_features e1 ++ sexpr_features e2
+  | E_Cond c => scond_features c
+  | E_Sub q => squery_features q
+  end
+
+with scond_features (c : scond) {struct c} : list feature :=
+  match c with
+  | C_Conj _ c1 c2 => scond_features c1 ++ scond_features c2
+  | C_Not c => scond_features c
+  | C_True => nil
+  | C_Pred _ l => flat_map sexpr_features l
+  | C_Expr e => sexpr_features e
+  | C_Quant _ _ l q _ => F_Any_All :: flat_map sexpr_features l ++ squery_features q
+  | C_In l q _ => 
+    (match l with _ :: _ :: _ => F_Row_In :: nil | _ => nil end) ++
+    flat_map sexpr_features l ++ squery_features q
+  | C_Exists q => squery_features q
+  end
+
+with squery_features (q : squery) {struct q} : list feature :=
+  match q with
+  | SQ_Table _ => nil
+  | SQ_Set o sq q1 q2 => 
+    (match o, sq with
+     | Inter, Set_Distinct => F_Intersect :: nil
+     | Inter, Set_All => F_Intersect :: F_Intersect_All :: nil
+     | Diff, Set_Distinct => F_Except :: nil
+     | Diff, Set_All => F_Except :: F_Except_All :: nil
+     | _, _ => nil
+     end) ++ squery_features q1 ++ squery_features q2
+  | SQ_Select sp => sspec_features sp
+  | SQ_Order q lo _ _ => 
+    squery_features q ++ flat_map nulls_features lo ++ 
+    flat_map (fun o => match o with O_By e _ _ => sexpr_features e end) lo
+  | SQ_Window q lw => 
+    F_Window :: squery_features q ++
+    flat_map (fun w => 
+                match w with 
+                | W_As f lp lo _ => 
+                  flat_map sexpr_features lp ++ flat_map nulls_features lo ++
+                  match f with
+                  | W_Agg _ _ e fr => sexpr_features e ++ frame_bound_is_groups fr
+                  | W_First_Value e fr => sexpr_features e ++ frame_bound_is_groups fr
+                  | W_Last_Value e fr => sexpr_features e ++ frame_bound_is_groups fr
+                  | W_Nth_Value e _ fr => sexpr_features e ++ frame_bound_is_groups fr
+                  | W_Lag e _ d => sexpr_features e ++ sexpr_features d
+                  | W_Lead e _ d => sexpr_features e ++ sexpr_features d
+                  | _ => nil
+                  end
+                end) lw
+  | SQ_With _ q1 q2 => F_With :: squery_features q1 ++ squery_features q2
+  end
+
+with sspec_features (sp : sspec) {struct sp} : list feature :=
+  match sp with
+  | Select _ s lf w g h =>
+    (match s with 
+     | S_Star => nil 
+     | S_List l => flat_map (fun x => match x with S_As e _ => sexpr_features e end) l
+     end) ++
+    flat_map sfrom_features lf ++ scond_features w ++
+    (match g with G_Fine => nil | G_By l => flat_map sexpr_features l end) ++ 
+    scond_features h
+  end
+
+with sfrom_features (f : sfrom) {struct f} : list feature :=
+  match f with
+  | Fr_Query q _ => squery_features q
+  | Fr_Join jt lateral f1 f2 c =>
+    (match jt with J_Right => F_Right_Join :: nil | J_Full => F_Full_Join :: nil | _ => nil end) ++
+    (if lateral then F_Lateral :: nil else nil) ++
+    sfrom_features f1 ++ sfrom_features f2 ++ scond_features c
+  end.
+
+(** Does the dialect accept the query? *)
+Definition accepted_by (q : squery) : bool := forallb (supports O) (squery_features q).
 
 (** * Sort of a query: the set of the attributes of its result
 
@@ -451,7 +587,12 @@ Section Lists.
 
 Variable X : Type.
 
-Definition tuple_mem (t : tuple) (l : list tuple) := Oeset.mem_bool (OTuple T) t l.
+(** Tuples are identified through the keys of their values. *)
+Definition canon_tuple (t : tuple) : tuple := 
+  mk_tuple T (labels T t) (fun a => canon O (dot T t a)).
+
+Definition tuple_mem (t : tuple) (l : list tuple) := 
+  Oeset.mem_bool (OTuple T) (canon_tuple t) (map canon_tuple l).
 
 (** Removal of the duplicates, w.r.t. a projection on tuples; the first
     occurrence is kept. *)
@@ -468,7 +609,8 @@ Definition dedup_on (f : X -> tuple) (l : list X) := dedup_rec f nil l.
 
 (** Groups, in the order of the first occurrence of their keys; inside a group,
     the order of the list is kept. *)
-Definition key_eqb (k1 k2 : list value) := Oset.eq_bool (mk_olists (OVal T)) k1 k2.
+Definition key_eqb (k1 k2 : list value) := 
+  Oset.eq_bool (mk_olists (OVal T)) (map (canon O) k1) (map (canon O) k2).
 
 Fixpoint group_insert (k : list value) (x : X) (gs : list (list value * list X)) :=
   match gs with
@@ -505,7 +647,8 @@ Definition dedup := dedup_on (fun t : tuple => t).
 Fixpoint value_dedup (l : list value) :=
   match l with
   | nil => nil
-  | v :: l => v :: filter (fun v' => negb (Oset.eq_bool (OVal T) v v')) (value_dedup l)
+  | v :: l => v :: filter (fun v' => negb (Oset.eq_bool (OVal T) (canon O v) (canon O v'))) 
+                          (value_dedup l)
   end.
 
 Definition quantify (sq : set_quantifier) (l : list value) :=
@@ -520,7 +663,10 @@ Definition nulls_first (d : order_dir) (n : nulls_order) :=
   match n with
   | Nulls_First => true
   | Nulls_Last => false
-  | Nulls_Default => match d with Asc => false | Desc => true end
+  | Nulls_Default => 
+    (* NULLs are the smallest values (they come first in ascending order) or the 
+       largest ones, depending on the dialect *)
+    match d with Asc => nulls_smallest O | Desc => negb (nulls_smallest O) end
   end.
 
 Definition order_spec := (order_dir * nulls_order)%type.
@@ -731,12 +877,29 @@ Definition rename_tuple (rho : renaming) (t : tuple) :=
 
 (** * Set operations *)
 
+(** Number of tuples of [l] which are not distinct from [t]. *)
+Definition tuple_count (t : tuple) (l : list tuple) :=
+  List.length (filter (fun u => Oeset.eq_bool (OTuple T) (canon_tuple t) (canon_tuple u)) l).
+
+(** The elements of [l] which are the [i]-th occurrence of their key, for some [i]
+    such that [keep i t] holds: the multiplicity of a tuple in the result is determined
+    by [keep]. *)
+Fixpoint filter_occ (keep : nat -> tuple -> bool) (before : list tuple) (l : list tuple) :=
+  match l with
+  | nil => nil
+  | t :: l => 
+    (if keep (tuple_count t before) t then t :: nil else nil) ++ filter_occ keep (t :: before) l
+  end.
+
 Definition eval_set_op (o : set_op) (sq : set_quantifier) (l1 l2 : list tuple) :=
   match sq, o with
   | Set_All, Union => l1 ++ l2
-  | Set_All, _ =>
-    Febag.elements BTupleT
-       (Febag.interp_set_op BTupleT o (Febag.mk_bag BTupleT l1) (Febag.mk_bag BTupleT l2))
+  (** the multiplicity of [t] in [INTERSECT ALL] is the minimum of the multiplicities *)
+  | Set_All, Inter => filter_occ (fun i t => Nat.ltb i (tuple_count t l2)) nil l1
+  (** and in [EXCEPT ALL] it is their difference, down to 0 *)
+  | Set_All, Diff => filter_occ (fun i t => Nat.leb (tuple_count t l2) i) nil l1
+  | Set_All, UnionMax =>
+    l1 ++ filter_occ (fun i t => Nat.leb (tuple_count t l1) i) nil l2
   | Set_Distinct, Union | Set_Distinct, UnionMax => dedup (l1 ++ l2)
   | Set_Distinct, Inter => filter (fun t => tuple_mem t l2) (dedup l1)
   | Set_Distinct, Diff => filter (fun t => negb (tuple_mem t l2)) (dedup l1)
