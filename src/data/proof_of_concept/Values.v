@@ -327,6 +327,14 @@ Definition Qc_is_zero (q : Qc) := match Qccompare q (Qc_of_Z 0) with Eq => true 
 Definition Qc_floor (q : Qc) : Z := Qfloor q.
 Definition Qc_ceiling (q : Qc) : Z := Qceiling q.
 (** truncation towards zero *)
+(** the number which a value stands for, if it is a number *)
+Definition rat_of_value (v : value) : option Q :=
+  match v with
+  | Value_Z (Some z) => Some (inject_Z z)
+  | Value_Q (Some q) => Some (this q)
+  | _ => None
+  end.
+
 Definition Qc_trunc (q : Qc) : Z := Z.quot (Qnum q) (Zpos (Qden q)).
 (** rounding to the nearest integer, ties away from zero *)
 Definition Qc_round (q : Qc) : Z :=

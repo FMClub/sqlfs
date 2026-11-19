@@ -56,11 +56,13 @@
 
 Set Implicit Arguments.
 
-Require Import Relations SetoidList List String Ascii Bool ZArith NArith.
+Require Import Relations SetoidList List String Ascii Bool ZArith NArith QArith.
 
 Require Import BasicFacts ListFacts ListPermut ListSort OrderedSet
         FiniteSet FiniteBag FiniteCollection Join FlatData Tree Bool3 Formula
         Partition.
+
+Close Scope Q_scope.
 
 (** * Syntax which does not depend on the data model *)
 
@@ -96,10 +98,13 @@ Inductive frame_bound : Type :=
     count groups of peers (rows which are equal w.r.t. the ORDER BY of the
     window). A [RANGE] frame whose bounds are [UNBOUNDED PRECEDING],
     [CURRENT ROW] or [UNBOUNDED FOLLOWING] is the [GROUPS] frame with the same
-    bounds; [RANGE] frames with a numerical offset are not covered. *)
+    bounds. In [RANGE] mode with offsets, the frame is made of the rows whose (single) ORDER BY key
+    is within the offsets of the key of the current row; the NULL keys are peers of each other and
+    of nothing else, and the offsets are integers. *)
 Inductive frame : Type :=
   | Frame_Rows : frame_bound -> frame_bound -> frame
-  | Frame_Groups : frame_bound -> frame_bound -> frame.
+  | Frame_Groups : frame_bound -> frame_bound -> frame
+  | Frame_Range : frame_bound -> frame_bound -> frame.
 
 (** The frame which SQL uses when none is given:
     [RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]. Without ORDER BY, all
@@ -188,6 +193,9 @@ Record dialect : Type :=
       order : value -> value -> comparison;
       (** integers as values, used by the ranking window functions *)
       value_of_Z : Z -> value;
+      (** the number which a value stands for, as the key of a [RANGE] window frame with an offset
+          (NULL and the values which are not numbers have none) *)
+      rat_of : value -> option Q;
       (** The key of a value for the operations which identify values which are
           not distinct without being equal: [GROUP BY], [DISTINCT], the set operations
           and [DISTINCT] aggregates. It is the identity when the comparison of strings is
@@ -463,7 +471,7 @@ Definition nulls_features (o : sorder) : list use :=
   end.
 
 Definition frame_bound_is_groups (f : frame) : list use :=
-  match f with Frame_Groups _ _ => (U_Feature F_Frame_Groups) :: nil | Frame_Rows _ _ => nil end.
+  match f with Frame_Groups _ _ => (U_Feature F_Frame_Groups) :: nil | _ => nil end.
 
 Fixpoint sexpr_uses (e : sexpr) {struct e} : list use :=
   match e with
@@ -1031,18 +1039,65 @@ Definition before_end (b : frame_bound) (pi pj : nat) :=
   | Unbounded_Following => true
   end.
 
+(** The positions of a [RANGE] frame with offsets. [rk] are the keys of the rows (negated for a
+    descending order, so that they ascend), [gidx] the numbers of the groups of peers. *)
+Definition range_after_start (b : frame_bound) (rk : list (option Q)) (gidx : list nat) (pi pj : nat) :=
+  let ki := nth pi rk None in
+  let kj := nth pj rk None in
+  match b with
+  | Unbounded_Preceding => true
+  | Current_Row => Nat.leb (nth pi gidx 0) (nth pj gidx 0)
+  | Preceding k => match ki, kj with
+                   | Some a, Some b => Qle_bool (Qminus a (inject_Z (Z.of_nat k))) b
+                   | None, None => true
+                   | _, _ => false
+                   end
+  | Following k => match ki, kj with
+                   | Some a, Some b => Qle_bool (Qplus a (inject_Z (Z.of_nat k))) b
+                   | None, None => true
+                   | _, _ => false
+                   end
+  | Unbounded_Following => false
+  end.
+
+Definition range_before_end (b : frame_bound) (rk : list (option Q)) (gidx : list nat) (pi pj : nat) :=
+  let ki := nth pi rk None in
+  let kj := nth pj rk None in
+  match b with
+  | Unbounded_Preceding => false
+  | Current_Row => Nat.leb (nth pj gidx 0) (nth pi gidx 0)
+  | Preceding k => match ki, kj with
+                   | Some a, Some b => Qle_bool b (Qminus a (inject_Z (Z.of_nat k)))
+                   | None, None => true
+                   | _, _ => false
+                   end
+  | Following k => match ki, kj with
+                   | Some a, Some b => Qle_bool b (Qplus a (inject_Z (Z.of_nat k)))
+                   | None, None => true
+                   | _, _ => false
+                   end
+  | Unbounded_Following => true
+  end.
+
 (** The rows of the frame of the row number [i] of a sorted partition, [gidx]
     being the numbers of the groups of peers of its rows. *)
-Definition frame_rows (fr : frame) (sorted : list tuple) (gidx : list nat) (i : nat) :=
+Definition frame_rows (fr : frame) (sorted : list tuple) (gidx : list nat) (rk : list (option Q)) (i : nat) :=
+  match fr with
+  | Frame_Range lo hi =>
+    map (@snd _ _)
+        (filter (fun x => range_after_start lo rk gidx i (fst x) && range_before_end hi rk gidx i (fst x))
+                (combine (seq 0 (List.length sorted)) sorted))
+  | _ =>
   let (pos, lohi) :=
       match fr with
       | Frame_Rows lo hi => (seq 0 (List.length sorted), (lo, hi))
-      | Frame_Groups lo hi => (gidx, (lo, hi))
+      | Frame_Groups lo hi | Frame_Range lo hi => (gidx, (lo, hi))
       end in
   let pi := nth i pos 0 in
   map (@snd _ _)
       (filter (fun x => after_start (fst lohi) pi (fst x) && before_end (snd lohi) pi (fst x))
-              (combine pos sorted)).
+              (combine pos sorted))
+  end.
 
 Definition ntile (buckets n i : nat) : Z :=
   let q := Nat.div n buckets in
@@ -1054,10 +1109,10 @@ Definition ntile (buckets n i : nat) : Z :=
 (** The value of a window function for the row [t], which is the row number [i]
     (starting from 0) of its sorted partition. *)
 Definition eval_wsem (a : attribute) (w : wsem)
-           (sorted : list tuple) (gidx : list nat) (i : nat) (t : tuple) : value :=
+           (sorted : list tuple) (gidx : list nat) (rk : list (option Q)) (i : nat) (t : tuple) : value :=
   match w with
   | WS_Agg ag sq arg fr =>
-    interp_aggregate T ag (quantify sq (map arg (frame_rows fr sorted gidx i)))
+    interp_aggregate T ag (quantify sq (map arg (frame_rows fr sorted gidx rk i)))
   | WS_Row_Number => value_of_Z O (Z.of_nat (S i))
   | WS_Rank =>
     let gi := nth i gidx 0 in
@@ -1075,13 +1130,13 @@ Definition eval_wsem (a : attribute) (w : wsem)
     | None => dflt t
     end
   | WS_First arg fr =>
-    match frame_rows fr sorted gidx i with t' :: _ => arg t' | nil => null_of a end
+    match frame_rows fr sorted gidx rk i with t' :: _ => arg t' | nil => null_of a end
   | WS_Last arg fr =>
-    match rev (frame_rows fr sorted gidx i) with t' :: _ => arg t' | nil => null_of a end
+    match rev (frame_rows fr sorted gidx rk i) with t' :: _ => arg t' | nil => null_of a end
   | WS_Nth arg n fr =>
     match n with
     | 0 => null_of a
-    | S n => match nth_error (frame_rows fr sorted gidx i) n with
+    | S n => match nth_error (frame_rows fr sorted gidx rk i) n with
              | Some t' => arg t'
              | None => null_of a
              end
@@ -1102,7 +1157,14 @@ Definition eval_window
     (fun g =>
        let sorted := sort_on specs keys g in
        let gidx := peer_groups specs None 0 (map keys sorted) in
-       map (fun it => extend_tuple (snd it) a (eval_wsem a w sorted gidx (fst it) (snd it)))
+       let rk := map (fun k => match k with
+                               | v :: _ => match rat_of O v with
+                                           | Some q => Some (match specs with (Desc, _) :: _ => Qopp q | _ => q end)
+                                           | None => None
+                                           end
+                               | nil => None
+                               end) (map keys sorted) in
+       map (fun it => extend_tuple (snd it) a (eval_wsem a w sorted gidx rk (fst it) (snd it)))
            (indexed sorted))
     (group_on part rows).
 

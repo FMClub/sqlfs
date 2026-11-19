@@ -133,8 +133,7 @@ Still open:
   primary key and selects other columns is rejected although PostgreSQL and MySQL accept it;
   subqueries are not inspected; the value of a bare column in SQLite (an arbitrary row, or the
   row of the `min`/`max`) is still not modelled.
-- **Constructs of the dialects which `SqlFull` does not have**: `RANGE` window frames with an
-  offset,
+- **Constructs of the dialects which `SqlFull` does not have**:
   `FETCH FIRST ... WITH TIES` and `PERCENT` (Oracle mode), `ORDER BY` inside `string_agg`.
 - **Oracle mode** is checked against the documentation and the shared engine code, because the
   open-source repository of OceanBase has neither its parser nor recorded results for it.
@@ -145,7 +144,7 @@ Still open:
 In the expected order of difficulty; priorities are to be decided:
 - (done) recursive CTEs: `SQ_WithRec` iterates the step on the working table (`UNION ALL` appends, `UNION` keeps only new rows and stops on a fixpoint); the number of steps is bounded by `rec_fuel` (1000, as MySQL's `cte_max_recursion_depth`), so a non-terminating recursion returns the rows of the first 1000 steps instead of an error; mutual and multiple recursion are not modelled;
 - (done) `GROUPING SETS` / `ROLLUP` / `CUBE` / `GROUPING()`: grouping expressions that a set does not group read as NULL; limitation: `ORDER BY` keys are not masked;
-- `RANGE` window frames with a numeric offset, frame exclusion;
+- (done) `RANGE` window frames with integer offsets (`Frame_Range`): single numeric ORDER BY key, descending order mirrored, NULL keys are peers of each other only; decimal offsets, `INTERVAL` offsets and frame exclusion are not covered;
 - date/time types, floating-point numbers, collations;
 - ordered-set aggregates (`percentile_cont`, ...), aggregates with several
   arguments, `ORDER BY` inside `string_agg`.
