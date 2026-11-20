@@ -333,3 +333,93 @@ rewrite H2; replace (existsb (fun r0 => eqk (ck r0) (ck r)) (firsts_acc nil l)) 
 Qed.
 
 End Sec.
+
+(** * The grouping sets of [ROLLUP] (TODO 6.4)
+
+    [rollup_groupings]: the groups of [GROUP BY ROLLUP (e1, ..., en)] are, for [k] from [n] down to [0], the
+    groups of [GROUP BY e1, ..., ek] (all the rows for [k = 0]), in which the expressions [e(k+1), ..., en]
+    are hidden (NULL): [ROLLUP] is the [UNION ALL] of the groupings by its prefixes. *)
+Section Rollup.
+
+Hypothesis T : Tuple.Rcd.
+Hypothesis O : dialect T.
+Hypothesis relname : Type.
+
+Import Tuple.
+
+Notation sexpr := (sexpr T relname).
+
+Lemma group_on_list_ext :
+  forall (X : Type) (k1 k2 : X -> list (value T)) l, (forall x, k1 x = k2 x) ->
+    group_on_list O k1 l = group_on_list O k2 l.
+Proof.
+intros X k1 k2 l H; unfold group_on_list; f_equal.
+generalize (@nil (list (value T) * list X)); induction l as [ | x l IH]; intro acc; [reflexivity | ].
+simpl; rewrite H; apply IH.
+Qed.
+
+Lemma group_on_ext :
+  forall (X : Type) (k1 k2 : X -> list (value T)) l, (forall x, k1 x = k2 x) -> group_on O k1 l = group_on O k2 l.
+Proof. intros X k1 k2 l H; rewrite !group_on_spec; apply group_on_list_ext; exact H. Qed.
+
+Lemma skipn_nth :
+  forall (A : Type) (l : list A) s d, s < length l -> skipn s l = nth s l d :: skipn (S s) l.
+Proof.
+intros A l; induction l as [ | a l IH]; intros s d H; [simpl in H; lia | ].
+destruct s as [ | s]; [reflexivity | ]; simpl in *; apply IH; lia.
+Qed.
+
+Lemma map_nth_seq :
+  forall (A : Type) (l : list A) d k s, s + k <= length l ->
+    map (fun i => nth i l d) (seq s k) = firstn k (skipn s l).
+Proof.
+intros A l d k; induction k as [ | k IH]; intros s H; [reflexivity | ].
+simpl; rewrite (@skipn_nth _ l s d) by lia; simpl; f_equal; apply IH; lia.
+Qed.
+
+Lemma map_nth_prefix :
+  forall (A : Type) (l : list A) d k, k <= length l -> map (fun i => nth i l d) (seq 0 k) = firstn k l.
+Proof. intros A l d k H; rewrite map_nth_seq by lia; reflexivity. Qed.
+
+Lemma firstn_seq0 : forall n k, k <= n -> firstn k (seq 0 n) = seq 0 k.
+Proof.
+intros n k H; rewrite <- (@map_nth_prefix _ (seq 0 n) 0 k) by (rewrite seq_length; exact H).
+transitivity (map (fun i => i) (seq 0 k)); [ | rewrite map_id; reflexivity].
+apply map_ext_in; intros i I; apply in_seq in I; rewrite seq_nth by lia; reflexivity.
+Qed.
+
+Lemma flat_map_map' :
+  forall (A B C : Type) (f : B -> list C) (g : A -> B) (l : list A), flat_map f (map g l) = flat_map (fun x => f (g x)) l.
+Proof. intros A B C f g l; induction l as [ | x l IH]; simpl; [reflexivity | rewrite IH; reflexivity]. Qed.
+
+Lemma flat_map_ext_in' :
+  forall (A B : Type) (f g : A -> list B) (l : list A), (forall x, In x l -> f x = g x) -> flat_map f l = flat_map g l.
+Proof.
+intros A B f g l H; induction l as [ | x l IH]; simpl; [reflexivity | ].
+rewrite (H x (or_introl eq_refl)), IH; [reflexivity | intros y I; apply H; right; exact I].
+Qed.
+
+Theorem rollup_groupings :
+  forall (f : sexpr -> tuple T -> value T) (l : list sexpr) (rows : list (tuple T)),
+    set_groupings O (fun t => map (fun e => f e t) l) l (rollup_sets (seq 0 (length l))) rows =
+    flat_map (fun k =>
+                let set := firstn k l in
+                let hid := filter (fun e => negb (existsb (sexpr_eqb e) set)) l in
+                map (fun grp => (grp, hid))
+                    (match k with
+                     | 0 => rows :: nil
+                     | _ => group_on O (fun t => map (fun e => f e t) (firstn k l)) rows
+                     end))
+             (rev (seq 0 (S (length l)))).
+Proof.
+intros f l rows; unfold set_groupings, rollup_sets; rewrite flat_map_map', seq_length.
+apply flat_map_ext_in'; intros k I; rewrite <- in_rev, in_seq in I.
+assert (K : k <= length l) by lia.
+rewrite (firstn_seq0 (length l) k K), (@map_nth_prefix _ l _ k K).
+destruct k as [ | k]; [reflexivity | ].
+cbn zeta; f_equal; apply group_on_ext; intro t.
+rewrite (@map_nth_prefix _ (map (fun e => f e t) l)) by (rewrite map_length; exact K).
+apply firstn_map.
+Qed.
+
+End Rollup.
