@@ -69,7 +69,9 @@ Fixpoint inline_flags_aux (fuel : nat) (l : list Z) (on : bool) (o : ropts) : op
 Definition inline_flags (p : list Z) (o : ropts) : option (list Z * ropts) :=
   match p with
   | 40 :: 63 :: r => match r with
-                     | (105 | 109 | 115 | 45) :: _ => inline_flags_aux (List.length r) r true o
+                     | (105 | 109 | 115 | 45) :: _ =>
+                       (* not followed by [)]: a scoped group [(?i:...)], left to the parser *)
+                       match inline_flags_aux (List.length r) r true o with Some x => Some x | None => Some (p, o) end
                      | _ => Some (p, o) end
   | _ => Some (p, o)
   end.

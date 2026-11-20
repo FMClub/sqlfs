@@ -90,3 +90,8 @@ Proof. check. Qed.
 (** leading inline flags of a regular expression ([(?i)]: MySQL [regular_expressions_func.result]) *)
 Example my_rx_inline : val MySQL (e_case (pred "regexp" [str "ABC"; str "(?i)^abc$"]) (int 1) (int 0)) = "1".
 Proof. check. Qed.
+(** scoped inline flags ([(?i:a)b]: the [a] in either case, the [b] in lower case) *)
+Example my_rx_scoped : (val MySQL (e_case (pred "regexp" [str "Ab"; str "(?i:a)b"]) (int 1) (int 0)),
+                        val PostgreSQL (e_case (pred "~" [str "Ab"; str "((?i)a)b"]) (int 1) (int 0)),
+                        val PostgreSQL (e_case (pred "~" [str "aB"; str "((?i)a)b"]) (int 1) (int 0))) = ("1", "1", "0").
+Proof. check. Qed.
