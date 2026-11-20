@@ -21,8 +21,14 @@ jobs:
             startGroup "Build the library and check the examples"
               make -j2
             endGroup
+            startGroup "The main results use no axiom"
+              (cd src && coqc -R . SQLFS testing/Assumptions.v) | tee /tmp/assumptions.txt
+              if grep -q "Axioms:" /tmp/assumptions.txt; then exit 1; fi
+            endGroup
       - name: Revert permissions
         if: always()
         run: sudo chown -R 1001:116 .
       - name: Check the provenance of the function tables
         run: python3 tools/functions/check_provenance.py
+      - name: Coq hygiene (no Admitted, no Axiom, the core imports no dialect)
+        run: python3 tools/check_hygiene.py
