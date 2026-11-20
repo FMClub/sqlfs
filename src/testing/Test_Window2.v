@@ -17,7 +17,7 @@ Definition rows (d : vsem) (q : squery) (n : nat) : list (list string) :=
   map (fun t => map (fun i => show_value (dot (TD d) t (out_attr i))) (seq 0 n)) (run d q).
 Definition result_is (d : vsem) (q : squery) (n : nat) (expected : list (list string)) : bool :=
   match_unordered (map (fun t => map (fun i => dot (TD d) t (out_attr i)) (seq 0 n)) (run d q)) expected.
-Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (to_dialect d q).
+Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (vs_supports d) (to_dialect d q).
 
 Definition five := values_ [c0] [[int 1]; [int 2]; [int 3]; [int 4]; [int 5]].
 Definition ties := values_ [c0] [[int 1]; [int 2]; [int 2]; [int 3]].

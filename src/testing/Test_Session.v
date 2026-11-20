@@ -61,5 +61,5 @@ Proof. check. Qed.
 Definition bare := select_grouped [as_ (col c0) c0; as_ (agg "count" (col c0)) (Attr_Z "c1")] [from_table "t"] (g_by []).
 
 Example only_full_group_by :
-  map (fun d => accepted_by (dialect_of d) (to_dialect d bare)) [MySQL; MySQL'; MariaDB; TiDB] = [false; true; true; false].
+  map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d bare)) [MySQL; MySQL'; MariaDB; TiDB] = [false; true; true; false].
 Proof. check. Qed.

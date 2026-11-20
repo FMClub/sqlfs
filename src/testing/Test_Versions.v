@@ -8,7 +8,7 @@ Import ListNotations.
 Open Scope string_scope.
 Ltac check := vm_compute; reflexivity.
 Notation c0 := (Attr_Z "c0").
-Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (to_dialect d q).
+Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (vs_supports d) (to_dialect d q).
 Definition t := values_ [c0] [[int 1]; [int 2]].
 
 (** [INTERSECT]: MySQL 8.0.31, MariaDB 10.3, TiDB 5.0 *)

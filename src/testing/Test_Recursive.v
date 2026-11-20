@@ -85,6 +85,6 @@ Example fibonacci :
 Proof. check. Qed.
 
 Example accepted_recursive :
-  map (fun d => accepted_by (dialect_of d) (to_dialect d (upto Set_All)))
+  map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d (upto Set_All)))
       [PostgreSQL; MySQL; SQLite; OceanBaseMySQL; OceanBaseOracle] = [true; true; true; true; true].
 Proof. check. Qed.

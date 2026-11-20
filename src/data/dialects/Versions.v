@@ -5,7 +5,7 @@
     construct which is not in the table is accepted by every version which the dialect record covers.
     [at_version d fam v] is the dialect [d] restricted to the constructs of version [v]. *)
 Require Import List String Bool Arith.
-Require Import SqlFull Dialects PostgreSQL MySQL SQLite MariaDB TiDB.
+Require Import SqlFull Dialects PostgreSQL MySQL SQLite MariaDB TiDB GenericInstance.
 Import ListNotations.
 Open Scope string_scope.
 
@@ -75,6 +75,33 @@ Proof. induction v as [|x v IH]; simpl; [reflexivity|]. rewrite Nat.ltb_irrefl. 
 
 Lemma supported_at_intro fam f v0 : introduced fam f = Some v0 -> supported_in fam v0 f = true.
 Proof. unfold supported_in. intros ->. apply version_le_refl. Qed.
+
+(** * Refinement (TODO 6.4)
+
+    A version of a dialect evaluates every query as the dialect ([version_eval]: its record of evaluation is the
+    one of the dialect, the constructs being a part of acceptance only), and accepts only queries which the
+    dialect accepts ([version_accepted]): a version refines its dialect. *)
+Lemma version_dialect : forall d fam v, dialect_of (at_version d fam v) = dialect_of d.
+Proof. reflexivity. Qed.
+
+Lemma version_to_dialect :
+  forall d fam v (rel : Type) (q : squery TNull rel), to_dialect (at_version d fam v) q = to_dialect d q.
+Proof. reflexivity. Qed.
+
+Theorem version_eval :
+  forall d fam v (rel : Type) ORN basesort instance ce env (q : squery TNull rel),
+    eval_squery ORN (dialect_of (at_version d fam v)) basesort instance ce env (to_dialect (at_version d fam v) q) =
+    eval_squery ORN (dialect_of d) basesort instance ce env (to_dialect d q).
+Proof. reflexivity. Qed.
+
+Theorem version_accepted :
+  forall d fam v (rel : Type) (q : squery TNull rel),
+    accepted_by (dialect_of (at_version d fam v)) (vs_supports (at_version d fam v)) (to_dialect (at_version d fam v) q) = true ->
+    accepted_by (dialect_of d) (vs_supports d) (to_dialect d q) = true.
+Proof.
+intros d fam v rel q A; apply (accepted_mono (dialect_of d) (vs_supports (at_version d fam v))); [ | exact A].
+intro f; apply at_version_sub.
+Qed.
 
 Definition MySQL57 := at_version MySQL Fam_MySQL [5; 7].
 Definition MySQL80 := at_version MySQL Fam_MySQL [8; 0; 30].

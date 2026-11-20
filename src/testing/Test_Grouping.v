@@ -116,7 +116,7 @@ Proof. check. Qed.
 (** * Which dialect accepts which grouping *)
 
 Definition acceptance (q : squery) := 
-  map (fun d => accepted_by (dialect_of d) (to_dialect d q)) 
+  map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d q)) 
       [PostgreSQL; MySQL; SQLite; OceanBaseMySQL; OceanBaseOracle].
 
 Example accepted_grouping_sets : 

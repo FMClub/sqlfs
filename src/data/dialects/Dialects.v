@@ -160,7 +160,6 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              NullValues.value_of_rat
              (vs_canon d)
              (vs_nulls_smallest d)
-             (vs_supports d)
              (vs_known_symbol d)
              (vs_known_predicate d)
              (vs_known_aggregate d)

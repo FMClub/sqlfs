@@ -39,7 +39,7 @@ Definition dbl (n : Z) := cst (VFl false n 0).
 Require Import MariaDB.
 
 Definition accepts (d : vsem) (e : sexpr) : bool :=
-  accepted_by (dialect_of d) (to_dialect d (select_where [as_ e c0] [] c_true)).
+  accepted_by (dialect_of d) (vs_supports d) (to_dialect d (select_where [as_ e c0] [] c_true)).
 
 (** [LPAD] takes three arguments in MySQL, two or three in MariaDB and PostgreSQL *)
 Example lpad_my : accepts MySQL (fn "lpad" [str "a"; int 3]) = false.

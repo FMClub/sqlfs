@@ -17,7 +17,7 @@ Ltac check := vm_compute; reflexivity.
 Notation c0 := (Attr_Z "c0").
 
 Definition acceptance (q : squery) := 
-  map (fun d => accepted_by (dialect_of d) (to_dialect d q)) [MySQL; MariaDB].
+  map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d q)) [MySQL; MariaDB].
 
 Definition nums := values_ [c0] [[int 1]; [int 2]].
 
@@ -55,7 +55,7 @@ Proof. check. Qed.
 Require Import TiDB.
 
 Definition acceptance3 (q : squery) := 
-  map (fun d => accepted_by (dialect_of d) (to_dialect d q)) [MySQL; MariaDB; TiDB].
+  map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d q)) [MySQL; MariaDB; TiDB].
 
 Example tidb_full_join : 
   acceptance3 (select_star_where [join J_Full (from_table "p") (from_table "q") c_true] c_true) = [false; false; true].
@@ -87,7 +87,7 @@ Proof. check. Qed.
 Require Import Percona PolarDB.
 
 Definition acceptance_my (q : squery) := 
-  map (fun d => accepted_by (dialect_of d) (to_dialect d q)) [MySQL; Percona; PolarDB].
+  map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d q)) [MySQL; Percona; PolarDB].
 
 Example polar_no_intersect : 
   acceptance_my (set_op_ Inter Set_Distinct nums nums) = [true; true; false].

@@ -45,6 +45,13 @@ Definition fold_case v :=
   | _ => v 
   end.
 
+(** the constructs of [CI] *)
+Definition CI_supports (f : feature) : bool :=
+  match f with
+  | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
+  | _ => true
+  end.
+
 Definition CI : dialect TNull :=
   mk_dialect TNull
              NullValues.is_null
@@ -58,10 +65,6 @@ Definition CI : dialect TNull :=
              NullValues.value_of_rat
              fold_case
              true
-             (fun f => match f with 
-                       | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false 
-                       | _ => true 
-                       end)
              (fun _ _ => true) (fun _ => true) (fun _ => true)
              NullValues.is_err NullValues.Value_Err (Attr_string "#error")
              NullValues.is_lazy_symbol (fun _ _ => false) false (fun v => v) (fun _ => false)
@@ -236,11 +239,11 @@ Example features_4 :
   squery_features groups_frame_query = [F_Window; F_Frame_Groups]. Proof. check. Qed.
 
 Example accepted_pg : 
-  forallb (fun q => accepted_by TNull_PostgreSQL q) 
+  forallb (fun q => accepted_by TNull_PostgreSQL (fun _ => true) q) 
           [full_join_query; lateral_query; nulls_query; groups_frame_query] = true.
 Proof. check. Qed.
 
 Example rejected_ci : 
-  map (fun q => accepted_by CI q) [full_join_query; lateral_query; nulls_query; groups_frame_query]
+  map (fun q => accepted_by CI CI_supports q) [full_join_query; lateral_query; nulls_query; groups_frame_query]
   = [false; true; false; false].
 Proof. check. Qed.
