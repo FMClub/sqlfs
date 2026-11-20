@@ -88,14 +88,48 @@ def ex(e):
         if star:
             return '%s(*)' % name
         return '%s(%s%s)' % (name, 'DISTINCT ' if distinct else '', ', '.join(ex(a) for a in args))
-    if k == 'cast' and e[1] in ('signed', 'unsigned', 'char', 'date', 'datetime', 'time', 'double', 'decimal', 'integer',
-                                'int', 'text', 'varchar', 'binary', 'json'):
+    if k == 'cast':
         return 'CAST(%s AS %s)' % (ex(e[2]), e[1].upper())
+    if k == 'cast_dec':
+        return 'CAST(%s AS DECIMAL(%d, %d))' % (ex(e[3]), e[1], e[2])
+    if k == 'quant':
+        lhs = ex(e[3][0]) if len(e[3]) == 1 else '(%s)' % ', '.join(ex(x) for x in e[3])
+        return '(%s %s %s (%s))' % (lhs, e[1], e[2].upper(), query(e[4]))
+    if k == 'wcall':
+        call, spec, ign = e[1], e[2], e[3]
+        txt = ex(call) + (' IGNORE NULLS' if ign else '')
+        return '%s OVER %s' % (txt, window_spec(spec))
     if k == 'temporal':
         return '%s %s' % (e[1].upper(), lit(e[2]))
     if k == 'interval':
         return 'INTERVAL %s %s' % (ex(e[1]), e[2])
     raise Unsupported(k)
+
+
+def window_spec(spec):
+    _, base, part, order, frame = spec
+    if base is not None and not part and not order and frame is None:
+        return ident(base)
+    out = []
+    if base is not None:
+        out.append(ident(base))
+    if part:
+        out.append('PARTITION BY ' + ', '.join(ex(x) for x in part))
+    if order:
+        out.append('ORDER BY ' + ', '.join('%s %s%s' % (ex(x), d.upper(), ' NULLS %s' % n.upper() if n else '')
+                                           for x, d, n in order))
+    if frame is not None:
+        mode, lo, hi, excl = frame
+
+        def b(x):
+            return {'up': 'UNBOUNDED PRECEDING', 'uf': 'UNBOUNDED FOLLOWING', 'cr': 'CURRENT ROW'}.get(x[0]) or \
+                '%d %s' % (x[1], 'PRECEDING' if x[0] == 'p' else 'FOLLOWING')
+        ft = '%s BETWEEN %s AND %s' % (mode.upper(), b(lo), b(hi))
+        if excl:
+            ft += ' EXCLUDE ' + {'Excl_Current_Row': 'CURRENT ROW', 'Excl_Group': 'GROUP', 'Excl_Ties': 'TIES',
+                                 'Excl_No_Others': 'NO OTHERS'}[excl]
+        out.append(ft)
+    return '(%s)' % ' '.join(out)
 
 
 def frm(f):
@@ -109,8 +143,14 @@ def frm(f):
     if k == 'join':
         jt, l, r, c = f[1], f[2], f[3], f[4]
         using = f[5] if len(f) > 5 else None
+        if isinstance(using, str):
+            # NATURAL JOIN (the parser keeps the marker in the place of the USING list)
+            return '(%s NATURAL %s %s)' % (frm(l), {'inner': 'JOIN', 'left': 'LEFT JOIN', 'right': 'RIGHT JOIN',
+                                                    'full': 'FULL JOIN', 'cross': 'JOIN'}[jt], frm(r))
         if using:
-            raise Unsupported('using')
+            return '(%s %s %s USING (%s))' % (frm(l), {'inner': 'JOIN', 'left': 'LEFT JOIN', 'right': 'RIGHT JOIN',
+                                                         'full': 'FULL JOIN', 'cross': 'JOIN'}[jt], frm(r),
+                                              ', '.join(ident(x) for x in using))
         word = {'cross': 'CROSS JOIN', 'inner': 'JOIN', 'left': 'LEFT JOIN', 'right': 'RIGHT JOIN',
                 'full': 'FULL JOIN'}.get(jt)
         if word is None:
@@ -134,8 +174,9 @@ def select(s):
         txt += ' WHERE ' + ex(where)
     if group is not None:
         if isinstance(group, tuple):
-            raise Unsupported('grouping sets')
-        txt += ' GROUP BY ' + ', '.join(ex(x) for x in group)
+            txt += ' GROUP BY GROUPING SETS (%s)' % ', '.join('(%s)' % ', '.join(ex(x) for x in st) for st in group[1])
+        else:
+            txt += ' GROUP BY ' + ', '.join(ex(x) for x in group)
     if having is not None:
         txt += ' HAVING ' + ex(having)
     return txt
