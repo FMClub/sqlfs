@@ -55,6 +55,8 @@ the right size (`limit_any`). The translator also reads aliases in `HAVING` and 
 
 - `rqg_subquery_semijoin_nested_timeout` (one query) exceeds the time limit of the runner (`FILE_TIMEOUT`,
   900 s): the tuples of the model are lists, so a row of many columns is slow to build.
+  The extracted OCaml interpreter (`tools/extraction/build.sh`) did not finish it in 72 minutes either: the
+  cost is in the semantics (nested semi-joins over list-based tuples), not in `vm_compute`.
   `join_many_table` (32 left joins) passes since the labels of a joined row are computed once
   (`join_tuple`) and the rows of a join are checked for errors only when an operand holds a failed row.
 
