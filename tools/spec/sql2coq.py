@@ -1021,7 +1021,9 @@ class P:
                 return ('pginterval', lit)
             n = self.e_primary()
             unit = self.peek()[1]
-            if unit.upper() not in ('YEAR', 'QUARTER', 'MONTH', 'WEEK', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'MICROSECOND'):
+            if unit.upper() not in ('YEAR', 'QUARTER', 'MONTH', 'WEEK', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'MICROSECOND',
+                                    'YEAR_MONTH', 'DAY_HOUR', 'DAY_MINUTE', 'DAY_SECOND', 'HOUR_MINUTE', 'HOUR_SECOND',
+                                    'MINUTE_SECOND'):
                 raise Skip('interval unit')
             self.i += 1
             return ('interval', n, unit.upper())
@@ -1364,7 +1366,9 @@ AGGS = {'count', 'sum', 'avg', 'min', 'max', 'group_concat', 'bit_and', 'bit_or'
 # the aggregates of two arguments
 AGGS2 = {'covar_pop', 'covar_samp', 'corr', 'regr_count', 'regr_slope', 'regr_intercept', 'regr_r2', 'regr_sxx',
          'regr_syy', 'regr_sxy', 'regr_avgx', 'regr_avgy', 'json_objectagg', 'json_object_agg', 'jsonb_object_agg'}
-FUNS = {'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power', 'pow', 'mod', 'greatest', 'least',
+FUNS = {'date_add', 'date_sub', 'bin', 'oct', 'conv', 'crc32', 'inet_aton', 'inet_ntoa', 'quote', 'make_set',
+        'export_set', 'weekofyear', 'sqrt', 'exp', 'ln', 'log', 'log2', 'log10', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'cot',
+        'pi', 'degrees', 'radians', 'cbrt', 'abs', 'sign', 'floor', 'ceil', 'ceiling', 'round', 'truncate', 'power', 'pow', 'mod', 'greatest', 'least',
         'coalesce', 'ifnull', 'nullif', 'concat', 'concat_ws', 'length', 'char_length', 'upper', 'lower', 'trim',
         'ltrim', 'rtrim', 'reverse', 'substring', 'substr', 'mid', 'left', 'right', 'replace', 'repeat', 'locate',
         'instr', 'ucase', 'lcase', 'character_length', 'ascii', 'space', 'lpad', 'rpad', 'strcmp', 'if',
@@ -1724,7 +1728,9 @@ class QTr:
                 if len(cols) != n:
                     raise Skip('derived arity')
                 names = cols
-            if len(set(x.lower() for x in names)) != len(names) or any(x is None for x in names):
+            # an unnamed column (an expression without alias) cannot be referenced: a placeholder name
+            names = [x if x is not None else '#c%d' % i for i, x in enumerate(names)]
+            if len(set(x.lower() for x in names)) != len(names):
                 raise Skip('derived column names')
             t = Table(alias, [(nm, 'Z') for nm in names])
             ctx.scope.append((alias, t))
@@ -2321,6 +2327,9 @@ def parse_create(toks):
                     raise Skip('eof')
                 elif t[0] in ('id', 'kw') and t[1].lower() == 'unsigned' and ty in NUM_TYPES and ENGINE == 'mysql':
                     width = ('uns', ty)
+                elif t[0] in ('id', 'kw') and t[1].lower() == 'unsigned' and ENGINE == 'mysql' and \
+                        ty in ('float', 'double', 'real', 'decimal', 'numeric'):
+                    pass  # UNSIGNED on a float or a decimal only rejects the negative values (an error: not replayed)
                 elif t[0] in ('id', 'kw') and t[1].lower() in ('collate', 'charset', 'character', 'zerofill', 'default', 'auto_increment', 'generated', 'as', 'binary', 'unsigned', 'on', 'check', 'references'):
                     raise Skip('column option ' + t[1])
                 p.i += 1
@@ -2677,6 +2686,10 @@ def process(path, out, stats):
         if not toks:
             continue
         head = toks[0][1].lower() if toks[0][0] in ('id', 'kw') else ''
+        # a parenthesised query: (SELECT ...) UNION (SELECT ...)
+        if head == '' and toks[0] == ('op', '(') and len(toks) > 1 and toks[1][0] in ('id', 'kw') and \
+                toks[1][1].lower() in ('select', 'with', 'values'):
+            head = 'select'
         if failed and head in ('create', 'insert', 'update', 'delete', 'replace', 'alter', 'truncate', 'rename'):
             continue
         try:
@@ -2845,6 +2858,9 @@ def process(path, out, stats):
                     sys.stderr.write('SKIP %s :: %s\n' % (e, s[:200].replace('\n', ' ')))
                 stats['skip'][str(e).split(' ')[0] + ' ' + (str(e).split(' ')[1] if ' ' in str(e) else '')] = stats['skip'].get(str(e).split(' ')[0] + ' ' + (str(e).split(' ')[1] if ' ' in str(e) else ''), 0) + 1
         except (IndexError, KeyError, ValueError, AttributeError, RecursionError) as e:
+            if os.environ.get('SQL2COQ_DEBUG'):
+                import traceback
+                sys.stderr.write('INTERNAL %s :: %s\n%s' % (e, s[:200], traceback.format_exc(limit=4)))
             if head == 'select':
                 stats['skip']['internal ' + type(e).__name__] = stats['skip'].get('internal ' + type(e).__name__, 0) + 1
     if cases:

@@ -359,6 +359,31 @@ Definition parse_bound (l : list Z) : option (nat * option nat * list Z) :=
   | _ => None
   end.
 
+(** case folding of a sub-pattern, for the scoped inline flag [(?i:...)] and [((?i)...)]: a letter matches
+    its two cases, and the letter ranges of a class are completed with their other case (the back
+    references of the sub-pattern stay case-sensitive) *)
+Definition other_case_ranges (it : citem) : list citem :=
+  match it with
+  | CI_Range a b =>
+    (if Z.leb (Z.max a 97) (Z.min b 122) then CI_Range (Z.max a 97 - 32) (Z.min b 122 - 32) :: nil else nil) ++
+    (if Z.leb (Z.max a 65) (Z.min b 90) then CI_Range (Z.max a 65 + 32) (Z.min b 90 + 32) :: nil else nil)
+  | CI_Upper | CI_Lower => CI_Alpha :: nil
+  | _ => nil
+  end.
+
+Fixpoint ci_re (r : re) : re :=
+  match r with
+  | R_Char c => if is_upper c || is_lower c then R_Set false (CI_Range (fold c) (fold c) :: CI_Range (fold c - 32) (fold c - 32) :: nil) else r
+  | R_Set neg items => R_Set neg (items ++ flat_map other_case_ranges items)
+  | R_Seq a b => R_Seq (ci_re a) (ci_re b)
+  | R_Alt a b => R_Alt (ci_re a) (ci_re b)
+  | R_Rep a mn mx g => R_Rep (ci_re a) mn mx g
+  | R_Group n a => R_Group n (ci_re a)
+  | R_Look b a => R_Look b (ci_re a)
+  | R_LookB b a => R_LookB b (ci_re a)
+  | _ => r
+  end.
+
 Section Parse.
 Variable fl : flavor.
 
@@ -421,6 +446,14 @@ with p_atom (fuel : nat) (l : list Z) (g : nat) {struct fuel} : option (re * lis
   | O => None
   | S f =>
     match l with
+    (* the scoped flag [i]: [(?i:r)], [(?:(?i)r)] and [((?i)r)] (ICU, PCRE, RE2) *)
+    | 40 :: 63 :: 105 :: 58 :: r =>
+      match p_alt f r g with Some (a, 41 :: r', g') => Some (ci_re a, r', g') | _ => None end
+    | 40 :: 63 :: 58 :: 40 :: 63 :: 105 :: 41 :: r =>
+      match p_alt f r g with Some (a, 41 :: r', g') => Some (ci_re a, r', g') | _ => None end
+    | 40 :: 40 :: 63 :: 105 :: 41 :: r =>
+      let n := S g in
+      match p_alt f r n with Some (a, 41 :: r', g') => Some (R_Group n (ci_re a), r', g') | _ => None end
     | 40 :: 63 :: 58 :: r =>   (* (?: *)
       match p_alt f r g with Some (a, 41 :: r', g') => Some (a, r', g') | _ => None end
     | 40 :: 63 :: 61 :: r =>   (* (?= *)

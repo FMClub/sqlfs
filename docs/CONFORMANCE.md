@@ -47,6 +47,8 @@ and `datetime(6)` columns are translated since TODO 1.5. String functions, bit o
 and the standard syntaxes `TRIM(... FROM ...)`, `POSITION`, `SUBSTRING ... FROM` are translated since TODO
 2.1–2.3.
 
+Run 20 (after TODO 5.6: mathematical functions, `DATE_ADD` and composite interval units in the translator): **774** translated, **773** pass, the remaining one being the time-limit case below.
+
 Run 16 is the latest, made after TODO 3.9–3.11. Since then the runner checks a query whose order is not fully determined
 against the groups of rows with equal sort keys (`ties_ok`), and a `LIMIT` without `ORDER BY` as any sub-bag of
 the right size (`limit_any`). The translator also reads aliases in `HAVING` and `ORDER BY`, locking clauses

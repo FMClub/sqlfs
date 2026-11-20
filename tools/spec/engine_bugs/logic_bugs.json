@@ -1,0 +1,50 @@
+[
+  {
+    "engine": "TiDB",
+    "id": "38756",
+    "url": "https://github.com/pingcap/tidb/issues/38756",
+    "status": "fixed (closed by PR #50020, commit 1a5a72aa 'planner: do not remove the first row func if it is a constant')",
+    "setup": ["CREATE TABLE t (c1 int);", "INSERT INTO t VALUES (1), (2), (3);"],
+    "query": "SELECT DISTINCT SQRT(1) FROM t;",
+    "wrong": [["5e-324"]],
+    "correct": [["1"]],
+    "correct_source": "Fix commit test TestIssue38756 (pkg/executor/test/executor/executor_test.go): tk.MustQuery(\"(SELECT DISTINCT SQRT(1) FROM t)\").Check(testkit.Rows(\"1\")); also SELECT SQRT(1) FROM t -> 1,1,1. Wrong value 5e-324 from the reporter's issue (TiDB 6.3.0).",
+    "found_by": "Pinolo"
+  },
+  {
+    "engine": "TiDB",
+    "id": "40015",
+    "url": "https://github.com/pingcap/tidb/issues/40015",
+    "status": "fixed (closed by PR #41786, commit cfe9703a 'expression: fix error handling of DateAddString vectorized function')",
+    "setup": ["CREATE TABLE t (c1 FLOAT UNSIGNED);", "INSERT INTO t VALUES (47),(28.1237);"],
+    "query": "SELECT (DATE_ADD(BIN(c1), INTERVAL 1 DAY_HOUR)) AS f1 FROM (SELECT 1 FROM t) AS t1 JOIN (SELECT c1 FROM t) AS t2 ON (0 AND c1 != 1) IS FALSE;",
+    "wrong": [["NULL"], ["NULL"], ["NULL"], ["NULL"]],
+    "correct": [["2010-11-11 01:00:00"], ["2010-11-11 01:00:00"], ["NULL"], ["NULL"]],
+    "correct_source": "Correct rows = the reporter's sql1 (same query with ON 1, ON condition is always true here), whose values are confirmed by the fix's test TestIssue40015: DATE_ADD(c1, INTERVAL 1 DAY_HOUR) over varchar values 101111 (=BIN(47)) and 11100 (=BIN(28)) must give '2010-11-11 01:00:00' and NULL respectively. Row order is unspecified (no ORDER BY).",
+    "found_by": "Pinolo"
+  },
+  {
+    "engine": "MariaDB",
+    "id": "MDEV-30255",
+    "url": "https://jira.mariadb.org/browse/MDEV-30255",
+    "status": "fixed (commit da20c1754, 2026-04-17, 'MDEV-30255 0 changed to 0.0 caused by DISTINCT and UNION ALL', in 10.11 branch tests)",
+    "setup": ["CREATE TABLE t (c1 double);", "INSERT INTO t VALUES (0.1);"],
+    "query": "(SELECT (c1 DIV 1)*0.1 FROM t) UNION ALL (SELECT '1');",
+    "wrong": [["0"], ["1"]],
+    "correct": [["0.0"], ["1"]],
+    "correct_source": "Fix commit test mysql-test/main/type_newdecimal.result: '(select (c1 div 1)*0.1 from t) union all (select '1');' -> rows '0.0' and '1'. The wrong '0' is the non-DISTINCT output from the reporter's test case (10.11.1). Note: difference is the textual rendering of decimal zero in a UNION with a string column.",
+    "found_by": "Pinolo"
+  },
+  {
+    "engine": "MySQL",
+    "id": "119321",
+    "url": "https://bugs.mysql.com/bug.php?id=119321",
+    "status": "confirmed (per ValScope bug list README; bug page itself not reachable from this session)",
+    "setup": ["CREATE TABLE t1 (c1 INT , c4 INT);", "INSERT INTO t1 (c1, c4) VALUES (3584, 36);", "CREATE UNIQUE INDEX idx_t1_pk_c4 ON t1 (c1, c4);"],
+    "query": "SELECT t1.c1 AS c1, SUM(DISTINCT t1.c4) AS col_1, DENSE_RANK() OVER (ORDER BY 1 = 1) AS col_1_2 FROM t1 AS t1 WHERE (NOT REGEXP_LIKE(t1.c1, '[0-9]{3}-[0-9]{2}-[0-9]{4}')) GROUP BY t1.c1;",
+    "wrong": [["3584", "NULL", "1"]],
+    "correct": [["3584", "36", "1"]],
+    "correct_source": "ValScope paper (OSDI 2026) Figure 1 'MySQL Bug #119321': mutated query '--result: 3584 | 36 | 1 --(expected)' / '--result: 3584 | NULL | 1 --(actual)'; text: 'the expected result should be 36 ... However, MySQL wrongly returns NULL'. Uses a window function and REGEXP_LIKE (outside the preferred feature list).",
+    "found_by": "ValScope"
+  }
+]

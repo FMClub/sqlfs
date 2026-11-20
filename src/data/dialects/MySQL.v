@@ -343,6 +343,40 @@ Definition my_locate (l : list value) : value :=
   | _ => Value_Z None
   end.
 
+(** The composite units of [INTERVAL expr unit] ([DAY_HOUR], [HOUR_SECOND], ...): [expr] is read as a list of
+    numbers separated by any non-digit, aligned on the right with the parts of the unit ([INTERVAL 1 DAY_HOUR]
+    is one hour, [INTERVAL '1 2' DAY_HOUR] one day and two hours); a leading [-] negates the interval
+    ([get_interval_value], [sql/item_timefunc.cc]). The units with microseconds are not modelled. *)
+Definition my_unit_parts (u : string) : option (list (Z * Z * Z)) :=
+  (* each part as (months, days, microseconds) per unit *)
+  let Y := (12, 0, 0) in let Mo := (1, 0, 0) in let D := (0, 1, 0) in
+  let H := (0, 0, 3600000000) in let Mi := (0, 0, 60000000) in let S := (0, 0, 1000000) in
+  match u with
+  | "YEAR_MONTH" => Some (Y :: Mo :: nil) | "DAY_HOUR" => Some (D :: H :: nil)
+  | "DAY_MINUTE" => Some (D :: H :: Mi :: nil) | "DAY_SECOND" => Some (D :: H :: Mi :: S :: nil)
+  | "HOUR_MINUTE" => Some (H :: Mi :: nil) | "HOUR_SECOND" => Some (H :: Mi :: S :: nil)
+  | "MINUTE_SECOND" => Some (Mi :: S :: nil)
+  | _ => None
+  end%string%Z.
+
+Fixpoint my_digit_groups (s : string) (cur : option Z) (acc : list Z) : list Z :=
+  match s with
+  | EmptyString => rev (match cur with Some z => z :: acc | None => acc end)
+  | String c r => let n := Z.of_nat (Ascii.nat_of_ascii c) in
+                  if (48 <=? n)%Z && (n <=? 57)%Z
+                  then my_digit_groups r (Some ((match cur with Some z => z | None => 0 end) * 10 + (n - 48))%Z) acc
+                  else my_digit_groups r None (match cur with Some z => z :: acc | None => acc end)
+  end.
+
+Definition my_composite_interval (ps : list (Z * Z * Z)) (t : string) : option (Z * Z * Z) :=
+  let neg := match t with String "-"%char _ => true | _ => false end in
+  let gs := my_digit_groups t None nil in
+  if Nat.ltb (List.length ps) (List.length gs) || Nat.eqb (List.length gs) 0 then None
+  else let ps' := skipn (List.length ps - List.length gs) ps in
+       let '(a, b, c) := fold_left (fun (acc : Z * Z * Z) pg => let '(a, b, c) := acc in let '((pa, pb, pc), g) := pg in
+                                      ((a + pa * g)%Z, (b + pb * g)%Z, (c + pc * g)%Z)) (combine ps' gs) (0, 0, 0)%Z in
+       Some (if neg then (- a, - b, - c)%Z else (a, b, c)).
+
 Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   let conv := lenient in
   let with_interval (sign : Z) (f : list value -> value) (l : list value) :=
@@ -631,10 +665,18 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                 | _ => Value_Z None end)
   (* dates and times *)
   :: ("interval", fun l => match l with
-                           | n :: Value_string (Some u) :: nil => 
-                             match z_arg n, interval_of_unit 1 (string_map upper_ascii u) with
+                           | n :: Value_string (Some u) :: nil =>
+                             let u := string_map upper_ascii u in
+                             match my_unit_parts u with
+                             | Some ps => match text_of n with
+                                          | Some t => match my_composite_interval ps t with
+                                                      | Some (a, b, c) => Value_V (Some (a, b, c))
+                                                      | None => Value_V None end
+                                          | None => Value_V None end
+                             | None =>
+                             match z_arg n, interval_of_unit 1 u with
                              | Some k, Some (a, b, c) => Value_V (Some (k * a, k * b, k * c))
-                             | _, _ => Value_V None end
+                             | _, _ => Value_V None end end
                            | _ => Value_V None end)
   :: ("date_add", fun l => match l with d :: iv :: nil => my_date_add 1 d iv | _ => Value_T None end)
   :: ("date_sub", fun l => match l with d :: iv :: nil => my_date_add (-1) d iv | _ => Value_T None end)
