@@ -8,7 +8,8 @@
 
 Set Implicit Arguments.
 
-Require Import List Bool NArith String Permutation Lia.
+Require Import List Bool NArith QArith String Permutation Lia.
+Open Scope nat_scope.
 
 Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection 
         FlatData Bool3 Formula SqlFull.
@@ -678,6 +679,44 @@ Qed.
 
 (** the default frame with an [ORDER BY], [RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], is the rows up to
     the last peer of the current row *)
+(** [RANGE BETWEEN k PRECEDING AND m FOLLOWING] over the (ascending) keys [rk]: the rows whose key is in
+    [[a - k, a + m]], [a] the key of the current row; the rows without a key (NULL) are the frame of each other *)
+Theorem frame_range_offsets :
+  forall n gidx rk i k m,
+    frame_positions (Frame_Range (Preceding k) (Following m)) n gidx rk i =
+    filter (fun j => match nth i rk None, nth j rk None with
+                     | Some a, Some b => Qle_bool (a - inject_Z (Z.of_nat k)) b && Qle_bool b (a + inject_Z (Z.of_nat m))
+                     | None, None => true
+                     | _, _ => false
+                     end) (seq 0 n).
+Proof.
+intros n gidx rk i k m; cbn [frame_positions range_after_start range_before_end bound_offset].
+apply filter_ext; intro j; destruct (nth i rk None); destruct (nth j rk None); reflexivity.
+Qed.
+
+(** with the offsets 0, the rows whose key equals the key of the current row *)
+Theorem frame_range_zero_offsets :
+  forall n gidx rk i,
+    frame_positions (Frame_Range (Preceding 0) (Following 0)) n gidx rk i =
+    filter (fun j => match nth i rk None, nth j rk None with
+                     | Some a, Some b => Qeq_bool a b
+                     | None, None => true
+                     | _, _ => false
+                     end) (seq 0 n).
+Proof.
+intros n gidx rk i; rewrite frame_range_offsets; apply filter_ext; intro j.
+destruct (nth i rk None) as [a | ]; destruct (nth j rk None) as [b | ]; trivial.
+case_eq (Qeq_bool a b); intro E.
+- apply Qeq_bool_iff in E; apply andb_true_iff; split; apply Qle_bool_iff; simpl; rewrite E; ring_simplify; apply Qle_refl.
+- case_eq (Qle_bool (a - inject_Z (Z.of_nat 0)) b); intro K1; case_eq (Qle_bool b (a + inject_Z (Z.of_nat 0))); intro K2;
+    simpl; trivial.
+  apply Qle_bool_iff in K1; apply Qle_bool_iff in K2.
+  assert (K1' : (a <= b)%Q) by (setoid_replace a with (a - inject_Z (Z.of_nat 0))%Q by (simpl; ring); exact K1).
+  assert (K2' : (b <= a)%Q) by (setoid_replace a with (a + inject_Z (Z.of_nat 0))%Q by (simpl; ring); exact K2).
+  assert (F := Qle_antisym _ _ K1' K2').
+  apply Qeq_bool_iff in F; rewrite F in E; discriminate E.
+Qed.
+
 Theorem frame_range_running :
   forall n gidx rk i,
     frame_positions (Frame_Range Unbounded_Preceding Current_Row) n gidx rk i =

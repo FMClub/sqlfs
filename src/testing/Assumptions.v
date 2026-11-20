@@ -31,3 +31,4 @@ Print Assumptions SqlFullFacts.rec_loop_fuel.
 Print Assumptions SqlRelate.sql_full_agree.
 Print Assumptions SqlFullFacts.msort_stable_sort.
 Print Assumptions SqlGroupFacts.group_on_spec.
+Print Assumptions SqlFullFacts.frame_range_zero_offsets.
