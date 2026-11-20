@@ -59,14 +59,22 @@ def ex(e):
         lhs = ex(e[2][0]) if len(e[2]) == 1 else '(%s)' % ', '.join(ex(x) for x in e[2])
         return '(%s %sIN (%s))' % (lhs, 'NOT ' if e[1] else '', query(e[3]))
     if k == 'between':
-        if e[5]:
-            raise Unsupported('between symmetric')
-        return '(%s %sBETWEEN %s AND %s)' % (ex(e[2]), 'NOT ' if e[1] else '', ex(e[3]), ex(e[4]))
+        return '(%s %sBETWEEN %s%s AND %s)' % (ex(e[2]), 'NOT ' if e[1] else '', 'SYMMETRIC ' if e[5] else '',
+                                                ex(e[3]), ex(e[4]))
     if k == 'like':
-        if e[5]:
-            raise Unsupported('ilike')
         esc = ' ESCAPE %s' % ex(e[4]) if e[4] is not None else ''
-        return '(%s %sLIKE %s%s)' % (ex(e[2]), 'NOT ' if e[1] else '', ex(e[3]), esc)
+        return '(%s %s%s %s%s)' % (ex(e[2]), 'NOT ' if e[1] else '', 'ILIKE' if e[5] else 'LIKE', ex(e[3]), esc)
+    if k == 'similar':
+        esc = ' ESCAPE %s' % ex(e[4]) if e[4] is not None else ''
+        return '(%s %sSIMILAR TO %s%s)' % (ex(e[2]), 'NOT ' if e[1] else '', ex(e[3]), esc)
+    if k == 'cmp_array':
+        return '(%s %s %s (%s))' % (ex(e[3]), e[1], e[2].upper(), ex(e[4]))
+    if k == 'filter':
+        return '%s FILTER (WHERE %s)' % (ex(e[1]), ex(e[2]))
+    if k == 'regexp':
+        return '(%s %sREGEXP %s)' % (ex(e[2]), 'NOT ' if e[1] else '', ex(e[3]))
+    if k == 'bitnot':
+        return '(~ %s)' % ex(e[1])
     if k == 'case':
         subj, whens, els = e[1], e[2], e[3]
         w = ' '.join('WHEN %s THEN %s' % (ex(c), ex(v)) for c, v in whens)
@@ -80,11 +88,24 @@ def ex(e):
     if k == 'call':
         name, args, star = e[1], e[2], e[3]
         distinct = e[4] if len(e) > 4 else False
-        if len(e) > 5 and e[5] is not None:
-            raise Unsupported('within group')
-        if name in ('trim_both', 'trim_leading', 'trim_trailing', 'extract', 'position', 'substring_regex',
-                    'interval_index'):
-            raise Unsupported('special call ' + name)
+        within = e[5] if len(e) > 5 else None
+        if within is not None:
+            return '%s(%s) WITHIN GROUP (ORDER BY %s %s)' % (name, ', '.join(ex(a) for a in args), ex(within[0]),
+                                                             'DESC' if within[1] else 'ASC')
+        if name == 'array' and S.ENGINE == 'postgresql':
+            return 'ARRAY[%s]' % ', '.join(ex(a) for a in args)
+        # the special syntaxes of the standard, as the parser reads them
+        if name in ('trim_both', 'trim_leading', 'trim_trailing'):
+            where = name[5:].upper()
+            return 'TRIM(%s %sFROM %s)' % (where, (ex(args[1]) + ' ') if len(args) > 1 else '', ex(args[0]))
+        if name == 'extract':
+            return 'EXTRACT(%s FROM %s)' % (args[0][1], ex(args[1]))
+        if name == 'position':
+            return 'POSITION(%s IN %s)' % (ex(args[0]), ex(args[1]))
+        if name == 'substring_regex':
+            return 'SUBSTRING(%s FROM %s)' % (ex(args[0]), ex(args[1]))
+        if name == 'interval_index':
+            return 'INTERVAL(%s)' % ', '.join(ex(a) for a in args)
         if star:
             return '%s(*)' % name
         return '%s(%s%s)' % (name, 'DISTINCT ' if distinct else '', ', '.join(ex(a) for a in args))
@@ -137,9 +158,19 @@ def frm(f):
     if k == 'table':
         return ident(f[1]) + ('' if f[2] == f[1] else ' AS %s' % ident(f[2]))
     if k == 'derived':
-        if f[3]:
-            raise Unsupported('derived column list')
-        return '(%s) AS %s' % (query(f[1]), ident(f[2]))
+        cols = '(%s)' % ', '.join(ident(c) for c in f[3]) if f[3] else ''
+        return '(%s) AS %s%s' % (query(f[1]), ident(f[2]), cols)
+    if k == 'tfun':
+        name, args, ord_, alias, cols = f[1], f[2], f[3], f[4], f[5]
+        if name == 'json_table':
+            # the parser keeps the column names and paths, not the types (any type reads back the same)
+            colspec = ', '.join('%s JSON PATH %s' % (ident(c), ex(pth)) for c, pth in zip(cols, args[2:]))
+            return 'JSON_TABLE(%s, %s COLUMNS (%s)) AS %s' % (ex(args[0]), ex(args[1]), colspec, ident(alias))
+        txt = '%s(%s)%s' % (name, ', '.join(ex(a) for a in args), ' WITH ORDINALITY' if ord_ else '')
+        txt += ' AS %s' % ident(alias)
+        if cols is not None:
+            txt += '(%s)' % ', '.join(ident(c) for c in cols)
+        return txt
     if k == 'join':
         jt, l, r, c = f[1], f[2], f[3], f[4]
         using = f[5] if len(f) > 5 else None
@@ -190,13 +221,16 @@ def query(q):
         # a SELECT operand needs no parentheses (and the parser of a scalar subquery reads [(SELECT ((SELECT ...)
         # UNION ...))] as an expression): only the nested set operations and the ordered operands get them
         def operand(x):
-            return query(x) if x[0] == 'select' else '(%s)' % query(x)
+            return query(x) if x[0] in ('select', 'values') else '(%s)' % query(x)
         return '%s %s%s %s' % (operand(q[3]), q[1].upper(), ' ALL' if q[2] else '', operand(q[4]))
     if k == 'orderq':
         inner, order, limit = q[1], q[2], q[3]
-        txt = query(inner) if inner[0] == 'select' else '(%s)' % query(inner)
-        if inner[0] != 'select':
-            raise Unsupported('order of a set operation')
+        # the ORDER BY of a set operation follows its last operand: the parser attaches it to the whole
+        # operation (an ordered operand is parenthesised by operand above)
+        if inner[0] in ('select', 'setop'):
+            txt = query(inner)
+        else:
+            txt = '(%s)' % query(inner)
         if order:
             txt += ' ORDER BY ' + ', '.join('%s %s' % (ex(e), d.upper()) for e, d in order)
         if limit is not None:
@@ -205,6 +239,8 @@ def query(q):
                 raise Unsupported('offset without limit')
             txt += ' LIMIT %d%s' % (n, ' OFFSET %d' % off if off else '')
         return txt
+    if k == 'values':
+        return 'VALUES ' + ', '.join('(%s)' % ', '.join(ex(x) for x in row) for row in q[1])
     raise Unsupported('query ' + k)
 
 
