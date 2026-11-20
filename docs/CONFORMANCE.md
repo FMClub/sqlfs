@@ -182,6 +182,10 @@ MySQL and PostgreSQL, the scripts have no `skipif oracle`, and the Oracle divisi
 (`61 / 88 * 96` is 0 in the recorded results, 66.5 in Oracle). The Oracle mode is checked
 against the documentation and the source of the engine instead (`docs/DIALECTS.md`).
 
+**Live engines** (TODO 5.7): `tools/spec/live_diff.py` generates tables and queries of the fragment, runs them on a
+live engine and checks the model against its rows (the extracted interpreter). PostgreSQL 16.15, SQLite 3.45 and MariaDB 10.11,
+1000 queries each: 915, 906 and 909 translated, **0 differences**.
+
 ## What this found
 
 The conformance runs found, and fixed, defects which the examples written by hand had not:

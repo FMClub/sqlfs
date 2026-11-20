@@ -34,3 +34,20 @@ jobs:
         run: python3 tools/check_hygiene.py
       - name: Round trip of the SQL frontend (parse, print, parse)
         run: python3 tools/spec/sqlprint.py --dialect MySQL tools/spec/roundtrip_samples.sql
+
+  # the sqllogictest samples of src/testing/slt are generated (tools/spec/gen_slt_regression.sh): regenerate them
+  # from the recorded commit of sqllogictest and fail on a difference (TODO 5.9). A separate job: it needs no Coq.
+  samples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch sqllogictest at the recorded commit
+        run: |
+          git clone -q https://github.com/gregrahn/sqllogictest.git /tmp/sqllogictest
+          git -C /tmp/sqllogictest checkout -q c93ac416f05635ff5cc490009add936d9753d01d
+      - name: Regenerate the samples and compare
+        run: |
+          sh tools/spec/gen_slt_regression.sh /tmp/sqllogictest
+          rm -f src/testing/slt/FILES
+          git status --short src/testing/slt
+          git diff --exit-code --stat src/testing/slt
