@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit PostgreSQL Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -140,14 +140,6 @@ Definition my_compare (v1 v2 : value) : option comparison :=
 Definition my_order (a b : value) : comparison :=
   match my_compare a b with Some c => c | None => value_compare a b end.
 
-Definition my_truth (v : value) : bool3 :=
-  match lenient v with 
-  | Some n => bool3_of_bool (negb (num_is_zero n)) 
-  | None => unknown3 
-  end.
-
-Definition my_of_truth (b : bool3) : value :=
-  match b with true3 => Value_Z (Some 1) | false3 => Value_Z (Some 0) | unknown3 => Value_Z None end.
 
 Definition my_eq3 (a b : value) : bool3 := cmp_pred my_compare is_Eq (a :: b :: nil).
 
@@ -159,11 +151,6 @@ Definition my_null_safe_eq (a b : value) : bool3 :=
   | _, _ => false3
   end.
 
-Definition truth_is (t : bool3) (v : value) : bool3 :=
-  bool3_of_bool (match my_truth v, t with
-                 | true3, true3 | false3, false3 | unknown3, unknown3 => true
-                 | _, _ => false
-                 end).
 
 Definition my_pred_table : list (string * (list value -> bool3)) :=
   comparison_table my_compare ++
@@ -187,54 +174,17 @@ Definition my_pred_table : list (string * (list value -> bool3)) :=
   :: ("unknown", fun _ => unknown3)
   :: nil.
 
-Definition str1 (f : string -> value) (l : list value) : value :=
-  match l with
-  | v :: nil => match text_of v with Some s => f s | None => Value_string None end
-  | _ => Value_string None
-  end.
 
-Definition str_fun1 (f : string -> string) := str1 (fun s => Value_string (Some (f s))).
 
 (** the scale of [ROUND (x, d)] and [TRUNCATE (x, d)]: at most [DECIMAL_MAX_SCALE] decimals, 30 in MySQL
     and 38 in MariaDB (the session with PCRE, [ms_regex = 1]); below -400 every value rounds to 0 (doubles are
     below 1e309): the bounds keep [10 ^ d] small *)
 Definition clamp_scale (d : Z) : Z := Z.max (-400) (Z.min (if Nat.eqb (ms_regex ss) 1 then 38 else 30) d).
 
-Definition z_arg (v : value) : option Z :=
-  match lenient v with
-  | Some (Num_Z z) => Some z
-  | Some (Num_Q q) => Some (Qc_round q)
-  | None => None
-  end.
 
-(** [CASE WHEN c1 THEN v1 ... ELSE e END] for a dialect where a value is a condition
-    through [truth]. *)
-Fixpoint case_gen (truth : value -> bool3) (d : value) (l : list value) : value :=
-  match l with
-  | nil => d
-  | e :: nil => e
-  | c :: v :: l => match truth c with true3 => v | _ => case_gen truth d l end
-  end.
 
-Definition case_by truth (l : list value) :=
-  match l with
-  | _ :: v :: _ => case_gen truth (default_value (type_of_value v)) l
-  | _ => case_gen truth (Value_Z None) l
-  end.
 
-(** NULL as soon as one argument is NULL, else the extremum for [order]. *)
-Definition extremum_strict (isnull : value -> bool) (order : value -> value -> comparison) 
-           (keep : comparison -> bool) (l : list value) :=
-  match l with
-  | nil => Value_Z None
-  | v :: rest => 
-    if existsb isnull l then default_value (type_of_value v)
-    else fold_left (fun a b => if keep (order a b) then a else b) rest v
-  end.
 
-Definition fold_truth (truth : value -> bool3) (op : bool3 -> bool3 -> bool3) (z : bool3) 
-           (l : list value) : bool3 :=
-  fold_left (fun acc v => op acc (truth v)) l z.
 
 Definition xor3 (a b : bool3) : bool3 :=
   match a, b with

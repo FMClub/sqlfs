@@ -79,6 +79,7 @@ data/dialects/TiDB.v
 data/dialects/Percona.v
 data/dialects/PolarDB.v
 data/dialects/Versions.v
+data/dialects/ResultText.v
 testing/Test_Dialects.v
 testing/SpecRunner.v
 testing/SltRunner.v
@@ -134,6 +135,7 @@ testing/Test_OracleForms.v
 testing/Test_Versions.v
 testing/Test_Closeout.v
 testing/Test_WellFormed.v
+testing/Test_ResultText.v
 testing/Test_Fetch.v
 testing/Test_MariaDB.v
 testing/Test_Session.v

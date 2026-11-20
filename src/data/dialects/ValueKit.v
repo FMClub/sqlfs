@@ -1038,3 +1038,79 @@ Definition lite_round_table (conv : value -> option num) : list (string * (list 
      ("ceil", f Qc_ceiling) :: ("ceiling", f Qc_ceiling) :: ("floor", f Qc_floor) :: ("trunc", f Qc_trunc)
   :: ("random", fun _ => Value_Err "nondeterministic function")
   :: nil.
+
+(** The key of a value for [GROUP BY], [DISTINCT] and the set operations, shared by the dialects whose numbers
+    are identified by their value (an integer, a decimal of any scale and a finite double which are equal are
+    not distinct) *)
+Definition canon_numeric (v : value) : value :=
+  match v with
+  | Value_Z (Some z) => Value_Q (Some (Qc_of_Z z))
+  | Value_I (Some (z, _)) => Value_Q (Some (Qc_of_Z z))
+  (* [1.50] and [1.5] are not distinct: the scale is not part of the identity of a decimal *)
+  | Value_D (Some (q, _, _)) => Value_Q (Some q)
+  (* a finite float, or -0, is identified with the number it stands for *)
+  | Value_F (Some (q, k)) => if Nat.leb (Nat.div (Nat.modulo k 10) 2) 1 then Value_Q (Some q) else Value_F (Some (q, (2 * Nat.div (Nat.modulo k 10) 2)%nat))
+  | _ => if is_null v then Value_Z None else v
+  end.
+
+(** The truth of a value and the value of a truth in the dialects whose conditions are integers (the MySQL
+    family, SQLite): a non-zero number is true, 0 is false, a value which is not a number is UNKNOWN *)
+Definition my_truth (v : value) : bool3 :=
+  match lenient v with 
+  | Some n => bool3_of_bool (negb (num_is_zero n)) 
+  | None => unknown3 
+  end.
+
+Definition my_of_truth (b : bool3) : value :=
+  match b with true3 => Value_Z (Some 1) | false3 => Value_Z (Some 0) | unknown3 => Value_Z None end.
+
+(** Helpers shared by the MySQL family and SQLite (moved from [MySQL.v], TODO 6.7) *)
+Definition truth_is (t : bool3) (v : value) : bool3 :=
+  bool3_of_bool (match my_truth v, t with
+                 | true3, true3 | false3, false3 | unknown3, unknown3 => true
+                 | _, _ => false
+                 end).
+
+Definition str1 (f : string -> value) (l : list value) : value :=
+  match l with
+  | v :: nil => match text_of v with Some s => f s | None => Value_string None end
+  | _ => Value_string None
+  end.
+
+Definition str_fun1 (f : string -> string) := str1 (fun s => Value_string (Some (f s))).
+
+Definition z_arg (v : value) : option Z :=
+  match lenient v with
+  | Some (Num_Z z) => Some z
+  | Some (Num_Q q) => Some (Qc_round q)
+  | None => None
+  end.
+
+(** [CASE WHEN c1 THEN v1 ... ELSE e END] for a dialect where a value is a condition
+    through [truth]. *)
+Fixpoint case_gen (truth : value -> bool3) (d : value) (l : list value) : value :=
+  match l with
+  | nil => d
+  | e :: nil => e
+  | c :: v :: l => match truth c with true3 => v | _ => case_gen truth d l end
+  end.
+
+Definition case_by truth (l : list value) :=
+  match l with
+  | _ :: v :: _ => case_gen truth (default_value (type_of_value v)) l
+  | _ => case_gen truth (Value_Z None) l
+  end.
+
+(** NULL as soon as one argument is NULL, else the extremum for [order]. *)
+Definition extremum_strict (isnull : value -> bool) (order : value -> value -> comparison) 
+           (keep : comparison -> bool) (l : list value) :=
+  match l with
+  | nil => Value_Z None
+  | v :: rest => 
+    if existsb isnull l then default_value (type_of_value v)
+    else fold_left (fun a b => if keep (order a b) then a else b) rest v
+  end.
+
+Definition fold_truth (truth : value -> bool3) (op : bool3 -> bool3 -> bool3) (z : bool3) 
+           (l : list value) : bool3 :=
+  fold_left (fun acc v => op acc (truth v)) l z.

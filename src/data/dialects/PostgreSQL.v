@@ -18,16 +18,6 @@ Import NullValues.
 
 (** The key of a value: all the NULLs are the same, and the numbers are compared as
     exact numerics, whatever their declared type. *)
-Definition canon_numeric (v : value) : value :=
-  match v with
-  | Value_Z (Some z) => Value_Q (Some (Qc_of_Z z))
-  | Value_I (Some (z, _)) => Value_Q (Some (Qc_of_Z z))
-  (* [1.50] and [1.5] are not distinct: the scale is not part of the identity of a decimal *)
-  | Value_D (Some (q, _, _)) => Value_Q (Some q)
-  (* a finite float, or -0, is identified with the number it stands for *)
-  | Value_F (Some (q, k)) => if Nat.leb (Nat.div (Nat.modulo k 10) 2) 1 then Value_Q (Some q) else Value_F (Some (q, (2 * Nat.div (Nat.modulo k 10) 2)%nat))
-  | _ => if is_null v then Value_Z None else v
-  end.
 
 (** PostgreSQL:
     - strict typing: values of different types are not comparable (here the comparison

@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit PostgreSQL MySQL Hash StringFuns Regex RegexFuns Aggregates TemporalFuns SystemFuns.
+Require Import Collation Bool3 OrderedSet SqlFull Temporal Values Dialects ValueKit MySQL Hash StringFuns Regex RegexFuns Aggregates TemporalFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
