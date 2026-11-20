@@ -569,9 +569,31 @@ class P:
         if self.op('('):
             save = self.i
             self.i += 1
+            if self.op('('):
+                # ((SELECT ...) UNION (SELECT ...)) AS a: a query whose first operand is parenthesised
+                try:
+                    q = self.query()
+                    self.need_op(')')
+                    self.eat_kw('as')
+                    alias = self.ident()
+                    cols = None
+                    if self.eat_op('('):
+                        cols = [self.ident()]
+                        while self.eat_op(','):
+                            cols.append(self.ident())
+                        self.need_op(')')
+                    return ('derived', q, alias, cols)
+                except Skip:
+                    self.i = save + 1
             if not self.kw('select', 'values', 'with'):
-                self.i = save
-                raise Skip('parenthesised table reference')
+                # a parenthesised join: (t1 JOIN t2 ON ...)
+                inner = self.from_clause()
+                self.need_op(')')
+                if self.peek()[0] == 'id' and not self.kw('join', 'inner', 'left', 'right', 'full', 'cross', 'natural',
+                                                         'on', 'where', 'group', 'order', 'limit', 'having', 'union',
+                                                         'intersect', 'except', 'minus', 'using') or self.kw('as'):
+                    raise Skip('parenthesised join with an alias')
+                return inner
             q = self.query()
             self.need_op(')')
             self.eat_kw('as')
@@ -734,6 +756,16 @@ class P:
                     raise Skip('is')
             elif self.eat_kw('in'):
                 self.need_op('(')
+                if self.op('(') and self.peek(1)[0] in ('id', 'kw') and self.peek(1)[1].lower() in ('select', 'with', 'values'):
+                    # IN ((SELECT ...) UNION (SELECT ...)): a query whose first operand is parenthesised
+                    save_in = self.i
+                    try:
+                        q = self.query()
+                        self.need_op(')')
+                        l = ('insub', neg, [l] if l[0] != 'row' else l[1], q)
+                        continue
+                    except Skip:
+                        self.i = save_in
                 if self.kw('select'):
                     q = self.query()
                     self.need_op(')')
