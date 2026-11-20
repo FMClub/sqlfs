@@ -41,6 +41,7 @@ data/sql/SqlAlgebra.v
 data/sql/SqlAlgebraExt.v
 data/sql/SqlFull.v
 data/sql/SqlFullFacts.v
+data/sql/SqlGroupFacts.v
 data/sql/Oracles.v
 data/sql/SqlWellFormed.v
 data/sql/SqlRelate.v
