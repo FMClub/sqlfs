@@ -228,7 +228,8 @@ def externalize_tables(t, directory):
         path = '%s/table%d.txt' % (directory, i)
         with open(path, 'w') as f:
             f.write('\n'.join(lines) + ('\n' if lines else ''))
-        new.append(('tuple', [tab[1][0], tab[1][1], ('raw', '(Prelude.rows %s)' % ml_string(path))]))
+        # relative to the directory of the program, which runs there
+        new.append(('tuple', [tab[1][0], tab[1][1], ('raw', '(Prelude.rows %s)' % ml_string('table%d.txt' % i))]))
     args = list(t[2])
     args[2] = ('list', new)
     return ('app', t[1], args)

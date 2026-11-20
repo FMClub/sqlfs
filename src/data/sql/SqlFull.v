@@ -1141,7 +1141,7 @@ Fixpoint gfold (key : X -> list value) (t : FiniteSetImpl.tree (list value * lis
 
 Definition group_on (key : X -> list value) (l : list X) : list (list X) :=
   let (t, reps) := gfold key (FiniteSetImpl.Leaf _) nil l in
-  map (fun r => match tfind (map (canon O) (key r)) t with Some (_, g) => rev g | None => nil end) (rev reps).
+  map (fun r => match tfind (map (canon O) (key r)) t with Some (_, g) => rev' g | None => nil end) (rev' reps).
 
 (** Stable sort by insertion. *)
 Fixpoint insert_sorted (le : X -> X -> bool) (x : X) (l : list X) :=
@@ -1407,15 +1407,15 @@ Fixpoint eval_wsem (a : attribute) (w : wsem)
     let keep (arg : tuple -> value) (l : list tuple) := if ign then filter (fun t' => negb (is_null O (arg t'))) l else l in
     match w' with
     | WS_First arg fr =>
-      match keep arg ((if last then @rev _ else fun l => l) (frame_rows fr sorted gidx rk i)) with
+      match keep arg ((if last then @rev' _ else fun l => l) (frame_rows fr sorted gidx rk i)) with
       | t' :: _ => arg t' | nil => null_of a end
     | WS_Last arg fr =>
-      match keep arg ((if last then fun l => l else @rev _) (frame_rows fr sorted gidx rk i)) with
+      match keep arg ((if last then fun l => l else @rev' _) (frame_rows fr sorted gidx rk i)) with
       | t' :: _ => arg t' | nil => null_of a end
     | WS_Nth arg n fr =>
       match n with
       | 0 => null_of a
-      | S n => match nth_error (keep arg ((if last then @rev _ else fun l => l) (frame_rows fr sorted gidx rk i))) n with
+      | S n => match nth_error (keep arg ((if last then @rev' _ else fun l => l) (frame_rows fr sorted gidx rk i))) n with
                | Some t' => arg t' | None => null_of a end
       end
     | WS_Shift back arg k dflt =>
@@ -1423,7 +1423,7 @@ Fixpoint eval_wsem (a : attribute) (w : wsem)
       | 0 => arg t
       | S k' =>
         (* the rows before (LAG) or after (LEAD) the current one, the nearest first *)
-        let others := if back then rev (firstn i sorted) else skipn (S i) sorted in
+        let others := if back then rev' (firstn i sorted) else skipn (S i) sorted in
         match nth_error (keep arg others) k' with Some t' => arg t' | None => dflt t end
       end
     | _ => eval_wsem a w' sorted gidx rk i t
@@ -1466,7 +1466,7 @@ Fixpoint eval_wsem (a : attribute) (w : wsem)
   | WS_First arg fr =>
     match frame_rows fr sorted gidx rk i with t' :: _ => arg t' | nil => null_of a end
   | WS_Last arg fr =>
-    match rev (frame_rows fr sorted gidx rk i) with t' :: _ => arg t' | nil => null_of a end
+    match rev' (frame_rows fr sorted gidx rk i) with t' :: _ => arg t' | nil => null_of a end
   | WS_Nth arg n fr =>
     match n with
     | 0 => null_of a
@@ -1809,7 +1809,7 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
     let rest := skipn count after in
     let extra :=
         if ties
-        then match rev first with
+        then match rev' first with
              | last :: _ =>
                (fix take (l : list (tuple * senv)) : list (tuple * senv) :=
                   match l with
@@ -2051,12 +2051,12 @@ Definition sort_of_query (q : squery) : setA := squery_sort nil q.
 Fixpoint group_peers (specs : list order_spec) (cur : option (list value)) (acc : list tuple)
          (l : list (list value * tuple)) : list (list tuple) :=
   match l with
-  | nil => match acc with nil => nil | _ => rev acc :: nil end
+  | nil => match acc with nil => nil | _ => rev' acc :: nil end
   | (k, t) :: r =>
     match cur with
     | Some c => match compare_keys specs c k with
                 | Eq => group_peers specs cur (t :: acc) r
-                | _ => rev acc :: group_peers specs (Some k) (t :: nil) r
+                | _ => rev' acc :: group_peers specs (Some k) (t :: nil) r
                 end
     | None => group_peers specs (Some k) (t :: nil) r
     end

@@ -318,16 +318,17 @@ Qed.
 Theorem group_on_spec : forall l, group_on O key l = group_on_list O key l.
 Proof.
 intro l; unfold group_on, group_on_list.
+assert (RV : forall (A : Type) (k : list A), rev' k = rev k) by (intros; symmetry; apply rev_alt).
 assert (R0 : reps_ok nil nil) by (split; [constructor | intros y I; contradiction I]).
 assert (T0 : tree_ok nil nil (FiniteSetImpl.Leaf _)) by (split; [constructor | intro c; reflexivity]).
 destruct (tree_fold l nil nil _ R0 T0) as [t' [H1 [_ H2]]].
-change (rev (@nil X)) with (@nil X) in H1; rewrite H1, rev_involutive.
+change (rev (@nil X)) with (@nil X) in H1; rewrite H1, RV, rev_involutive.
 change (fold_left (fun gs x => group_insert O (key x) x gs) l nil) with
        (fold_left (fun gs x => group_insert O (key x) x gs) l (map (Fp nil) nil)).
 rewrite list_fold; [ | exact R0].
 rewrite map_map; apply map_ext_in; intros r I; fold (ck r).
 rewrite H2; replace (existsb (fun r0 => eqk (ck r0) (ck r)) (firsts_acc nil l)) with true.
-- rewrite rev_involutive; reflexivity.
+- rewrite RV, rev_involutive; reflexivity.
 - symmetry; apply existsb_exists; exists r; split; [exact I | apply eqk_refl].
 Qed.
 

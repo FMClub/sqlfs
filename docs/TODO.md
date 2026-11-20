@@ -576,7 +576,7 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
 - **6.5 `FreshAttr.v`**: prove `fresh_attr_is_fresh` (injectivity of the decimal printing of naturals and pigeonhole), add it to `_CoqProject`, remove `Admitted`.
   **Status: DONE** (`fresh_attr_is_fresh` proved: injectivity of the decimal printing and the pigeonhole principle; the file is built; the two `Admitted` of `SqlAlgebra.v` that depended on it are proved too).
 - **6.6 Executable interpreter**: extraction of `eval_squery` and the dialect tables to OCaml with a driver that reads SQL text (via the frontend 7.1) and CSV tables and prints results; test it against `vm_compute` on the whole conformance corpus; measure performance (the Coq `vm_compute` is quadratic in places: `sort_on`, `group_on`, set operations on lists: replace by balanced structures with proved equivalence if needed).
-  **Status: PARTIAL.** `tools/extraction/build.sh DIALECT OUTDIR` extracts the semantics, the dialects, `SpecRunner.diagnose`
+  **Status: DONE.** `tools/extraction/build.sh DIALECT OUTDIR` extracts the semantics, the dialects, `SpecRunner.diagnose`
   and the compiled conformance cases to OCaml (`ExtrOcamlNativeString`; `fix_weak.py` annotates the partial applications
   OCaml cannot generalise), compiles them with `ocamlopt` and runs them. On the OceanBase corpus (66 files, 769 cases) the
   extracted program reports the same failures as `vm_compute` (none) in 48 s, where the Coq run takes about an hour.
@@ -607,8 +607,15 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   `tupdate`), proved equal to the list of groups of the earlier versions (`group_on_spec`,
   `src/data/sql/SqlGroupFacts.v`): 16000 groups of one row take 4.5 s (439 s with the list; the OceanBase corpus gives
   the same results).
-  Open: loading a table whose rows come in ascending order is quadratic (`Febag.add` of `GenericInstance.v`:
-  4000 sorted rows take 17 s, the same rows shuffled 0.9 s); 64000 groups take 99 s (superlinear elsewhere).
+  The elements of a bag (`Febag.elements`, read for every table) are sorted by a merge sort (`mergesort` of
+  `ListSort.v`: a sorted permutation, `mergesort_sorted`, `mergesort_permut`), the quicksort of the library being
+  quadratic on the rows of a table inserted in order (4000 sorted rows: 17 s before, 1.0 s now); the reversals of the
+  grouping and of the window functions are linear (`rev'`, the naive `rev` reversed the list of the 64000 groups in
+  2.10^9 steps). 64000 groups of one row: 11.7 s (101 s before); 16000: 2.8 s. The OceanBase corpus gives the same
+  results. Profiling: `SQLFS_KEEP=DIR tools/sqlfs_run.py --extracted ...` keeps the compiled query, for `valgrind
+  --tool=callgrind`.
+  Remaining constant factors: the comparison of strings goes through `N` digits per character (`n_of_ascii`), and
+  the library computes its constants (`atan` series) when it starts (about 0.5 s).
 - **6.7 Coq hygiene**: no `Admitted`, no `Axiom`; `Print Assumptions` for each theorem in CI; module structure so the core (`SqlFull.v`) does not import any dialect; each dialect file imports only `Dialects.v` and `ValueKit.v`.
   **Status: DONE.** CI checks that no built file has `Admitted`, `admit` or `Axiom`, that the core (`src/data/sql/`) imports no dialect, that a dialect imports no other dialect (the members of the MySQL family import `MySQL.v`, of which they are instances: `mysql_vs`), and that the main results are closed under the global context (`src/testing/Assumptions.v`). The shared helpers (`canon_numeric`, `my_truth`, `case_by`, `z_arg`, ...) are in `ValueKit.v`.
 

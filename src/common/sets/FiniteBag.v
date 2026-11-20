@@ -682,7 +682,9 @@ Proof.
 intro s; destruct s; apply refl_equal.
 Qed.
 
-Definition elements_ (s : bag_) := quicksort Elt s.
+(** the elements in order: a merge sort ([quicksort] is quadratic on a sorted list, which is how the rows of a
+    table inserted in order come) *)
+Definition elements_ (s : bag_) := mergesort Elt s.
 
 Lemma elements_empty_ : elements_ empty_ = nil.
 Proof.
@@ -694,25 +696,25 @@ Lemma elements_spec1_ :
                comparelA (Oeset.compare Elt) (elements_ s) (elements_ s') = Eq.
 Proof.
 intros l1 l2 H.
-apply (sort_is_unique (OA := Elt) (quick_sorted _ _) (quick_sorted _ _)).
+apply (sort_is_unique (OA := Elt) (mergesort_sorted _ _) (mergesort_sorted _ _)).
 apply Oeset.permut_trans with l1.
-- apply Oeset.permut_sym; apply quick_permut.
+- apply Oeset.permut_sym; apply mergesort_permut.
 - apply Oeset.permut_trans with l2.
   + refine (_permut_incl _ _ (_permut_bool_true_is_sound _ _ _ H)).
     intros x y K; unfold Oeset.eq_bool in K; rewrite compare_eq_true in K; apply K.
-  + apply quick_permut.
+  + apply mergesort_permut.
 Qed.
 
 Lemma mem_elements_ : 
   forall e s, nb_occ_ e s = Oeset.nb_occ Elt e (elements_ s).
 Proof.
-intros a l; rewrite nb_occ_quicksort; apply refl_equal.
+intros a l; unfold elements_; rewrite nb_occ_mergesort; apply refl_equal.
 Qed.
 
 Lemma elements_spec3_ :
   forall s, Sorted (fun x y => Oeset.compare Elt x y <> Gt) (elements_ s).
 Proof.
-intro l; rewrite <- is_sorted_Sorted; apply quick_sorted.
+intro l; rewrite <- is_sorted_Sorted; apply mergesort_sorted.
 Qed.
 
 Definition choose_ (s : bag_) :=
@@ -903,8 +905,8 @@ Lemma for_all_spec_ : forall (s : bag_) (f : elt -> bool), for_all_ f s = forall
 Proof.
 unfold for_all_, elements_.
 intros l f; rewrite eq_bool_iff, 2 forallb_forall; split; intros H x Hx; apply H.
-- rewrite <- In_quicksort in Hx; assumption.
-- rewrite <- In_quicksort; assumption.
+- rewrite <- In_mergesort in Hx; assumption.
+- rewrite <- In_mergesort; assumption.
 Qed.
 
 Definition exists__ f (s : bag_) := existsb f s.
@@ -914,9 +916,9 @@ Proof.
 unfold exists__, elements_.
 intros l f; rewrite eq_bool_iff, 2 existsb_exists; split.
 - intros [x [Hx Kx]]; exists x; split; [ | assumption].
-  rewrite <- In_quicksort; assumption.
+  rewrite <- In_mergesort; assumption.
 - intros [x [Hx Kx]]; exists x; split; [ | assumption].
-  rewrite <- In_quicksort in Hx; assumption.
+  rewrite <- In_mergesort in Hx; assumption.
 Qed.
 
 Definition fold_ (A : Type) (f : elt -> A -> A) (s : bag_) (a : A) := 
@@ -937,11 +939,11 @@ Proof.
 intros s1 s2; split; intro H.
 - rewrite nb_occ_equal_; unfold nb_occ_.
   intro; apply Oeset.permut_nb_occ.
-  apply Oeset.permut_trans with (quicksort Elt s1); [apply quick_permut | ].
-  apply Oeset.permut_trans with (quicksort Elt s2); [ | apply Oeset.permut_sym; apply quick_permut].
+  apply Oeset.permut_trans with (mergesort Elt s1); [apply mergesort_permut | ].
+  apply Oeset.permut_trans with (mergesort Elt s2); [ | apply Oeset.permut_sym; apply mergesort_permut].
   unfold compare_, elements_ in H.
-  set (l1 := quicksort Elt s1) in *; clearbody l1; clear s1.
-  set (l2 := quicksort Elt s2) in *; clearbody l2; clear s2.
+  set (l1 := mergesort Elt s1) in *; clearbody l1; clear s1.
+  set (l2 := mergesort Elt s2) in *; clearbody l2; clear s2.
   revert l2 H; induction l1 as [ | a1 l1]; intros [ | a2 l2]; simpl.
   + intros _; apply Pnil.
   + intro Abs; discriminate Abs.
@@ -950,10 +952,10 @@ intros s1 s2; split; intro H.
     apply Oeset.permut_cons; [ | apply IHl1]; assumption.
 - unfold equal_ in H; unfold compare_.
   apply sort_is_unique.
-  + apply quick_sorted.
-  + apply quick_sorted.
-  + apply Oeset.permut_trans with s2;  [ | apply quick_permut].
-    apply Oeset.permut_trans with s1; [apply Oeset.permut_sym; apply quick_permut | ].
+  + apply mergesort_sorted.
+  + apply mergesort_sorted.
+  + apply Oeset.permut_trans with s2;  [ | apply mergesort_permut].
+    apply Oeset.permut_trans with s1; [apply Oeset.permut_sym; apply mergesort_permut | ].
     refine (_permut_incl _ _ (_permut_bool_true_is_sound (Oeset.eq_bool Elt) _ _ _)).  
     * unfold Oeset.eq_bool; intros a b K; rewrite compare_eq_true in K; apply K.
     * assumption.
