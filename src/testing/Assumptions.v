@@ -18,3 +18,4 @@ Print Assumptions SqlFullFacts.cube_sets_length.
 Print Assumptions SqlFullFacts.rollup_sets_length.
 Print Assumptions SqlFullFacts.frame_running.
 Print Assumptions SqlFullFacts.frame_whole_partition.
+Print Assumptions SqlFullFacts.rec_loop_fuel.

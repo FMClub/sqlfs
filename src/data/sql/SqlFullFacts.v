@@ -431,6 +431,31 @@ intros n gidx rk i; simpl.
 induction (seq 0 n) as [ | x l IH]; simpl; [reflexivity | rewrite IH; reflexivity].
 Qed.
 
+(** The bound of the recursion does not matter once a fixpoint is reached (TODO 6.4): if the iteration of
+    [WITH RECURSIVE] reaches an empty working table within [n] steps, any larger bound gives the same rows *)
+Fixpoint done_within (step : list tuple -> list tuple) (d : bool) (n : nat) (acc work : list tuple) : bool :=
+  match n with
+  | 0 => match work with nil => true | _ => false end
+  | S n' =>
+    match work with
+    | nil => true
+    | _ => let new := step work in
+           let new' := if d then eval_set_op O Diff Set_Distinct new acc else new in
+           done_within step d n' (acc ++ new') new'
+    end
+  end.
+
+Theorem rec_loop_fuel :
+  forall step d sa n m acc work,
+    done_within step d n acc work = true ->
+    rec_loop O step d sa (n + m) acc work = rec_loop O step d sa n acc work.
+Proof.
+intros step d sa n; induction n as [ | n IH]; intros m acc work H; simpl in H.
+- destruct work; [ | discriminate H]; simpl; destruct m; reflexivity.
+- destruct work as [ | x work]; [reflexivity | ].
+  simpl; apply IH; exact H.
+Qed.
+
 (** [UNION ALL] is commutative as a bag (TODO 6.4): the rows are the same, in another order *)
 Theorem union_all_comm :
   forall ce env q1 q2,
