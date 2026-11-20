@@ -1634,6 +1634,14 @@ Fixpoint rec_loop (step : list tuple -> list tuple) (distinct : bool) (sa : setA
   | O => match work with nil => acc | _ => acc ++ err_row (null_tuple sa) :: nil end
   end.
 
+(** the expressions of a list, each once (the first occurrence); the hidden expressions of a group are only
+    read through [existsb (sexpr_eqb e)], which their repetition does not change *)
+Fixpoint sdedup (seen : list sexpr) (l : list sexpr) : list sexpr :=
+  match l with
+  | nil => nil
+  | e :: r => if existsb (sexpr_eqb e) seen then sdedup seen r else e :: sdedup (e :: seen) r
+  end.
+
 (** The groups of grouping sets: each grouping set is a list of positions in the list [univ] of all the
     grouping expressions ([row_vals t] are their values on the row [t]); the groups of a set are those of the
     rows which agree on its expressions, and the expressions of [univ] which it does not contain are hidden
@@ -1643,12 +1651,48 @@ Definition set_groupings (row_vals : tuple -> list value) (univ : list sexpr) (p
   flat_map
     (fun pos =>
        let set := map (fun i => nth i univ (E_Const (null O))) pos in
-       let hid := filter (fun e => negb (existsb (sexpr_eqb e) set)) univ in
+       let hid := sdedup nil (filter (fun e => negb (existsb (sexpr_eqb e) set)) univ) in
        let gs := match pos with
                  | nil => rows :: nil
                  | _ => group_on (fun t => let vs := row_vals t in map (fun i => nth i vs (null O)) pos) rows
                  end in
        map (fun grp => (grp, hid)) gs) positions.
+
+(** The groups of a block: [gkeys t] are the values of the grouping expressions on the row [t] (a row whose key
+    fails is a failed row), [row_vals t] those of the grouping sets, [implicit] tells whether a block without
+    [GROUP BY] is one group (it has aggregates). *)
+Definition grouping_part (g : sgroup) (gkeys row_vals : tuple -> list value) (implicit : bool) (rows : list tuple)
+  : list (list tuple * list sexpr) :=
+  let rows := map (fun t => if existsb (is_error O) (gkeys t) then err_row t else t) rows in
+  let plain_groups :=
+      match g with
+      | G_Fine => if implicit then rows :: nil else map (fun t => t :: nil) rows
+      | G_By nil => rows :: nil
+      | G_By lg => group_on gkeys rows
+      | _ => nil
+      end in
+  let univ : list sexpr :=
+      match g with
+      | G_Sets ss => List.concat ss
+      | G_Rollup l | G_Cube l => l
+      | _ => nil
+      end in
+  let positions : list (list nat) :=
+      match g with
+      | G_Sets ss =>
+        (fix go (off : nat) (ss : list (list sexpr)) : list (list nat) :=
+           match ss with
+           | nil => nil
+           | l :: r => seq off (List.length l) :: go (off + List.length l)%nat r
+           end) 0%nat ss
+      | G_Rollup l => rollup_sets (seq 0 (List.length l))
+      | G_Cube l => cube_sets (seq 0 (List.length l))
+      | _ => nil
+      end in
+  match g with
+  | G_Sets _ | G_Rollup _ | G_Cube _ => set_groupings row_vals univ positions rows
+  | _ => map (fun grp => (grp, nil)) plain_groups
+  end.
 
 Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :=
   if is_hidden env e
@@ -1919,24 +1963,6 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
              end) ss
         | G_Rollup l | G_Cube l => map (eval_sexpr ce (slice_t t :: env)) l
         end in
-    let rows := map (fun t => if existsb (is_error O) (gkeys t) then err_row t else t) rows in
-    let plain_groups :=
-        match g with
-        | G_Fine => if implicit_group ce sa s h ex then rows :: nil else map (fun t => t :: nil) rows
-        | G_By nil => rows :: nil
-        | G_By lg => group_on (fun t => map (eval_sexpr ce (slice_t t :: env)) lg) rows
-        | _ => nil
-        end in
-    (** With grouping sets, the grouping expressions are evaluated once for each row; each grouping set is a
-        list of positions in the list [univ] of all the grouping expressions. The groups of a set are
-        those of the rows which agree on its expressions, and the expressions of [univ] which it does not
-        contain are NULL in the groups it produces. *)
-    let univ : list sexpr := 
-        match g with
-        | G_Sets ss => List.concat ss
-        | G_Rollup l | G_Cube l => l
-        | _ => nil
-        end in
     let row_vals (t : tuple) : list value :=
         match g with
         | G_Sets ss => 
@@ -1948,23 +1974,8 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
         | G_Rollup l | G_Cube l => map (eval_sexpr ce (slice_t t :: env)) l
         | _ => nil
         end in
-    let positions : list (list nat) :=
-        match g with
-        | G_Sets ss => 
-          (fix go (off : nat) (ss : list (list sexpr)) : list (list nat) :=
-             match ss with
-             | nil => nil
-             | l :: r => seq off (List.length l) :: go (off + List.length l)%nat r
-             end) 0%nat ss
-        | G_Rollup l => rollup_sets (seq 0 (List.length l))
-        | G_Cube l => cube_sets (seq 0 (List.length l))
-        | _ => nil
-        end in
     let groupings : list (list tuple * list sexpr) :=
-        match g with
-        | G_Sets _ | G_Rollup _ | G_Cube _ => set_groupings row_vals univ positions rows
-        | _ => map (fun grp => (grp, nil)) plain_groups
-        end in
+        grouping_part g gkeys row_vals (implicit_group ce sa s h ex) rows in
     let genvs := map (fun gh => slice_gs sa (fst gh) (snd gh) :: env) groupings in
     (** HAVING: a group which holds a failed row, or on which the condition fails, gives a failed row *)
     let flagged := 
@@ -2041,6 +2052,79 @@ with eval_sfrom (ce : cte_env) (env : senv) (f : sfrom) {struct f} : list tuple 
 
     As a list for the queries the result of which is ordered, and as a bag for
     the other ones. *)
+
+(** The evaluation of a block, cut at its groups: [eval_select] shows that a block depends on its [GROUP BY]
+    only through the groups which [grouping_part] computes (and through the failed rows of its keys). *)
+Definition gkeys_of (ce : cte_env) (env : senv) (g : sgroup) (t : tuple) : list value :=
+  match g with
+  | G_Fine => nil
+  | G_By lg => map (eval_sexpr ce (slice_t t :: env)) lg
+  | G_Sets ss =>
+    (fix go (ss : list (list sexpr)) : list value :=
+       match ss with
+       | nil => nil
+       | l :: r => map (eval_sexpr ce (slice_t t :: env)) l ++ go r
+       end) ss
+  | G_Rollup l | G_Cube l => map (eval_sexpr ce (slice_t t :: env)) l
+  end.
+
+Definition row_vals_of (ce : cte_env) (env : senv) (g : sgroup) (t : tuple) : list value :=
+  match g with
+  | G_Sets ss =>
+    (fix go (ss : list (list sexpr)) : list value :=
+       match ss with
+       | nil => nil
+       | l :: r => map (eval_sexpr ce (slice_t t :: env)) l ++ go r
+       end) ss
+  | G_Rollup l | G_Cube l => map (eval_sexpr ce (slice_t t :: env)) l
+  | _ => nil
+  end.
+
+Definition where_rows (ce : cte_env) (env : senv) (lf : list sfrom) (w : scond) : list tuple :=
+  let from :=
+      fold_left (fun l1 l2 => keep_errors (cross_product l1 l2) (l1 ++ l2))
+                (map (eval_sfrom ce env) lf) (empty_tuple T :: nil) in
+  flat_map (fun t => if row_error t || scond_raises ce (slice_t t :: env) w then err_row t :: nil
+                     else if is_true3 (eval_scond ce (slice_t t :: env) w) then t :: nil
+                     else nil) from.
+
+Definition select_rest (ce : cte_env) (env : senv) (sa : setA) (sq : set_quantifier) (s : sselect) (h : scond)
+           (groupings : list (list tuple * list sexpr)) : list (tuple * senv) :=
+  let genvs := map (fun gh => slice_gs sa (fst gh) (snd gh) :: env) groupings in
+  let flagged :=
+      map (fun ge => (ge, match ge with
+                          | (_, gr, _) :: _ => existsb row_error gr
+                          | nil => false
+                          end || scond_raises ce ge h)) genvs in
+  let flagged := filter (fun x => snd x || is_true3 (eval_scond ce (fst x) h)) flagged in
+  let out :=
+      map (fun (x : senv * bool) =>
+             let ge := fst x in
+             let row :=
+                 match s with
+                 | S_Star =>
+                   match ge with
+                   | (_, t :: _, _) :: _ => t
+                   | _ => null_tuple sa
+                   end
+                 | S_List l =>
+                   mk_row (map (fun it => match it with
+                                         | S_As e a => (a, eval_sexpr ce ge e)
+                                         end) l)
+                 end in
+             (if snd x then err_row row else row, ge)) flagged in
+  match sq with
+  | Set_All => out
+  | Set_Distinct => dedup_on (@fst _ _) out
+  end.
+
+Lemma eval_select :
+  forall ce env sq s lf w g h ex,
+    eval_sspec ce env (Select sq s lf w g h) ex =
+    let sa := Fset.Union (A T) (map (sfrom_sort ce) lf) in
+    select_rest ce env sa sq s h
+      (grouping_part g (gkeys_of ce env g) (row_vals_of ce env g) (implicit_group ce sa s h ex) (where_rows ce env lf w)).
+Proof. intros; reflexivity. Qed.
 
 Definition eval_query_list (q : squery) : list tuple := eval_squery nil nil q.
 

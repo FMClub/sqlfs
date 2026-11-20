@@ -47,3 +47,5 @@ Print Assumptions SqlScoping.wf_set_op.
 Print Assumptions SqlGroupFacts.rollup_groupings.
 Print Assumptions Versions.version_eval.
 Print Assumptions Versions.version_accepted.
+Print Assumptions SqlGroupFacts.rollup_as_grouping_sets.
+Print Assumptions SqlFull.eval_select.

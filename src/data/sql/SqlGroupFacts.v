@@ -404,7 +404,7 @@ Theorem rollup_groupings :
     set_groupings O (fun t => map (fun e => f e t) l) l (rollup_sets (seq 0 (length l))) rows =
     flat_map (fun k =>
                 let set := firstn k l in
-                let hid := filter (fun e => negb (existsb (sexpr_eqb e) set)) l in
+                let hid := sdedup nil (filter (fun e => negb (existsb (sexpr_eqb e) set)) l) in
                 map (fun grp => (grp, hid))
                     (match k with
                      | 0 => rows :: nil
@@ -423,3 +423,211 @@ apply firstn_map.
 Qed.
 
 End Rollup.
+
+(** * [ROLLUP] is the [GROUPING SETS] of its prefixes, at the level of the rows of a block (TODO 6.4)
+
+    [rollup_as_grouping_sets]: a block with [GROUP BY ROLLUP (e1, ..., en)] gives the rows of the same block
+    with [GROUP BY GROUPING SETS ((e1, ..., en), ..., (e1), ())], when the grouping expressions are columns,
+    constants or functions of them (the expressions which [sexpr_eqb] identifies with themselves). *)
+Section RollupRows.
+
+Hypothesis T : Tuple.Rcd.
+Hypothesis relname : Type.
+Hypothesis ORN : Oset.Rcd relname.
+Hypothesis O : dialect T.
+Hypothesis basesort : relname -> Fset.set (Tuple.A T).
+Hypothesis instance : relname -> Febag.bag (Fecol.CBag (Tuple.CTuple T)).
+
+Import Tuple.
+
+Notation sexpr := (sexpr T relname).
+
+Lemma sdedup_app :
+  forall (la lb : list sexpr) seen,
+    (forall y, In y lb -> sexpr_eqb y y = true /\ (existsb (sexpr_eqb y) seen = true \/ In y la)) ->
+    (forall y, In y la -> sexpr_eqb y y = true) ->
+    sdedup seen (la ++ lb) = sdedup seen la.
+Proof.
+intro la; induction la as [ | x la IH]; intros lb seen H R.
+- simpl; induction lb as [ | y lb IHb]; [reflexivity | ].
+  simpl; destruct (H y (or_introl eq_refl)) as [_ [K | K]]; [ | contradiction K].
+  rewrite K; apply IHb; intros z I; apply H; right; exact I.
+- simpl; case_eq (existsb (sexpr_eqb x) seen); intro E.
+  + apply IH; [ | intros y I; apply R; right; exact I].
+    intros y I; destruct (H y I) as [Ry [K | [K | K]]]; split; trivial; [left; exact K | | right; exact K].
+    subst; left; exact E.
+  + f_equal; apply IH; [ | intros y I; apply R; right; exact I].
+    intros y I; destruct (H y I) as [Ry [K | [K | K]]]; split; trivial.
+    * left; simpl; rewrite K; apply Bool.orb_true_r.
+    * subst; left; simpl; rewrite Ry; reflexivity.
+    * right; exact K.
+Qed.
+
+Lemma in_firstn' : forall (A : Type) (l : list A) k x, In x (firstn k l) -> In x l.
+Proof.
+intros A l k x I; rewrite <- (firstn_skipn k l); apply in_or_app; left; exact I.
+Qed.
+
+Lemma concat_rollup :
+  forall (l : list sexpr),
+    exists rest, concat (rollup_sets l) = l ++ rest /\ (forall y, In y rest -> In y l).
+Proof.
+intro l; unfold rollup_sets.
+rewrite seq_S, rev_app_distr; simpl; rewrite firstn_all.
+exists (concat (map (fun n => firstn n l) (rev (seq 0 (length l))))); split; [reflexivity | ].
+intros y I; apply in_concat in I; destruct I as [z [Iz Iy]]; apply in_map_iff in Iz.
+destruct Iz as [k [Ek _]]; subst; exact (in_firstn' _ _ _ _ Iy).
+Qed.
+
+Lemma map_seq_shift :
+  forall (A : Type) (g : nat -> A) off n, map g (seq off n) = map (fun j => g (off + j)) (seq 0 n).
+Proof.
+intros A g off n; revert g off; induction n as [ | n IH]; intros g off; [reflexivity | ].
+simpl; rewrite <- plus_n_O; f_equal.
+rewrite (IH g (S off)), (IH (fun j => g (off + j)) 1); apply map_ext; intro j; f_equal; lia.
+Qed.
+
+Lemma nth_concat_block :
+  forall (A : Type) (pre : list (list A)) x r d j, j < length x ->
+    nth (length (concat pre) + j) (concat (pre ++ x :: r)) d = nth j x d.
+Proof.
+intros A pre x r d j H; rewrite concat_app, app_nth2 by lia.
+replace (length (concat pre) + j - length (concat pre)) with j by lia.
+simpl; rewrite app_nth1 by exact H; reflexivity.
+Qed.
+
+Lemma block_of_positions :
+  forall (A : Type) (pre : list (list A)) x r d,
+    map (fun i => nth i (concat (pre ++ x :: r)) d) (seq (length (concat pre)) (length x)) = x.
+Proof.
+intros A pre x r d; rewrite map_seq_shift.
+transitivity (map (fun j => nth j x d) (seq 0 (length x))).
+- apply map_ext_in; intros j I; apply in_seq in I; apply nth_concat_block; lia.
+- rewrite (@map_nth_prefix _ x d (length x)) by lia; apply firstn_all.
+Qed.
+
+Lemma key_block :
+  forall (A B : Type) (f : A -> B) (pre : list (list A)) x r (d : A) dv,
+    map (fun i => nth i (map f (concat (pre ++ x :: r))) dv) (seq (length (concat pre)) (length x)) = map f x.
+Proof.
+intros A B f pre x r d dv; rewrite map_seq_shift.
+transitivity (map (fun j => f (nth j x d)) (seq 0 (length x))).
+- apply map_ext_in; intros j I; apply in_seq in I.
+  rewrite (nth_indep _ dv (f d)) by (rewrite map_length, concat_app, app_length; simpl; rewrite app_length; lia).
+  rewrite map_nth, nth_concat_block by lia; reflexivity.
+- rewrite <- (map_map (fun j => nth j x d) f), (@map_nth_prefix _ x d (length x)) by lia.
+  rewrite firstn_all; reflexivity.
+Qed.
+
+Definition ev ce env (e : sexpr) (t : tuple T) := eval_sexpr ORN O basesort instance ce (slice_t T relname t :: env) e.
+
+Lemma row_vals_sets :
+  forall ce env ss t, row_vals_of ORN O basesort instance ce env (G_Sets ss) t = map (fun e => ev ce env e t) (concat ss).
+Proof.
+intros ce env ss t; unfold row_vals_of; induction ss as [ | x ss IH]; [reflexivity | ].
+simpl; rewrite IH, map_app; reflexivity.
+Qed.
+
+Lemma gkeys_sets :
+  forall ce env ss t, gkeys_of ORN O basesort instance ce env (G_Sets ss) t = map (fun e => ev ce env e t) (concat ss).
+Proof.
+intros ce env ss t; unfold gkeys_of; induction ss as [ | x ss IH]; [reflexivity | ].
+simpl; rewrite IH, map_app; reflexivity.
+Qed.
+
+Lemma sets_groupings_spec :
+  forall ce env (rows : list (tuple T)) pre r,
+    set_groupings O (fun t => map (fun e => ev ce env e t) (concat (pre ++ r))) (concat (pre ++ r))
+                  ((fix go (off : nat) (ss : list (list sexpr)) : list (list nat) :=
+                      match ss with
+                      | nil => nil
+                      | l :: r => seq off (List.length l) :: go (off + List.length l)%nat r
+                      end) (length (concat pre)) r) rows =
+    flat_map (fun x =>
+                let hid := sdedup nil (filter (fun e => negb (existsb (sexpr_eqb e) x)) (concat (pre ++ r))) in
+                map (fun grp => (grp, hid))
+                    (match x with
+                     | nil => rows :: nil
+                     | _ => group_on O (fun t => map (fun e => ev ce env e t) x) rows
+                     end)) r.
+Proof.
+intros ce env rows pre r; revert pre; induction r as [ | x r IH]; intro pre; [reflexivity | ].
+unfold set_groupings in *; cbn [flat_map]; f_equal.
+- rewrite (@block_of_positions _ pre x r (E_Const T relname (null O))).
+  destruct x as [ | y x]; [reflexivity | ].
+  cbn zeta; f_equal; apply group_on_ext; intro t.
+  exact (@key_block _ _ (fun e => ev ce env e t) pre (y :: x) r y _).
+- replace (length (concat pre) + length x) with (length (concat (pre ++ x :: nil))) by
+    (rewrite concat_app, app_length; simpl; rewrite app_nil_r; reflexivity).
+  replace (pre ++ x :: r) with ((pre ++ x :: nil) ++ r) by (rewrite <- app_assoc; reflexivity).
+  apply IH.
+Qed.
+
+Lemma set_groupings_ext :
+  forall (rv1 rv2 : tuple T -> list (value T)) (univ : list sexpr) (positions : list (list nat)) (rows : list (tuple T)),
+    (forall t, rv1 t = rv2 t) ->
+    set_groupings O rv1 univ positions rows = set_groupings O rv2 univ positions rows.
+Proof.
+intros rv1 rv2 univ positions rows H; unfold set_groupings; apply flat_map_ext_in'; intros pos _.
+cbn zeta; f_equal; destruct pos as [ | i pos]; [reflexivity | ].
+apply group_on_ext; intro t; rewrite H; reflexivity.
+Qed.
+
+Lemma rollup_key_errors :
+  forall ce env l t,
+    existsb (is_error O) (gkeys_of ORN O basesort instance ce env (G_Sets (rollup_sets l)) t) =
+    existsb (is_error O) (gkeys_of ORN O basesort instance ce env (G_Rollup l) t).
+Proof.
+intros ce env l t; rewrite gkeys_sets; destruct (concat_rollup l) as [rest [E R]]; rewrite E.
+change (gkeys_of ORN O basesort instance ce env (G_Rollup l) t) with (map (fun e => ev ce env e t) l).
+rewrite map_app, existsb_app.
+case_eq (existsb (is_error O) (map (fun e => ev ce env e t) l)); intro K; [reflexivity | ].
+simpl; case_eq (existsb (is_error O) (map (fun e => ev ce env e t) rest)); intro K'; [ | reflexivity].
+apply existsb_exists in K'; destruct K' as [v [Iv Ev]]; apply in_map_iff in Iv; destruct Iv as [y [Ey Iy]].
+assert (K'' : existsb (is_error O) (map (fun e => ev ce env e t) l) = true).
+{ apply existsb_exists; exists v; split; [ | exact Ev].
+  rewrite <- Ey; apply (in_map (fun e => ev ce env e t)); apply R; exact Iy. }
+rewrite K'' in K; discriminate K.
+Qed.
+
+Theorem rollup_as_grouping_sets :
+  forall ce env sq s lf w l h ex,
+    (forall e, In e l -> sexpr_eqb e e = true) ->
+    eval_sspec ORN O basesort instance ce env (Select sq s lf w (G_Rollup l) h) ex =
+    eval_sspec ORN O basesort instance ce env (Select sq s lf w (G_Sets (rollup_sets l)) h) ex.
+Proof.
+intros ce env sq s lf w l h ex Hrefl; rewrite !eval_select; cbv zeta; f_equal.
+unfold grouping_part; cbv zeta iota beta.
+rewrite (map_ext _ _ (fun t => f_equal (fun b : bool => if b then err_row O t else t) (rollup_key_errors ce env l t))).
+set (R := map _ (where_rows ORN O basesort instance ce env lf w)).
+change (set_groupings O (fun t => map (fun e => ev ce env e t) l) l (rollup_sets (seq 0 (length l))) R =
+        set_groupings O (row_vals_of ORN O basesort instance ce env (G_Sets (rollup_sets l))) (concat (rollup_sets l))
+          ((fix go (off : nat) (ss : list (list sexpr)) : list (list nat) :=
+              match ss with
+              | nil => nil
+              | l :: r => seq off (List.length l) :: go (off + List.length l)%nat r
+              end) 0 (rollup_sets l)) R).
+rewrite (set_groupings_ext (row_vals_of ORN O basesort instance ce env (G_Sets (rollup_sets l)))
+           (fun t => map (fun e => ev ce env e t) (concat (rollup_sets l)))) by (intro t; apply row_vals_sets).
+rewrite (rollup_groupings T O relname (ev ce env) l R).
+change (concat (rollup_sets l)) with (concat (nil ++ rollup_sets l)).
+change 0 with (length (concat (@nil (list sexpr)))).
+rewrite (sets_groupings_spec ce env R nil (rollup_sets l)); simpl app.
+simpl length.
+match goal with |- flat_map ?F _ = flat_map ?G _ =>
+  transitivity (flat_map (fun k => G (firstn k l)) (rev (seq 0 (S (length l)))));
+  [ | unfold rollup_sets; rewrite flat_map_map'; reflexivity] end.
+apply flat_map_ext_in'; intros k I; rewrite <- in_rev, in_seq in I.
+cbn zeta beta.
+assert (Hh : forall P, sdedup nil (filter P (concat (rollup_sets l))) = sdedup nil (filter P l)).
+{ intro P; destruct (concat_rollup l) as [rest [E R']]; rewrite E, filter_app.
+  apply sdedup_app.
+  + intros y Iy; apply filter_In in Iy; destruct Iy as [Iy Py]; split; [apply Hrefl, R'; exact Iy | ].
+    right; apply filter_In; split; [apply R'; exact Iy | exact Py].
+  + intros y Iy; apply filter_In in Iy; apply Hrefl; tauto. }
+rewrite Hh; f_equal.
+destruct k as [ | k]; [reflexivity | ].
+destruct l as [ | a l]; [simpl in I; lia | reflexivity].
+Qed.
+
+End RollupRows.
