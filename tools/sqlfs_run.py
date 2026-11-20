@@ -20,6 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools' / 'spec'))
 import sql2coq as S  # noqa: E402
+sys.path.insert(0, str(ROOT / 'tools' / 'extraction'))
+import term2ml  # noqa: E402
 
 
 def col_type(vals):
@@ -43,7 +45,7 @@ def lit(v, ty):
 
 def main():
     args = sys.argv[1:]
-    dialect, tables = 'MySQL', []
+    dialect, tables, lib = 'MySQL', [], None
     while args and args[0].startswith('--'):
         if args[0] == '--dialect':
             dialect, args = args[1], args[2:]
@@ -51,6 +53,8 @@ def main():
             name, path = args[1].split('=', 1)
             tables.append((name, path))
             args = args[2:]
+        elif args[0] == '--extracted':
+            lib, args = os.path.abspath(args[1]), args[2:]
         else:
             sys.exit('unknown option ' + args[0])
     if len(args) != 1:
@@ -94,6 +98,9 @@ def main():
         spec = files[0]
         t = spec.read_text()
         name = re.search(r'Definition (cases_\w+)', t).group(1)
+        if lib is not None:
+            run_extracted(lib, dialect, n, t, Path(d))
+            return
         t = t.replace('Eval vm_compute in (diagnose', '(* Eval vm_compute in (diagnose')
         t = t.rstrip() + ' *)\nRequire Import ResultText.\n' + \
             'Eval vm_compute in (map (fun c => map (map (result_text %s)) (run_rows %s c %d)) %s).\n' % (
@@ -105,6 +112,27 @@ def main():
             sys.exit(r.stdout + r.stderr)
         for row in rows:
             print('\t'.join(re.findall(r'"([^"]*)"', row)))
+
+
+def run_extracted(lib, dialect, n, spec_text, d):
+    """the cases of the translated file, as an OCaml program linked with the extracted library"""
+    m = re.search(r':= \[\n(.*)\n\]\.', spec_text, re.S)
+    cases = [c.strip().rstrip(';') for c in m.group(1).split('\n') if c.strip()]
+    body = '; '.join(term2ml.to_ml(c) for c in cases)
+    ml = d / 'query.ml'
+    ml.write_text('open Sqlfs_lib\nlet () =\n  match dialect_named %s with\n'
+                  '  | None -> prerr_endline "unknown dialect"; exit 2\n'
+                  '  | Some dl -> List.iter (fun c -> Prelude.print_rows dl (run_rows dl c (Prelude.nat %d))) [%s]\n'
+                  % (term2ml.ml_string(dialect), n, body))
+    exe = d / 'query'
+    r = subprocess.run(['ocamlopt', '-I', lib, os.path.join(lib, 'sqlfs_lib.cmx'), os.path.join(lib, 'prelude.cmx'),
+                        str(ml), '-o', str(exe)], capture_output=True, text=True, cwd=str(d))
+    if r.returncode != 0:
+        sys.exit(r.stdout + r.stderr)
+    r = subprocess.run(['sh', '-c', 'ulimit -s unlimited; exec "$0"', str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(r.stdout + r.stderr)
+    sys.stdout.write(r.stdout)
 
 
 if __name__ == '__main__':
