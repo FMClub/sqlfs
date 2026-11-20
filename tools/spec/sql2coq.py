@@ -2736,6 +2736,11 @@ def process(path, out, stats):
                             tables[n.lower()] = t
                         except Skip:
                             pass
+            elif head == 'insert' and re.match(r'^\s*insert\s+(ignore\s+)?(into\s+)?(\w+)', s, re.I) and \
+                    re.match(r'^\s*insert\s+(ignore\s+)?(into\s+)?(\w+)', s, re.I).group(3).lower() in VIEWS:
+                # an insert through a view: the tables of the view (any of them) are unreliable
+                for t in tables.values():
+                    t.ok = False
             elif head == 'insert':
                 try:
                     t, rows = parse_insert(toks, tables)
@@ -2756,6 +2761,11 @@ def process(path, out, stats):
                                     t.ok = False
                     except Skip:
                         pass
+            elif head in ('update', 'delete', 'replace', 'truncate', 'alter', 'rename', 'insert') and \
+                    any(re.search(r'\b' + re.escape(v) + r'\b', s, re.I) for v in VIEWS):
+                # a change through a view: the tables of the view (any of them) are unreliable
+                for t in tables.values():
+                    t.ok = False
             elif head in ('update', 'delete', 'replace', 'truncate', 'alter', 'rename'):
                 changed = set()
                 for t in tables.values():

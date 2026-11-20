@@ -89,7 +89,7 @@ block, a routine, a data-modifying `WITH` or an inheritance child makes the tabl
 skipping the file.
 
 Run 6, after TODO 5.1 (window functions, `VALUES`, grouping sets, views, typed literals, `COPY ... FROM stdin`):
-**459** queries translated, **234** fail; 103 of them are `NaN`/`Infinity` (not representable), 67 the scale of `power` on
+**459** queries translated, **234** fail (run 7, after the fixes of numeric modulo and casts: **215**); 103 of them are `NaN`/`Infinity` (not representable), 67 the scale of `power` on
 `numeric` (the precision rule of `power_var` is not modelled), 26 `to_char` with numeric format models, 17 `format` widths,
 14 `json_strip_nulls`, 12 BC dates, 8 array literals in `ANY`; the others are listed below. Found and fixed by the runs: the
 text of a decimal with more than 40 decimals (it printed `0.000...`), the population variance of one value, the memory
@@ -134,6 +134,27 @@ connection or change of `sql_mode`; the lines printed by `--echo` are not rows. 
 
 Found and fixed by the MariaDB runs: the decimals of `VARIANCE`/`STD` (argument decimals + 4, 20 cases), the maximal
 scale of `ROUND`/`TRUNCATE` (38; a scale of `2147483640` exhausted memory), several statements on one line.
+
+**MySQL test suite** (`MySQL`, TODO 5.2): `mysql-test/r` of `mysql/mysql-server` at `06bcb0e` (1548 result files),
+`tools/spec/suite_run.sh MySQL mysql`. Run 2: **1122** queries translated, **118** fail. The groups: 44 regular expressions
+with inline flags scoped to a group (`(?i:a)`, `((?-i)a)`) or back references beyond `\9` (the leading flags `(?i)` are
+modelled since this run); 15 views changed through `UPDATE`/`INSERT` (the translator now marks the tables of a view
+unreliable: 2 remain); 9 `CURRENT_ROLE ()` and other session state; `INTERVAL ()` with a NULL bound, `varbinary`
+(binary strings), locks, temporary tables, time zones: not modelled or server state.
+
+**TiDB integration tests** (`TiDB`, TODO 5.2): `tests/integrationtest/r` (273 files), `suite_run.sh TiDB tidb`; a script
+stops at the first change of `sql_mode`, collation, character set or time zone (the tests of the new collation framework
+start with one). Run 2: **1935** translated, **125** fail, 2 files over the memory limit. The groups: 38 timestamp
+literals with a time zone offset (`TIMESTAMP '2024-01-01 14:00:00+01:00'`, MySQL 8.0.19): not modelled; 31 JSON functions on
+non-JSON arguments, where TiDB reports an error that the model gives as a value; integer overflow errors (`ABS (-2^63)`):
+the integers of the MySQL family are unbounded in the model; results which hold a statement of the script (scripts
+without `;` echo): harness.
+
+Found and fixed by the MySQL-family runs: digit strings read as dates (`'20050606'`), the exponent of numeric strings
+(`'123e-2'`), leading inline regular-expression flags, executable comments `/*!NNNNN ... */`, TiDB's error lines
+(`Error 1582 (42000): ...`) and warning tables.
+
+The table of all the runs is `docs/CONFORMANCE_SUMMARY.md` (`tools/spec/summary.py`).
 
 **sqllogictest** (queries are selected for an engine by the directives):
 

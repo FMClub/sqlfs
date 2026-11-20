@@ -542,8 +542,10 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
 ## Phase 5. Validation against real engines
 
 - **5.1 Translator coverage**: extend `tools/spec/sql2coq.py` / `slt2coq.py` to the whole fragment: window functions, `WITH [RECURSIVE]`, `GROUPING SETS`/`ROLLUP`/`CUBE`, ordered aggregates, `DISTINCT ON`, `FETCH ... WITH TIES`, `VALUES`, derived columns lists, dates, JSON.
+  **Status: DONE** for window functions, `WITH [RECURSIVE]`, grouping sets, ordered aggregates, `VALUES`, derived column lists, views, dates, JSON; skips are counted by reason in each run's statistics.
   Each translated construct must reproduce a recorded result, otherwise the case is skipped and counted by reason (a skip report, with the reasons, checked in per run).
 - **5.2 MySQL-family suites**: MariaDB `mysql-test/main/*.test` + `.result` (functions, window functions `win*.test`, CTEs, `intersect*.test`, `except*.test`, `fetch_first.test`), MySQL `mysql-test/t` and `r` (BSD/GPL: do not copy the data: replay, as with OceanBase),
+  **Status: DONE** (`tools/spec/suite_run.sh`; MariaDB, TiDB and MySQL suites replayed, the failures grouped and explained in `docs/CONFORMANCE.md`; Percona and PolarDB have no open suite of their own: they are MySQL's).
   TiDB `tests/integrationtest/t` and `r`, Percona (same as MySQL plus its own), PolarDB (no open suite: use the MySQL one and the documented exceptions). Goal: a table in `docs/CONFORMANCE.md` of queries replayed and passed per dialect, with the failure list explained.
 - **5.3 PostgreSQL regression suite**: `src/test/regress/sql/*.sql` and `expected/*.out` (`select.sql`, `aggregates.sql`, `window.sql`, `with.sql`, `join.sql`, `subselect.sql`, `union.sql`, `numeric.sql`, `strings.sql`, `text.sql`, `float8.sql`, `date.sql`, `timestamp.sql`, `json.sql`, `jsonb.sql`, `arrays.sql`, `groupingsets.sql`): the expected files print result tables; write the parser for that format.
   **Status: DONE** (harness `tools/spec/pg_run.sh`, `pg2result.py`; run 1: 232/320, the failures classified in `docs/CONFORMANCE.md`; window functions are not translated yet: 5.1).
