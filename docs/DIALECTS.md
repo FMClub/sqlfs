@@ -31,6 +31,10 @@ A dialect has two parts.
 
 ## Where the dialects differ
 
+The table of every construct and every function name per dialect, computed from the model (so it cannot drift
+from it), is `docs/DIALECT_TABLES.md` (`tools/docs/gen_dialect_tables.py`); the table below explains the differences
+with their sources.
+
 `done` means that it is modelled and tested: the engine-level aspects in
 `src/testing/Test_Dialect.v`, the value-level ones in `src/testing/Test_Dialects.v`
 (the same query run under the five dialects, with the expected result in each), and, for
