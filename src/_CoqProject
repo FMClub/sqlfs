@@ -44,6 +44,7 @@ data/sql/SqlFullFacts.v
 data/sql/SqlGroupFacts.v
 data/sql/Oracles.v
 data/sql/SqlWellFormed.v
+data/sql/SqlScoping.v
 data/sql/SqlRelate.v
 data/proof_of_concept/TuplesImpl.v
 data/proof_of_concept/IEEE.v
