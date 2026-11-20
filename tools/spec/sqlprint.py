@@ -144,7 +144,11 @@ def query(q):
     if k == 'select':
         return select(q)
     if k == 'setop':
-        return '(%s) %s%s (%s)' % (query(q[3]), q[1].upper(), ' ALL' if q[2] else '', query(q[4]))
+        # a SELECT operand needs no parentheses (and the parser of a scalar subquery reads [(SELECT ((SELECT ...)
+        # UNION ...))] as an expression): only the nested set operations and the ordered operands get them
+        def operand(x):
+            return query(x) if x[0] == 'select' else '(%s)' % query(x)
+        return '%s %s%s %s' % (operand(q[3]), q[1].upper(), ' ALL' if q[2] else '', operand(q[4]))
     if k == 'orderq':
         inner, order, limit = q[1], q[2], q[3]
         txt = query(inner) if inner[0] == 'select' else '(%s)' % query(inner)
