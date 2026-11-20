@@ -61,6 +61,7 @@ Require Import Relations SetoidList List String Ascii Bool ZArith NArith QArith 
 Require Import BasicFacts ListFacts ListPermut ListSort OrderedSet
         FiniteSet FiniteBag FiniteCollection Join FlatData Tree Bool3 Formula
         Partition.
+Require FiniteSetImpl.
 
 Close Scope Q_scope.
 
@@ -1058,7 +1059,19 @@ Fixpoint dedup_rec (f : X -> tuple) (seen : list tuple) (l : list X) : list X :=
     else x :: dedup_rec f (f x :: seen) l
   end.
 
-Definition dedup_on (f : X -> tuple) (l : list X) := dedup_rec f nil l.
+(** the same, with the canonical forms of the tuples already seen in a balanced tree: [dedup_tree] is
+    [dedup_rec] ([dedup_tree_rec] in [SqlFullFacts.v]) in [n log n] comparisons instead of [n^2] *)
+Fixpoint dedup_tree (f : X -> tuple) (seen : FiniteSetImpl.tree tuple) (l : list X) : list X :=
+  match l with
+  | nil => nil
+  | x :: l =>
+    let c := canon_tuple (f x) in
+    if FiniteSetImpl.mem (OTuple T) c seen
+    then dedup_tree f seen l
+    else x :: dedup_tree f (FiniteSetImpl.add (OTuple T) c seen) l
+  end.
+
+Definition dedup_on (f : X -> tuple) (l : list X) := dedup_tree f (FiniteSetImpl.Leaf _) l.
 
 (** Groups, in the order of the first occurrence of their keys; inside a group,
     the order of the list is kept. *)

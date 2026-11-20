@@ -135,6 +135,8 @@ def is_constructor(name):
 
 def emit(node, kind=None):
     k = node[0]
+    if k == 'raw':
+        return node[1]
     if k == 'str':
         return ml_string(node[1])
     if k == 'num':
@@ -169,9 +171,74 @@ def emit(node, kind=None):
     raise ValueError(k)
 
 
-def to_ml(term):
+def num(node):
+    while node[0] == 'scoped':
+        node = node[1]
+    if node[0] != 'num':
+        raise ValueError('not a numeral')
+    return node[1]
+
+
+def cell(node):
+    """a stored value as a line of the data files read by [Prelude.rows] (None: not a known form)"""
+    if node[0] == 'id':
+        return {'NullZ': 'NZ', 'NullS': 'NS', 'NullQ': 'NQ', 'NullB': 'NB'}.get(node[1])
+    if node[0] != 'app' or node[1][0] != 'id':
+        return None
+    name, args = node[1][1], node[2]
+    try:
+        if name == 'VZ':
+            return 'Z|' + num(args[0])
+        if name == 'VS' and args[0][0] == 'str':
+            return 'S|' + args[0][1].encode('utf-8').hex()
+        if name == 'VD':
+            return 'D|%s|%s' % (num(args[0]), num(args[1]))
+        if name == 'VFl' and args[0][0] == 'id':
+            return 'F|%d|%s|%s' % (args[0][1] == 'true', num(args[1]), num(args[2]))
+        if name == 'NullValues.VDate':
+            return 'DT|' + num(args[0])
+        if name == 'NullValues.VTs':
+            return 'TS|%s|%s' % (num(args[0]), num(args[1]))
+        if name == 'NullValues.VTime':
+            return 'TM|%s|%s' % (num(args[0]), num(args[1]))
+    except (ValueError, IndexError):
+        return None
+    return None
+
+
+def externalize_tables(t, directory):
+    """the rows of the tables of a case ([mk_case id b tables ...]) written to files of [directory], read at run
+    time by [Prelude.rows]: a long table is then not a long literal for the OCaml compiler"""
+    if t[0] != 'app' or t[1] != ('id', 'mk_case') and t[1] != ('id', 'mk_case_limit') or len(t[2]) < 3:
+        return t
+    tables = t[2][2]
+    if tables[0] != 'list':
+        return t
+    new = []
+    for i, tab in enumerate(tables[1]):
+        # ((name, attributes), rows) is the tuple (name, attributes, rows)
+        if tab[0] != 'tuple' or len(tab[1]) != 3 or tab[1][2][0] != 'list':
+            return t
+        lines = []
+        for row in tab[1][2][1]:
+            cells = [cell(v) for v in (row[1] if row[0] == 'list' else [])]
+            if row[0] != 'list' or any(c is None for c in cells):
+                return t
+            lines.append('\t'.join(cells))
+        path = '%s/table%d.txt' % (directory, i)
+        with open(path, 'w') as f:
+            f.write('\n'.join(lines) + ('\n' if lines else ''))
+        new.append(('tuple', [tab[1][0], tab[1][1], ('raw', '(Prelude.rows %s)' % ml_string(path))]))
+    args = list(t[2])
+    args[2] = ('list', new)
+    return ('app', t[1], args)
+
+
+def to_ml(term, directory=None):
     p = Parser(tokenize(term))
     t = p.term()
     if p.peek()[0] != 'eof':
         raise ValueError('trailing text')
+    if directory is not None:
+        t = externalize_tables(t, directory)
     return emit(t)
