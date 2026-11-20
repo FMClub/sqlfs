@@ -1810,7 +1810,14 @@ Qed.
 Lemma all_diff_fresh_attrs :
    forall al l, all_diff (fresh_attrs al l).
 Proof.
-Admitted.
+intro al; induction al as [ | b al]; intro l; [simpl; trivial | ].
+apply (proj2 (all_diff_unfold _)); simpl; split; [ | apply IHal].
+intros a Ha Ka.
+assert (Abs := fresh_attr_is_fresh b (fresh_attrs al l ++ l)).
+rewrite Ka, Oset.mem_bool_app, Bool.Bool.orb_false_iff in Abs.
+assert (K : Oset.mem_bool (OAtt T) a (fresh_attrs al l) = true); [rewrite Oset.mem_bool_true_iff; assumption | ].
+rewrite (proj1 Abs) in K; discriminate K.
+Qed.
 
 
 (*
@@ -1833,7 +1840,13 @@ Qed.
 Lemma fresh_attrs_are_fresh :
   forall a al l,  In a (fresh_attrs al l) -> In a l -> False.
 Proof.
-Admitted.
+intros a al; induction al as [ | b al]; intros l H1 H2; simpl in H1; [contradiction H1 | ].
+destruct H1 as [H1 | H1]; [ | apply (IHal _ H1 H2)].
+assert (Abs := fresh_attr_is_fresh b (fresh_attrs al l ++ l)).
+rewrite H1, Oset.mem_bool_app, Bool.Bool.orb_false_iff in Abs.
+assert (K : Oset.mem_bool (OAtt T) a l = true); [rewrite Oset.mem_bool_true_iff; assumption | ].
+rewrite (proj2 Abs) in K; discriminate K.
+Qed.
 
 
 

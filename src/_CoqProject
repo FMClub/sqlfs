@@ -51,6 +51,7 @@ data/proof_of_concept/SqlSyntax.v
 data/proof_of_concept/Movie.v
 data/proof_of_concept/SqlFullSyntax.v
 data/proof_of_concept/Naming.v
+data/proof_of_concept/FreshAttr.v
 testing/Test_SqlFull.v
 testing/Test_Audit.v
 testing/Test_Dialect.v

@@ -195,6 +195,11 @@ Definition str1 (f : string -> value) (l : list value) : value :=
 
 Definition str_fun1 (f : string -> string) := str1 (fun s => Value_string (Some (f s))).
 
+(** the scale of [ROUND (x, d)] and [TRUNCATE (x, d)]: at most [DECIMAL_MAX_SCALE] decimals, 30 in MySQL
+    and 38 in MariaDB (the session with PCRE, [ms_regex = 1]); below -400 every value rounds to 0 (doubles are
+    below 1e309): the bounds keep [10 ^ d] small *)
+Definition clamp_scale (d : Z) : Z := Z.max (-400) (Z.min (if Nat.eqb (ms_regex ss) 1 then 38 else 30) d).
+
 Definition z_arg (v : value) : option Z :=
   match lenient v with
   | Some (Num_Z z) => Some z
@@ -423,17 +428,17 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("round", fun l => match l with
                         | Value_D (Some (q, _, _)) :: nil => my_dround false q 0
                         | Value_D (Some (q, _, _)) :: d :: nil => 
-                          match z_arg d with Some d => my_dround false q d | None => Value_Z None end
+                          match z_arg d with Some d => let d := clamp_scale d in my_dround false q d | None => Value_Z None end
                         | v :: nil => num_fun1 conv (fun a => num_round a 0) l
                         | v :: d :: nil => match conv v, z_arg d with
-                                           | Some a, Some d => value_of_num (num_round a d) 
+                                           | Some a, Some d => let d := clamp_scale d in value_of_num (num_round a d) 
                                            | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   :: ("truncate", fun l => match l with
                            | Value_D (Some (q, _, _)) :: d :: nil => 
-                             match z_arg d with Some d => my_dround true q d | None => Value_Z None end
+                             match z_arg d with Some d => let d := clamp_scale d in my_dround true q d | None => Value_Z None end
                            | v :: d :: nil => match conv v, z_arg d with
-                                              | Some a, Some d => value_of_num (num_trunc a d) 
+                                              | Some a, Some d => let d := clamp_scale d in value_of_num (num_trunc a d) 
                                               | _, _ => Value_Z None end
                            | _ => Value_Z None end)
   :: ("power", num_fun2 conv num_power) :: ("pow", num_fun2 conv num_power)
@@ -886,6 +891,18 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
                 then (fst p, fun l => let r := (snd p) l in if is_F r then with_fdec (my_float_dec (fst p) l) r else r)
                 else p) (c_math_table false lenient ++ bit_table false lenient ++ ("rand", my_rand lenient) :: my_symbol_table_raw).
 
+(** MariaDB: the variance and the standard deviation have the decimals of their argument plus 4, at most 30
+    ([Item_sum_variance::fix_length_and_dec]: [MY_MIN (args[0]->decimals + 4, FLOATING_POINT_DECIMALS)], 31
+    being not fixed); MySQL prints them with no fixed decimals *)
+Definition var_dec (f : list value -> value) (l : list value) : value :=
+  if Nat.eqb (ms_regex ss) 1
+  then match filter (fun v => negb (is_null v)) l with
+       | v :: _ => match my_fdec v with
+                   | Some d => if Nat.ltb (d + 4) 31 then with_fdec (Some (d + 4)%nat) (f l) else f l
+                   | None => f l end
+       | nil => f l end
+  else f l.
+
 Definition my_aggregate_table : list (string * (list value -> value)) :=
      ("count", agg_count_by is_null)
   :: ("count(*)", fun l => Value_Z (Some (Z.of_nat (List.length l))))
@@ -906,12 +923,12 @@ Definition my_aggregate_table : list (string * (list value -> value)) :=
   :: ("bit_xor", bit_xor_agg true is_null lenient)
   (* the variance and the standard deviation are [DOUBLE]; [VARIANCE], [STD] and [STDDEV] are the
      population ones *)
-  :: ("var_pop", my_var_agg false false is_null lenient)
-  :: ("variance", my_var_agg false false is_null lenient)
-  :: ("var_samp", my_var_agg true false is_null lenient)
-  :: ("std", my_var_agg false true is_null lenient) :: ("stddev", my_var_agg false true is_null lenient)
-  :: ("stddev_pop", my_var_agg false true is_null lenient)
-  :: ("stddev_samp", my_var_agg true true is_null lenient)
+  :: ("var_pop", var_dec (my_var_agg false false is_null lenient))
+  :: ("variance", var_dec (my_var_agg false false is_null lenient))
+  :: ("var_samp", var_dec (my_var_agg true false is_null lenient))
+  :: ("std", var_dec (my_var_agg false true is_null lenient)) :: ("stddev", var_dec (my_var_agg false true is_null lenient))
+  :: ("stddev_pop", var_dec (my_var_agg false true is_null lenient))
+  :: ("stddev_samp", var_dec (my_var_agg true true is_null lenient))
   :: ("json_arrayagg", json_array_agg 0 my_json_of_value)
   :: ("json_objectagg", json_object_agg 0 is_null text_of my_json_of_value)
   :: ("count_distinct2", count_distinct2 is_null (fun a b => match my_compare_base a b with Some Eq => true | _ => false end))

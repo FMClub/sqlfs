@@ -85,6 +85,8 @@ def tokenize(s):
             i += len(txt)
         elif c.isalpha() or c == '_' or c == '$':
             m = re.match(r'[A-Za-z_$][A-Za-z_0-9$]*', s[i:])
+            if m is None:
+                raise Skip('non-ASCII identifier')
             w = m.group(0)
             toks.append(('kw' if w.lower() in KEYWORDS else 'id', w))
             i += len(w)
@@ -2167,6 +2169,30 @@ def split_blocks(lines):
     return blocks
 
 
+def split_statements(s):
+    """the statements of a text, at the ';' outside quotes (each keeps its ';')"""
+    out, cur, inq, esc = [], '', None, False
+    for c in s:
+        cur += c
+        if esc:
+            esc = False
+            continue
+        if c == '\\':
+            esc = True
+            continue
+        if inq:
+            if c == inq:
+                inq = None
+        elif c in "'\"`":
+            inq = c
+        elif c == ';':
+            out.append(cur.strip())
+            cur = ''
+    if cur.strip():
+        out.append(cur.strip())
+    return out or [s]
+
+
 def stmt_complete(s):
     # complete when the last non-space char is ';' outside quotes
     inq = None
@@ -2480,7 +2506,10 @@ def test_items(test_src, blocks):
                 continue
         cur += line + '\n'
         if stmt_complete(cur):
-            stmts.append((cur.strip(), pending_error))
+            # several statements on one line: each is a statement of the script
+            parts = split_statements(cur.strip())
+            for k, part in enumerate(parts):
+                stmts.append((part, pending_error and k == 0))
             cur = ''
             pending_error = False
     items = []
@@ -2521,7 +2550,9 @@ def process(path, out, stats):
     # the test script: OceanBase r/mysql/x.result -> t/x.test; TiDB and MySQL r/x.result -> t/x.test;
     # MariaDB main/x.result -> main/x.test
     test_path = path
+    test_src = None
     for pat, rep in ((r'/r/mysql/([^/]*)\.result$', r'/t/\1.test'), (r'/r/([^/]*)\.result$', r'/t/\1.test'),
+                     (r'/integrationtest/r/(.*)\.result$', r'/integrationtest/t/\1.test'),
                      (r'\.result$', '.test')):
         cand = re.sub(pat, rep, path)
         if cand != path and os.path.exists(cand):
@@ -2556,6 +2587,13 @@ def process(path, out, stats):
         pass
     if items is None:
         items = [(stmt, res, False) for stmt, res in blocks]
+    elif test_src:
+        # the lines which --echo prints are not rows of a result
+        echoed = set(m.strip() for m in re.findall(r'(?im)^\s*-?-?echo\s+(.*?);?\s*$', test_src))
+        echoed |= set(e.rstrip(';').strip() for e in list(echoed))
+        if echoed:
+            items = [(st, ([l for l in res if l.strip() not in echoed] if res is not None else None), err)
+                     for st, res, err in items]
     unsafe = re.compile(r'\b(rollback|savepoint|create\s+procedure|create\s+function|delimiter|call\s|prepare\s|load\s+data|set\s+autocommit|start\s+transaction|begin\b|xa\s)', re.I)
     if not LENIENT and any(unsafe.search(stmt) for stmt, _, _ in items):
         stats['skipped_files'] += 1
@@ -2565,6 +2603,10 @@ def process(path, out, stats):
         s = stmt.strip()
         if len(s) > 20000:
             continue
+        if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?sql_mode\b', s, re.I):
+            # (--lenient) the semantics of the rest of the script depends on the new sql_mode: stop
+            stats['skip']['after a change of sql_mode'] = stats['skip'].get('after a change of sql_mode', 0) + len(items) - bi
+            break
         if LENIENT:
             # (--lenient) a transaction, a routine or a statement which the translator cannot follow makes
             # the tables which it mentions unreliable, instead of skipping the file
@@ -2768,7 +2810,7 @@ def process(path, out, stats):
                 if os.environ.get('SQL2COQ_DEBUG'):
                     sys.stderr.write('SKIP %s :: %s\n' % (e, s[:200].replace('\n', ' ')))
                 stats['skip'][str(e).split(' ')[0] + ' ' + (str(e).split(' ')[1] if ' ' in str(e) else '')] = stats['skip'].get(str(e).split(' ')[0] + ' ' + (str(e).split(' ')[1] if ' ' in str(e) else ''), 0) + 1
-        except (IndexError, KeyError, ValueError, AttributeError) as e:
+        except (IndexError, KeyError, ValueError, AttributeError, RecursionError) as e:
             if head == 'select':
                 stats['skip']['internal ' + type(e).__name__] = stats['skip'].get('internal ' + type(e).__name__, 0) + 1
     if cases:
