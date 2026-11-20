@@ -320,7 +320,7 @@ Definition q_filter :=
   select_where [as_ (agg_filter "count" (col n) (pred ">" [col n; int 1])) c] [from_table "p"] c_true.
 Definition q_condition_value := sc (e_cond (pred "<" [int 1; int 2])).
 
-Definition acceptance (q : squery) := map (fun d => accepted_by (dialect_of d) (to_dialect d q)) all.
+Definition acceptance (q : squery) := map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d q)) all.
 
 Example accepted_full_join : acceptance q_full_join = [true; false; true; true; true].
 Proof. check. Qed.

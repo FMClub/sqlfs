@@ -230,8 +230,6 @@ Record dialect : Type :=
           (PostgreSQL, Oracle)? This is only the default: it can be overridden by 
           [NULLS FIRST] and [NULLS LAST] in the dialects which have them. *)
       nulls_smallest : bool;
-      (** the constructs which the dialect supports *)
-      supports : feature -> bool;
       (** the function symbols, the predicates and the aggregates which the dialect has *)
       known_symbol : symb -> nat -> bool;
       known_predicate : predicate -> bool;
@@ -683,9 +681,11 @@ with sfrom_uses (f : sfrom) {struct f} : list use :=
   | Fr_Fun name args _ _ => U_Table_Fun name :: flat_map sexpr_uses args
   end.
 
-Definition use_ok (u : use) : bool :=
+(** [supports]: the constructs which the dialect supports (they matter for acceptance only, not for the
+    evaluation, and are not a part of [dialect]) *)
+Definition use_ok (supports : feature -> bool) (u : use) : bool :=
   match u with
-  | U_Feature f => supports O f
+  | U_Feature f => supports f
   | U_Symbol f n => known_symbol O f n
   | U_Pred p => known_predicate O p
   | U_Agg a => known_aggregate O a
@@ -698,7 +698,16 @@ Definition squery_features (q : squery) : list feature :=
 
 (** Does the dialect accept the query? It must support its constructs, and have its functions,
     predicates and aggregates. *)
-Definition accepted_by (q : squery) : bool := forallb use_ok (squery_uses q).
+Definition accepted_by (supports : feature -> bool) (q : squery) : bool := forallb (use_ok supports) (squery_uses q).
+
+(** fewer constructs accept fewer queries *)
+Lemma accepted_mono :
+  forall (s1 s2 : feature -> bool) q, (forall f, s1 f = true -> s2 f = true) ->
+    accepted_by s1 q = true -> accepted_by s2 q = true.
+Proof.
+intros s1 s2 q H A; unfold accepted_by in *; rewrite forallb_forall in *; intros u I.
+generalize (A u I); destruct u; simpl; auto.
+Qed.
 
 (** * Sort of a query: the set of the attributes of its result
 

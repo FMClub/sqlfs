@@ -22,7 +22,7 @@ A dialect has two parts.
    - `truth_of_value`, `value_of_truth`: how a condition is turned into a value and
      back (a boolean in PostgreSQL, 0/1 in MySQL and SQLite).
    - `supports`: the constructs of the language which the dialect accepts
-     (`feature`); `accepted_by d q` checks a query.
+     (`feature`); `accepted_by d s q` checks a query, `s` being the constructs of the dialect (`vs_supports`, a part of acceptance only: the record `dialect` of the evaluation does not hold them).
 2. **The value-level part**, an instance of `Tuple.Rcd`: the type of values, and the
    interpretation of the predicates, of the function symbols and of the aggregates
    (implicit conversions, arithmetic, division, string functions, `LIKE`,

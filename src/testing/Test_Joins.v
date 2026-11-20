@@ -16,7 +16,7 @@ Definition run (d : vsem) (q : squery) :=
   eval_query_list ORN (dialect_of d) (_basesort _ init_db) (_instance _ init_db) (to_dialect d q).
 Definition rows (d : vsem) (q : squery) (n : nat) : list (list string) :=
   map (fun t => map (fun i => show_value (dot (TD d) t (out_attr i))) (seq 0 n)) (run d q).
-Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (to_dialect d q).
+Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (vs_supports d) (to_dialect d q).
 
 Definition l := from_as (values_ [c0] [[int 1]; [int 2]]) [(c0, a)].
 Definition r := from_as (values_ [c0] [[int 1]; [int 3]]) [(c0, b)].

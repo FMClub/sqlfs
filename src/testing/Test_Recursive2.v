@@ -20,7 +20,7 @@ Definition run (d : vsem) (q : squery) :=
   eval_query_list ORN (dialect_of d) (_basesort _ init_db) (_instance _ init_db) (to_dialect d q).
 Definition rows_of (d : vsem) (q : squery) (n : nat) : list (list string) :=
   map (fun t => map (fun i => show_value (dot (TD d) t (out_attr i))) (seq 0 n)) (run d q).
-Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (to_dialect d q).
+Definition accepts (d : vsem) (q : squery) : bool := accepted_by (dialect_of d) (vs_supports d) (to_dialect d q).
 
 (** The graph 1 -> 2 -> 3 -> 1, and the [CYCLE] clause of PostgreSQL written as the manual defines it
     (7.8.2.2): the path of each row is an array, a row whose node is already on its path closes a cycle

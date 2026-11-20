@@ -137,11 +137,11 @@ Definition wf_query (ce : cte_env T relname) (q : squery) : bool :=
   match squery_cols ORN basesort ce q with nil => wf_squery ce q | _ => false end.
 
 (** acceptance by a dialect and well-formedness *)
-Definition accepted_wf (d : dialect T) (ce : cte_env T relname) (q : squery) : bool :=
-  accepted_by d q && wf_query ce q.
+Definition accepted_wf (d : dialect T) (supports : feature -> bool) (ce : cte_env T relname) (q : squery) : bool :=
+  accepted_by d supports q && wf_query ce q.
 
-Lemma accepted_wf_accepted : forall d ce q, accepted_wf d ce q = true -> accepted_by d q = true.
-Proof. intros d ce q H; apply andb_true_iff in H; tauto. Qed.
+Lemma accepted_wf_accepted : forall d s ce q, accepted_wf d s ce q = true -> accepted_by d s q = true.
+Proof. intros d s ce q H; apply andb_true_iff in H; tauto. Qed.
 
 Lemma wf_query_closed : forall ce q, wf_query ce q = true -> squery_cols ORN basesort ce q = nil.
 Proof. intros ce q; unfold wf_query; destruct (squery_cols ORN basesort ce q); [reflexivity | discriminate]. Qed.

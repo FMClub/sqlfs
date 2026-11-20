@@ -54,7 +54,7 @@ Example percent_ties : shown OceanBaseOracle (fetch None true true 40%N) = ["1";
 Proof. check. Qed.
 
 Definition acceptance (q : squery) := 
-  map (fun d => accepted_by (dialect_of d) (to_dialect d q)) 
+  map (fun d => accepted_by (dialect_of d) (vs_supports d) (to_dialect d q)) 
       [PostgreSQL; MySQL; SQLite; OceanBaseMySQL; OceanBaseOracle].
 
 Example accepted_ties : acceptance (fetch None true false 2%N) = [true; false; false; false; true].
