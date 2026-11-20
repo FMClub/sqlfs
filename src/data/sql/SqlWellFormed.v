@@ -5,7 +5,9 @@
       a correlated subquery reads its enclosing blocks, which bind its free columns);
     - no aggregate of a block in its WHERE clause (an error in every dialect: "aggregate functions are not
       allowed in WHERE", MySQL error 1111);
-    - the operands of a set operation have the same sort (the arity of [UNION], [INTERSECT], [EXCEPT]).
+    - the operands of a set operation have the same sort (the arity of [UNION], [INTERSECT], [EXCEPT]);
+    - no ambiguous column: a column which a block reads is a column of at most one of its tables
+      ("column reference is ambiguous", MySQL error 1052).
     The check covers the queries of the FROM clauses and of the WITH clauses; the subqueries in expressions
     are covered by the scoping condition only. [accepted_wf d q] is acceptance by a dialect plus this check.
 
@@ -31,15 +33,41 @@ Notation squery := (squery T relname).
 Notation sfrom := (sfrom T relname).
 Notation sexpr := (sexpr T relname).
 
+(** the sorts of the tables of a FROM item, through its joins *)
+Fixpoint from_parts (ce : cte_env T relname) (f : sfrom) : list (Fset.set (A T)) :=
+  match f with
+  | Fr_Join _ _ f1 f2 _ => from_parts ce f1 ++ from_parts ce f2
+  | _ => sfrom_sort ORN basesort ce f :: nil
+  end.
+
+(** the columns which a block reads itself (in its SELECT, WHERE, GROUP BY and HAVING clauses) *)
+Definition block_reads (ce : cte_env T relname) (s : sselect T relname) (w : scond T relname)
+           (g : sgroup T relname) (h : scond T relname) : list (attribute T) :=
+  (match s with
+   | S_Star _ _ => nil
+   | S_List l => flat_map (fun x => match x with S_As e _ => sexpr_cols ORN basesort ce e end) l
+   end) ++
+  scond_cols ORN basesort ce w ++ flat_map (sexpr_cols ORN basesort ce) (group_exprs g) ++
+  scond_cols ORN basesort ce h.
+
+(** a column which the block reads and which two of its tables have: an ambiguous reference *)
+Definition ambiguous (ce : cte_env T relname) (sp : sspec T relname) : bool :=
+  match sp with
+  | Select _ s lf w g h =>
+    let parts := flat_map (from_parts ce) lf in
+    existsb (fun a => Nat.leb 2 (List.length (filter (fun sa => a inS? sa) parts))) (block_reads ce s w g h)
+  end.
+
 Fixpoint wf_squery (ce : cte_env T relname) (q : squery) {struct q} : bool :=
   match q with
   | SQ_Table _ _ => true
   | SQ_Set _ _ q1 q2 =>
     Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN basesort ce q2)
     && wf_squery ce q1 && wf_squery ce q2
-  | SQ_Select (Select _ _ lf w _ _) =>
+  | SQ_Select (Select sq s lf w g h) =>
     let bound := Fset.Union (A T) (map (sfrom_sort ORN basesort ce) lf) in
-    negb (scond_has_agg ORN basesort ce bound w) && forallb (wf_sfrom ce) lf
+    negb (scond_has_agg ORN basesort ce bound w) && negb (ambiguous ce (Select sq s lf w g h)) &&
+    forallb (wf_sfrom ce) lf
   | SQ_Order q _ _ _ => wf_squery ce q
   | SQ_Fetch q _ _ _ _ _ => wf_squery ce q
   | SQ_Window q _ => wf_squery ce q
