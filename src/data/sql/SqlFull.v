@@ -1625,6 +1625,22 @@ Fixpoint rec_loop (step : list tuple -> list tuple) (distinct : bool) (sa : setA
   | O => match work with nil => acc | _ => acc ++ err_row (null_tuple sa) :: nil end
   end.
 
+(** The groups of grouping sets: each grouping set is a list of positions in the list [univ] of all the
+    grouping expressions ([row_vals t] are their values on the row [t]); the groups of a set are those of the
+    rows which agree on its expressions, and the expressions of [univ] which it does not contain are hidden
+    (NULL) in the groups it produces. *)
+Definition set_groupings (row_vals : tuple -> list value) (univ : list sexpr) (positions : list (list nat))
+           (rows : list tuple) : list (list tuple * list sexpr) :=
+  flat_map
+    (fun pos =>
+       let set := map (fun i => nth i univ (E_Const (null O))) pos in
+       let hid := filter (fun e => negb (existsb (sexpr_eqb e) set)) univ in
+       let gs := match pos with
+                 | nil => rows :: nil
+                 | _ => group_on (fun t => let vs := row_vals t in map (fun i => nth i vs (null O)) pos) rows
+                 end in
+       map (fun grp => (grp, hid)) gs) positions.
+
 Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :=
   if is_hidden env e
   then null O
@@ -1937,17 +1953,7 @@ with eval_sspec (ce : cte_env) (env : senv) (sp : sspec) (ex : list sexpr) {stru
         end in
     let groupings : list (list tuple * list sexpr) :=
         match g with
-        | G_Sets _ | G_Rollup _ | G_Cube _ =>
-          flat_map 
-            (fun pos =>
-               let set := map (fun i => nth i univ (E_Const (null O))) pos in
-               let hid := filter (fun e => negb (existsb (sexpr_eqb e) set)) univ in
-               let gs := match pos with
-                         | nil => rows :: nil
-                         | _ => group_on (fun t => let vs := row_vals t in 
-                                                   map (fun i => nth i vs (null O)) pos) rows
-                         end in
-               map (fun grp => (grp, hid)) gs) positions
+        | G_Sets _ | G_Rollup _ | G_Cube _ => set_groupings row_vals univ positions rows
         | _ => map (fun grp => (grp, nil)) plain_groups
         end in
     let genvs := map (fun gh => slice_gs sa (fst gh) (snd gh) :: env) groupings in

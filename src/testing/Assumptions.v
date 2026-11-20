@@ -44,3 +44,4 @@ Print Assumptions Oracles.sum_filter_le.
 Print Assumptions SqlScoping.scope_e.
 Print Assumptions SqlScoping.scope_c.
 Print Assumptions SqlScoping.wf_set_op.
+Print Assumptions SqlGroupFacts.rollup_groupings.
