@@ -279,13 +279,26 @@ Definition hyp_agg (which : string) (desc : bool) (isnull : value -> bool) (orde
     end
   end%string.
 
+(** the values in the ascending order of [order] (a stable insertion) *)
+Fixpoint insert_by (order : value -> value -> comparison) (v : value) (l : list value) : list value :=
+  match l with
+  | nil => [v]
+  | w :: l' => match order v w with Gt => w :: insert_by order v l' | _ => v :: l end
+  end.
+
+Definition sort_by (order : value -> value -> comparison) (l : list value) : list value :=
+  fold_right (insert_by order) nil l.
+
 Definition ordered_set_table (exact : bool) (isnull : value -> bool) (conv : value -> option num)
            (order : value -> value -> comparison) : list (string * (list value -> value)) :=
   let eq a b := match order a b with Eq => true | _ => false end in
      ("percentile_cont", percentile_cont_agg exact isnull conv)
   :: ("percentile_disc", percentile_disc_agg isnull conv)
   :: ("mode", mode_agg isnull eq)
-  :: ("median", fun l => percentile_cont_agg exact isnull conv (flat_map (fun v => [v; Value_Q (Some (Qcdiv (Qc_of_Z 1) (Qc_of_Z 2)))]) l))
+  (* [MEDIAN (x)] is [PERCENTILE_CONT (0.5) WITHIN GROUP (ORDER BY x)]: the values are sorted first *)
+  :: ("median", fun l => percentile_cont_agg exact isnull conv
+                           (flat_map (fun v => [v; Value_Q (Some (Qcdiv (Qc_of_Z 1) (Qc_of_Z 2)))])
+                                     (sort_by order (filter (fun v => negb (isnull v)) l))))
   :: flat_map (fun w => [(("hyp_" ++ w ++ "_asc")%string, hyp_agg w false isnull order);
                          (("hyp_" ++ w ++ "_desc")%string, hyp_agg w true isnull order)])
               ["rank"; "dense_rank"; "percent_rank"; "cume_dist"]%string.

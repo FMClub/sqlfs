@@ -176,7 +176,10 @@ Definition num_ceil a := match a with Num_Z _ => a | Num_Q q => Num_Z (Qc_ceilin
 
 Definition num_power a b : option num :=
   match a, b with
-  | Num_Z x, Num_Z y => match Zpower_opt x y with Some z => Some (Num_Z z) | None => None end
+  (* a negative exponent gives a rational: [POWER (4, -2)] is [0.0625] *)
+  | Num_Z x, Num_Z y =>
+    if Z.leb 0 y then match Zpower_opt x y with Some z => Some (Num_Z z) | None => None end
+    else match Qcpower_opt (Qc_of_num a) (Qc_of_num b) with Some q => Some (Num_Q q) | None => None end
   | _, _ => match Qcpower_opt (Qc_of_num a) (Qc_of_num b) with Some q => Some (Num_Q q) | None => None end
   end.
 

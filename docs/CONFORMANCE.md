@@ -177,6 +177,23 @@ A sample, 150 queries of `test/evidence` and of 6 scripts of `random/expr` for e
 copied into `src/testing/slt/` and checked as part of the build (37 files): a change of the
 semantics which breaks the behaviour of an engine breaks the build.
 
+**OceanBase, Oracle mode, the examples of the documentation** (TODO 5.5): `tools/spec/oradoc2result.py
+oceanbase-doc OUTDIR` extracts the examples of the Oracle-mode pages (the statements after `obclient>`, the tables
+which the client prints), `sql2coq.py --dialect OceanBaseOracle --lenient` translates them (the queries on tables
+of other pages, the PL blocks and the functions the translator does not know are left out). 351 pages, 871 queries
+with their results; **172 translated, 122 pass**. The 50 others:
+
+| Cases | Reason |
+|---|---|
+| 14 | Irrational results printed with the 40 digits of `NUMBER` (`EXP`, `LN`, `LOG`, `SIN`, `COS`, `TAN`, `ASIN`, `ATAN`, `ATAN2`, `SQRT`, `CORR`, an `AVG` of `50 / 3`): the Oracle mode has no model of the precision of `NUMBER` for these functions (they are errors or doubles in the model) |
+| 22 | Format models of `TO_CHAR` (`'99.99'`, `'9.9EEEE'`, `'FML999.99'`, ...), `TO_DATE`/`TO_TIMESTAMP` and the display of dates, timestamps and intervals (`11-NOV-21 11.11.11.110000000 AM`): not modelled; one (`TO_DATE ('2020', 'YYYY')`) takes the current month, the date when the page was written |
+| 1 | `JSON_ARRAYAGG`: not modelled in Oracle mode |
+| 1 | the string `'NULL'` and NULL print the same (`3, NULL, ...`): the harness reads the text `NULL` as NULL |
+| 12 | pages whose examples are not one script: the states before and after an example shown separately (`INSERT`, `MERGE`, partitions, an `UPDATE` in a PL block, a trigger), and two pages on rules whose `SELECT 1 FROM DUAL` shows `2` (the result of a rule which the model does not have) |
+
+Found and fixed by this run: `MEDIAN` interpolated the values in the order of the group, not in their sorted order;
+`POWER` with a negative integer exponent was NULL.
+
 The Oracle mode is not run against sqllogictest: the expected results were produced by SQLite,
 MySQL and PostgreSQL, the scripts have no `skipif oracle`, and the Oracle division `/` is exact
 (`61 / 88 * 96` is 0 in the recorded results, 66.5 in Oracle). The Oracle mode is checked
