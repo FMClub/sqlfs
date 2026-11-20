@@ -47,11 +47,25 @@ Definition parse_number (s : string) : num * bool :=
                        | _ => (0%Z, 0%nat, r)
                        end in
   let sgn z := if neg then Z.opp z else z in
-  let n := if Nat.eqb nf 0%nat 
-           then Num_Z (sgn iv)
-           else Num_Q (Q2Qc (Qmake (sgn (iv * Z.pow 10 (Z.of_nat nf) + fv)) 
-                                   (Z.to_pos (Z.pow 10 (Z.of_nat nf))))) in
-  (n, if Nat.eqb (ni + nf)%nat 0%nat then false else if String.eqb (string_rtrim r') EmptyString then true else false).
+  (* an exponent: [e] or [E], a sign, digits (MySQL reads ['123e-2'] as 1.23); bounded by 400 so that
+     [10 ^ e] stays small (a longer exponent is not read) *)
+  let '(ex, r'') := match r' with
+                    | String c r3 =>
+                      if (Ascii.eqb c "e"%char || Ascii.eqb c "E"%char) && negb (Nat.eqb (ni + nf)%nat 0%nat) then
+                        let '(eneg, r4) := match r3 with
+                                           | String "-" r5 => (true, r5) | String "+" r5 => (false, r5)
+                                           | _ => (false, r3) end in
+                        let '(ev, ne, r6) := digits_aux r4 0%Z 0%nat in
+                        if Nat.eqb ne 0%nat || Z.ltb 400 ev then (0%Z, r') else ((if eneg then Z.opp ev else ev), r6)
+                      else (0%Z, r')
+                    | EmptyString => (0%Z, r')
+                    end in
+  let mant := Q2Qc (Qmake (sgn (iv * Z.pow 10 (Z.of_nat nf) + fv)) (Z.to_pos (Z.pow 10 (Z.of_nat nf)))) in
+  let n := if Z.eqb ex 0 then
+             (if Nat.eqb nf 0%nat then Num_Z (sgn iv) else Num_Q mant)
+           else if Z.ltb 0 ex then Num_Q (Qcmult mant (Q2Qc (inject_Z (Z.pow 10 ex))))
+           else Num_Q (Qcdiv mant (Q2Qc (inject_Z (Z.pow 10 (Z.opp ex))))) in
+  (n, if Nat.eqb (ni + nf)%nat 0%nat then false else if String.eqb (string_rtrim r'') EmptyString then true else false).
 
 Definition parse_prefix s : num := fst (parse_number s).
 
@@ -193,12 +207,20 @@ Definition num_fun1 (conv : value -> option num) (f : num -> num) (l : list valu
     number of decimals it needs; the declared scale of a column is not known. *)
 
 (** the number of decimals of [q], at most 40 *)
-Definition dec_scale (q : Qc) : nat :=
-  let d := Zpos (Qden q) in
-  match find (fun s => Z.eqb (Z.modulo (Z.pow 10 (Z.of_nat s)) d) 0) (seq 0 41) with
-  | Some s => s
-  | None => 40%nat
+(** the exponents of 2 and of 5 in [d], and what remains *)
+Fixpoint factor25 (fuel : nat) (d : Z) (a b : nat) : nat * nat * Z :=
+  match fuel with
+  | O => (a, b, d)
+  | S f => if Z.eqb (Z.modulo d 2) 0 then factor25 f (d / 2) (S a) b
+           else if Z.eqb (Z.modulo d 5) 0 then factor25 f (d / 5) a (S b)
+           else (a, b, d)
   end.
+
+(** the number of decimals of [q]: exact when its expansion terminates ([d = 2^a 5^b]: [max a b]
+    decimals), 40 otherwise (then rounded) *)
+Definition dec_scale (q : Qc) : nat :=
+  let '(a, b, r) := factor25 (Pos.size_nat (Qden q)) (Zpos (Qden q)) 0 0 in
+  if Z.eqb r 1 then Nat.max a b else 40%nat.
 
 Definition num_scale (n : num) : nat := match n with Num_Z _ => 0%nat | Num_Q q => dec_scale q end.
 
@@ -220,7 +242,9 @@ Definition pad_zeros (width : nat) (s : string) : string :=
 Definition string_of_dec (q : Qc) : string :=
   let sc := dec_scale q in
   let m := Z.pow 10 (Z.of_nat sc) in
-  let scaled := (Qnum q * (m / Zpos (Qden q)))%Z in
+  let d := Zpos (Qden q) in
+  (* exact when the expansion terminates; rounded half away from zero otherwise *)
+  let scaled := (Z.sgn (Qnum q) * ((Z.abs (Qnum q) * m * 2 + d) / (2 * d)))%Z in
   let ip := (Z.abs scaled / m)%Z in
   let fp := (Z.abs scaled mod m)%Z in
   (if Z.ltb scaled 0 then "-" else "") ++ string_of_Z ip
@@ -503,7 +527,17 @@ Definition my_ts_of (v : value) : option (Z * bool) :=
   match v with
   | Value_string (Some t) => 
     match parse_date t with Some d => Some (ts_of d 0, false) | None =>
-    match parse_timestamp t with Some x => Some (x, true) | None => None end end
+    match parse_timestamp t with Some x => Some (x, true) | None =>
+    (* a string of digits is read as a number: [YYMMDD], [YYYYMMDD], [YYMMDDhhmmss], [YYYYMMDDhhmmss]
+       ([str_to_datetime] of [sql-common/my_time.cc]) *)
+    let cs := list_ascii_of_string t in
+    let n := List.length cs in
+    if forallb (fun c => let k := Ascii.nat_of_ascii c in Nat.leb 48 k && Nat.leb k 57) cs
+       && (Nat.eqb n 6 || Nat.eqb n 8 || Nat.eqb n 12 || Nat.eqb n 14)
+    then match Z_of_string t with
+         | Some z => match my_number_to_datetime z with Some x => Some (x, Nat.ltb 8 n) | None => None end
+         | None => None end
+    else None end end
   | _ => match temporal_parts v with
          | Some (0%nat, d, _) => Some (ts_of d 0, false)
          | Some (1%nat, _, _) => None

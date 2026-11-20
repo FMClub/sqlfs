@@ -8,7 +8,7 @@
 
 Set Implicit Arguments.
 
-Require Import List Bool NArith String.
+Require Import List Bool NArith String Permutation.
 
 Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection 
         FlatData Bool3 Formula SqlFull.
@@ -371,6 +371,43 @@ change ((if Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN b
                           (eval_squery ce env q1 ++ eval_squery ce env q2))
          else nil) = eval_squery ce env q1 ++ eval_squery ce env q2).
 rewrite H, Hu; apply keep_errors_self.
+Qed.
+
+(** [UNION ALL] is commutative as a bag (TODO 6.4): the rows are the same, in another order *)
+Theorem union_all_comm :
+  forall ce env q1 q2,
+    (forall l, unify_column O l = l) ->
+    (forall atts rows, unify_rows O atts rows = rows) ->
+    Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN basesort ce q2) = true ->
+    Fset.equal (A T) (squery_sort ORN basesort ce q2) (squery_sort ORN basesort ce q1) = true ->
+    Permutation (eval_squery ce env (SQ_Set Union Set_All q1 q2))
+                (eval_squery ce env (SQ_Set Union Set_All q2 q1)).
+Proof.
+intros ce env q1 q2 Hc Hu H12 H21.
+rewrite (union_all_spec ce env q1 q2 Hc Hu H12), (union_all_spec ce env q2 q1 Hc Hu H21).
+apply Permutation_app_comm.
+Qed.
+
+(** [UNION ALL] is associative (as lists: the same rows in the same order) *)
+Theorem union_all_assoc :
+  forall ce env q1 q2 q3,
+    (forall l, unify_column O l = l) ->
+    (forall atts rows, unify_rows O atts rows = rows) ->
+    Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN basesort ce q2) = true ->
+    Fset.equal (A T) (squery_sort ORN basesort ce q2) (squery_sort ORN basesort ce q3) = true ->
+    Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN basesort ce q3) = true ->
+    eval_squery ce env (SQ_Set Union Set_All q1 (SQ_Set Union Set_All q2 q3)) =
+    eval_squery ce env (SQ_Set Union Set_All (SQ_Set Union Set_All q1 q2) q3).
+Proof.
+intros ce env q1 q2 q3 Hc Hu H12 H23 H13.
+assert (E1 : squery_sort ORN basesort ce (SQ_Set Union Set_All q2 q3) = squery_sort ORN basesort ce q2);
+  [reflexivity | ].
+assert (E2 : squery_sort ORN basesort ce (SQ_Set Union Set_All q1 q2) = squery_sort ORN basesort ce q1);
+  [reflexivity | ].
+rewrite (union_all_spec ce env q1 (SQ_Set Union Set_All q2 q3) Hc Hu); [ | rewrite E1; exact H12].
+rewrite (union_all_spec ce env (SQ_Set Union Set_All q1 q2) q3 Hc Hu); [ | rewrite E2; exact H13].
+rewrite (union_all_spec ce env q2 q3 Hc Hu H23), (union_all_spec ce env q1 q2 Hc Hu H12).
+apply app_assoc.
 Qed.
 
 End Sec.

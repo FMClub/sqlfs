@@ -489,21 +489,34 @@ Definition Qc_round (q : Qc) : Z :=
   | _ => Qfloor (Qplus q (1 # 2))
   end.
 
+(** The exact powers are computed for exponents up to [power_bound]; beyond, the result is not computed
+    (None), except for the bases 0, 1 and -1: an exact power with a huge exponent does not fit in memory, and
+    the engines compute it approximately (PostgreSQL: [power_var], with a limited precision) *)
+Definition power_bound : Z := 4096.
+Definition trivial_base (a : Z) : bool := Z.eqb a 0 || Z.eqb a 1 || Z.eqb a (-1).
+
 Definition Zpower_opt (a b : Z) : option Z :=
   match b with
   | Zneg _ => None
-  | _ => Some (Z.pow a b)
+  | _ => if Z.ltb power_bound b && negb (trivial_base a)
+         then None
+         else if trivial_base a && Z.ltb power_bound b
+         then Some (if Z.eqb a (-1) then (if Z.even b then 1 else -1) else a)
+         else Some (Z.pow a b)
   end.
 
 Definition Qcpower_opt (a b : Qc) : option Qc :=
-  (* only integral exponents are supported *)
-  if Pos.eqb (Qden b) 1
-  then match Qnum b with
+  (* only integral exponents are supported, up to [power_bound] (1 and -1 to any exponent) *)
+  if negb (Pos.eqb (Qden b) 1) then None
+  else if Z.ltb power_bound (Z.abs (Qnum b))
+  then (if Pos.eqb (Qden a) 1 && Z.eqb (Qnum a) 1 then Some (Qc_of_Z 1)
+        else if Pos.eqb (Qden a) 1 && Z.eqb (Qnum a) (-1) then Some (Qc_of_Z (if Z.even (Qnum b) then 1 else -1))
+        else None)
+  else match Qnum b with
        | Z0 => Some (Qc_of_Z 1)
        | Zpos p => Some (Qcpower a (Pos.to_nat p))
        | Zneg p => if Qc_is_zero a then None else Some (Qcinv (Qcpower a (Pos.to_nat p)))
-       end
-  else None.
+       end.
 
 (** * SQL comparison
 
@@ -1138,6 +1151,11 @@ Definition pg_dec2 (op : Qc * nat -> Qc * nat -> value) (old : list value -> val
 Definition pg_dec_plus (a b : Qc * nat) := VDec (Qcplus (fst a) (fst b)) (Nat.max (snd a) (snd b)) (Nat.max (snd a) (snd b)).
 Definition pg_dec_minus (a b : Qc * nat) := VDec (Qcminus (fst a) (fst b)) (Nat.max (snd a) (snd b)) (Nat.max (snd a) (snd b)).
 Definition pg_dec_mult (a b : Qc * nat) := VDec (Qcmult (fst a) (fst b)) (snd a + snd b) (snd a + snd b).
+(** [numeric_mod]: [x - trunc (x / y) * y], with the larger scale; a zero divisor is an error *)
+Definition pg_dec_mod (a b : Qc * nat) :=
+  if Qc_is_zero (fst b) then Value_Err "division by zero"
+  else VDec (Qcminus (fst a) (Qcmult (Qc_of_Z (Qc_trunc (Qcdiv (fst a) (fst b)))) (fst b)))
+            (Nat.max (snd a) (snd b)) (Nat.max (snd a) (snd b)).
 Definition pg_dec_div (a b : Qc * nat) := 
   let r := pg_div_scale (fst a) (snd a) (fst b) (snd b) in
   VDec (dec_round (Qcdiv (fst a) (fst b)) r) r r.
@@ -1306,6 +1324,8 @@ Definition cast_Z v :=
   | Value_F _ => float_to_Z v
   | Value_Z z => Value_Z z
   | Value_Q (Some q) => Value_Z (Some (Qc_round q))
+  (* a [numeric] is rounded ([numeric_int4]: half away from zero), then checked against the range *)
+  | Value_D (Some (q, _, _)) => Value_Z (Some (Qc_round q))
   | Value_string (Some s) => 
     match Z_of_string (string_rtrim (string_ltrim s)) with
     | Some z => Value_Z (Some z)
@@ -1910,8 +1930,8 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
       end in
   let div := by_zero (pg_int2 Z.quot (pg_flt2 "/" Qcdiv (pg_dec2 pg_dec_div (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
                     (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b)))))) in
-  let modulo := by_zero (pg_int2 Z.rem (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
-                       (fun _ _ => None))) in
+  let modulo := by_zero (pg_int2 Z.rem (pg_dec2 pg_dec_mod (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
+                       (fun _ _ => None)))) in
      ("plus", plus) :: ("+", plus)
   :: ("minus", minus) :: ("-", minus)
   :: ("mult", mult) :: ("*", mult)

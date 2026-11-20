@@ -50,14 +50,43 @@ Fixpoint rx_flags (e : rx_env) (l : list Z) (o : ropts) (g : bool) : option (rop
 Definition rx_default (e : rx_env) : ropts := mk_ropts (rx_icase e) false (rx_dotnl e).
 
 (** the text, the expression and the options; [None] is a NULL argument, [Some None] an error *)
+(** leading inline flags [(?i)], [(?-i)], [(?s)], [(?m)], [(?ims-ims)] (ICU, PCRE, RE2, and the embedded
+    options of PostgreSQL's AREs): the rest of the pattern and the options they set; [None] for another flag
+    ([x], [u], ...: not modelled). Flags scoped to a group ([(?i:...)], [((?-i)a)]) are not read here. *)
+Fixpoint inline_flags_aux (fuel : nat) (l : list Z) (on : bool) (o : ropts) : option (list Z * ropts) :=
+  match fuel with
+  | O => None
+  | S f =>
+    match l with
+    | 41 :: r => Some (r, o)
+    | 45 :: r => inline_flags_aux f r false o
+    | 105 :: r => inline_flags_aux f r on (mk_ropts on (o_multiline o) (o_dotnl o))
+    | 109 :: r => inline_flags_aux f r on (mk_ropts (o_icase o) on (o_dotnl o))
+    | 115 :: r => inline_flags_aux f r on (mk_ropts (o_icase o) (o_multiline o) on)
+    | _ => None
+    end
+  end.
+Definition inline_flags (p : list Z) (o : ropts) : option (list Z * ropts) :=
+  match p with
+  | 40 :: 63 :: r => match r with
+                     | (105 | 109 | 115 | 45) :: _ => inline_flags_aux (List.length r) r true o
+                     | _ => Some (p, o) end
+  | _ => Some (p, o)
+  end.
+
 Definition rx_setup (e : rx_env) (s p : value) (flags : option value) : option (option (list Z * re * ropts * bool)) :=
   let k := rx_k e in
   match sk_txt k s, sk_txt k p, match flags with Some f => option_map Some (sk_txt k f) | None => Some None end with
   | Some s, Some p, Some fl =>
-    match parse_re (rx_fl e) (cps p),
-          rx_flags e (match fl with Some f => cps f | None => nil end) (rx_default e) false with
-    | Some r, Some (o, g) => Some (Some (cps s, r, o, g))
-    | _, _ => Some None
+    match rx_flags e (match fl with Some f => cps f | None => nil end) (rx_default e) false with
+    | Some (o, g) =>
+      match inline_flags (cps p) o with
+      | Some (p', o') => match parse_re (rx_fl e) p' with
+                         | Some r => Some (Some (cps s, r, o', g))
+                         | None => Some None end
+      | None => Some None
+      end
+    | None => Some None
     end
   | _, _, _ => None
   end.

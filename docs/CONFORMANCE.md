@@ -88,6 +88,13 @@ test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 
+Run 6, after TODO 5.1 (window functions, `VALUES`, grouping sets, views, typed literals, `COPY ... FROM stdin`):
+**459** queries translated, **234** fail (run 7, after the fixes of numeric modulo and casts: **215**); 103 of them are `NaN`/`Infinity` (not representable), 67 the scale of `power` on
+`numeric` (the precision rule of `power_var` is not modelled), 26 `to_char` with numeric format models, 17 `format` widths,
+14 `json_strip_nulls`, 12 BC dates, 8 array literals in `ANY`; the others are listed below. Found and fixed by the runs: the
+text of a decimal with more than 40 decimals (it printed `0.000...`), the population variance of one value, the memory
+blow-up of exact powers with huge exponents, `numeric` modulo, the cast of a `numeric` to an integer (it was NULL).
+
 Run 1 (`postgres/postgres` at `b443bc7`; `select`, `aggregates`, `window`, `with`, `join`, `subselect`, `union`,
 `numeric`, `text`, `float8`, `date`, `timestamp`, `json`, `arrays`, `groupingsets`; `strings` and `jsonb` change the psql
 display and are skipped): **320** queries translated, **232** pass. The 88 failures:
@@ -110,6 +117,44 @@ Fixed by this run (they were deviations of the model): `text || integer` convert
 boolean is `t`/`f` in `concat`, a date compared with a string literal reads the literal as a date, a timestamp prints the
 fewest fractional digits (`date_trunc` gave `.000000`), and `json` keeps its input text. In the translator: `::` casts,
 `FILTER (WHERE ...)`, the precedence of `||` below `+`, `TRUE`/`FALSE` as booleans.
+
+**MariaDB test suite** (`MariaDB`, TODO 5.2): `tools/spec/suite_run.sh MariaDB mariadb RESULT_FILES` replays
+`mysql-test/main` (`MariaDB/server`) with `sql2coq.py --lenient`: a script is replayed up to its first loop, variable,
+connection or change of `sql_mode`; the lines printed by `--echo` are not rows. Run 2 (the files `win*`, `cte_*`,
+`intersect*`, `except*`, `fetch_first`, `func_math`, `func_str`, `select`, `group_by`, `having`, `union`, `subselect`):
+**346** queries translated, **339** pass. The 7 failures:
+
+| Case | Reason |
+|---|---|
+| `win_sum:3`, `win_avg:3` | MariaDB computes a window `SUM`/`AVG` over a moving frame incrementally on doubles (the row which enters is added, the row which leaves is subtracted: `Item_sum_sum::add`, `remove`), so the result carries the rounding of that order (`1.0999999999999996`); the model sums each frame (`1.1`). The order of the additions is not specified by SQL: an engine-specific rounding, not modelled |
+| `win_percent_cume:2`, `:3` | MariaDB prints `PERCENT_RANK` and `CUME_DIST` as doubles with 10 fixed decimals; the model computes them exactly (rationals) |
+| `win_percentile:60` | `MEDIAN (x) OVER ()`: the ordered-set aggregates are modelled, not as window functions |
+| `win_empty_over:2` | `ROW_NUMBER () OVER ()`: the numbering of the rows is not specified (no `ORDER BY`) |
+| `group_by:286` | `DATE ('20050606')`: a string of digits read as a date; fixed after the run (`my_ts_of`) |
+
+Found and fixed by the MariaDB runs: the decimals of `VARIANCE`/`STD` (argument decimals + 4, 20 cases), the maximal
+scale of `ROUND`/`TRUNCATE` (38; a scale of `2147483640` exhausted memory), several statements on one line.
+
+**MySQL test suite** (`MySQL`, TODO 5.2): `mysql-test/r` of `mysql/mysql-server` at `06bcb0e` (1548 result files),
+`tools/spec/suite_run.sh MySQL mysql`. Run 2: **1122** queries translated, **118** fail. The groups: 44 regular expressions
+with inline flags scoped to a group (`(?i:a)`, `((?-i)a)`) or back references beyond `\9` (the leading flags `(?i)` are
+modelled since this run); 15 views changed through `UPDATE`/`INSERT` (the translator now marks the tables of a view
+unreliable: 2 remain); 9 `CURRENT_ROLE ()` and other session state; `INTERVAL ()` with a NULL bound, `varbinary`
+(binary strings), locks, temporary tables, time zones: not modelled or server state.
+
+**TiDB integration tests** (`TiDB`, TODO 5.2): `tests/integrationtest/r` (273 files), `suite_run.sh TiDB tidb`; a script
+stops at the first change of `sql_mode`, collation, character set or time zone (the tests of the new collation framework
+start with one). Run 2: **1935** translated, **125** fail, 2 files over the memory limit. The groups: 38 timestamp
+literals with a time zone offset (`TIMESTAMP '2024-01-01 14:00:00+01:00'`, MySQL 8.0.19): not modelled; 31 JSON functions on
+non-JSON arguments, where TiDB reports an error that the model gives as a value; integer overflow errors (`ABS (-2^63)`):
+the integers of the MySQL family are unbounded in the model; results which hold a statement of the script (scripts
+without `;` echo): harness.
+
+Found and fixed by the MySQL-family runs: digit strings read as dates (`'20050606'`), the exponent of numeric strings
+(`'123e-2'`), leading inline regular-expression flags, executable comments `/*!NNNNN ... */`, TiDB's error lines
+(`Error 1582 (42000): ...`) and warning tables.
+
+The table of all the runs is `docs/CONFORMANCE_SUMMARY.md` (`tools/spec/summary.py`).
 
 **sqllogictest** (queries are selected for an engine by the directives):
 
