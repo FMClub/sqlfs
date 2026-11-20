@@ -2,7 +2,8 @@
 """Coq hygiene (TODO 6.7): run in CI.
 
 1. No `Admitted`, `admit` or `Axiom` in the files which `src/_CoqProject` builds (comments are ignored).
-2. The core semantics does not depend on a dialect: no file of `src/data/sql/` and no file of
+2. A dialect imports no other dialect (the members of the MySQL family import MySQL.v, of which they are
+   instances). The core semantics does not depend on a dialect: no file of `src/data/sql/` and no file of
    `src/data/proof_of_concept/` other than the dialect-facing ones imports a module of `src/data/dialects/`.
 """
 import re
@@ -10,6 +11,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+DIALECT_NAMES = {'PostgreSQL', 'MySQL', 'SQLite', 'OceanBase', 'MariaDB', 'TiDB', 'Percona', 'PolarDB'}
 SRC = ROOT / 'src'
 
 
@@ -44,6 +46,13 @@ def main():
                 used = set(imp.split()) & dialects
                 if used:
                     errors.append('%s: the core imports the dialect modules %s' % (f, ', '.join(sorted(used))))
+        # a dialect imports no other dialect, except the MySQL family, whose members are instances of
+        # [mysql_vs] (MySQL.v), and the files which are about all the dialects
+        if f.startswith('data/dialects/') and Path(f).stem in dialects and Path(f).stem not in ('Versions', 'ResultText'):
+            for imp in re.findall(r'Require\s+(?:Import|Export)?\s*([^.]*)\.', t):
+                used = (set(imp.split()) & DIALECT_NAMES) - {Path(f).stem}
+                if used - {'MySQL'} or ('MySQL' in used and 'mysql_vs' not in t):
+                    errors.append('%s: imports the dialects %s' % (f, ', '.join(sorted(used))))
     for e in errors:
         print(e)
     print('%d files checked, %d problems' % (len(files), len(errors)))

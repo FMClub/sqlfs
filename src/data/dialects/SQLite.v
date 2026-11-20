@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation PostgreSQL MySQL Hash StringFuns JsonFuns SystemFuns.
+Require Import Bool3 OrderedSet SqlFull IEEE Temporal Json Values Dialects ValueKit Collation Hash StringFuns JsonFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
