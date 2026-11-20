@@ -1085,8 +1085,63 @@ Fixpoint group_insert (k : list value) (x : X) (gs : list (list value * list X))
     if key_eqb k k' then (k', g ++ x :: nil) :: gs' else (k', g) :: group_insert k x gs'
   end.
 
-Definition group_on (key : X -> list value) (l : list X) : list (list X) :=
+Definition group_on_list (key : X -> list value) (l : list X) : list (list X) :=
   map (@snd _ _) (fold_left (fun gs x => group_insert (key x) x gs) l nil).
+
+(** The same groups, with the groups kept in a balanced tree indexed by the canonical keys ([OFst] compares the
+    keys only): [group_on] is [group_on_list] ([group_on_spec] in [SqlGroupFacts.v]) in [n log n] comparisons
+    instead of [n] times the number of groups. A group is held reversed while it is built. *)
+Definition OKey : Oset.Rcd (list value) := mk_olists (OVal T).
+
+Definition OFst : Oeset.Rcd (list value * list X).
+Proof.
+apply Oeset.mk_R with (fun p q => Oset.compare OKey (fst p) (fst q)).
+- do 3 intro; apply Oset.compare_eq_trans.
+- do 3 intro; apply Oset.compare_eq_lt_trans.
+- do 3 intro; apply Oset.compare_lt_eq_trans.
+- do 3 intro; apply Oset.compare_lt_trans.
+- do 2 intro; apply Oset.compare_lt_gt.
+Defined.
+
+Fixpoint tfind (c : list value) (t : FiniteSetImpl.tree (list value * list X)) : option (list value * list X) :=
+  match t with
+  | FiniteSetImpl.Leaf _ => None
+  | FiniteSetImpl.Node l y r _ =>
+    match Oset.compare OKey c (fst y) with
+    | Eq => Some y
+    | Lt => tfind c l
+    | Gt => tfind c r
+    end
+  end.
+
+(** the group of the key [c] replaced by [g], in place (the shape and the keys of the tree do not change) *)
+Fixpoint tupdate (c : list value) (g : list X) (t : FiniteSetImpl.tree (list value * list X)) :=
+  match t with
+  | FiniteSetImpl.Leaf _ => FiniteSetImpl.Leaf _
+  | FiniteSetImpl.Node l y r h =>
+    match Oset.compare OKey c (fst y) with
+    | Eq => FiniteSetImpl.Node l (c, g) r h
+    | Lt => FiniteSetImpl.Node (tupdate c g l) y r h
+    | Gt => FiniteSetImpl.Node l y (tupdate c g r) h
+    end
+  end.
+
+(** the tree of the groups and the first element of each group (reversed) *)
+Fixpoint gfold (key : X -> list value) (t : FiniteSetImpl.tree (list value * list X)) (reps : list X)
+         (l : list X) : FiniteSetImpl.tree (list value * list X) * list X :=
+  match l with
+  | nil => (t, reps)
+  | x :: l' =>
+    let c := map (canon O) (key x) in
+    match tfind c t with
+    | Some (_, g) => gfold key (tupdate c (x :: g) t) reps l'
+    | None => gfold key (FiniteSetImpl.add OFst (c, x :: nil) t) (x :: reps) l'
+    end
+  end.
+
+Definition group_on (key : X -> list value) (l : list X) : list (list X) :=
+  let (t, reps) := gfold key (FiniteSetImpl.Leaf _) nil l in
+  map (fun r => match tfind (map (canon O) (key r)) t with Some (_, g) => rev g | None => nil end) (rev reps).
 
 (** Stable sort by insertion. *)
 Fixpoint insert_sorted (le : X -> X -> bool) (x : X) (l : list X) :=
