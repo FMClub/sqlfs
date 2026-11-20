@@ -55,3 +55,17 @@ Example covered_aggregate :
   group_covered TNull relname keys
     (select_full Set_All (s_list [as_ count_star c0]) [tk] c_true g_fine c_true) = true.
 Proof. check. Qed.
+
+(** * Ambiguity: two tables of the FROM clause have the column [a] *)
+Example wf_ambiguous :
+  wf (select_where [as_ (col a) c0] [from_query t; from_query t] c_true) = false.
+Proof. check. Qed.
+(** inside a join too *)
+Example wf_ambiguous_join :
+  wf (select_where [as_ (col a) c0] [join J_Inner (from_query t) (from_query t) c_true] c_true) = false.
+Proof. check. Qed.
+(** the columns renamed apart are not ambiguous *)
+Example wf_renamed :
+  wf (select_where [as_ (col (Attr_Z "x.a")) c0] [from_as t [(a, Attr_Z "x.a")]; from_as t [(a, Attr_Z "y.a")]]
+        c_true) = true.
+Proof. check. Qed.
