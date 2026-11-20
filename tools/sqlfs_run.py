@@ -20,6 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools' / 'spec'))
 import sql2coq as S  # noqa: E402
+sys.path.insert(0, str(ROOT / 'tools' / 'extraction'))
+import term2ml  # noqa: E402
 
 
 def col_type(vals):
@@ -43,7 +45,7 @@ def lit(v, ty):
 
 def main():
     args = sys.argv[1:]
-    dialect, tables = 'MySQL', []
+    dialect, tables, lib = 'MySQL', [], None
     while args and args[0].startswith('--'):
         if args[0] == '--dialect':
             dialect, args = args[1], args[2:]
@@ -51,6 +53,8 @@ def main():
             name, path = args[1].split('=', 1)
             tables.append((name, path))
             args = args[2:]
+        elif args[0] == '--extracted':
+            lib, args = os.path.abspath(args[1]), args[2:]
         else:
             sys.exit('unknown option ' + args[0])
     if len(args) != 1:
@@ -63,9 +67,10 @@ def main():
         tys = [col_type([r[i] for r in data]) for i in range(len(header))]
         cols_of[name.lower()] = header
         lines.append('CREATE TABLE %s (%s);' % (name, ', '.join('%s %s' % (c, t) for c, t in zip(header, tys))))
-        if data:
+        # in batches: the translator leaves out statements longer than 20000 characters
+        for k in range(0, len(data), 100):
             lines.append('INSERT INTO %s VALUES %s;' % (name, ', '.join(
-                '(' + ', '.join(lit(v, t) for v, t in zip(r, tys)) + ')' for r in data)))
+                '(' + ', '.join(lit(v, t) for v, t in zip(r, tys)) + ')' for r in data[k:k + 100])))
     # the number of columns of the result: the select items, a star being the columns of the tables
     S.ENGINE = {'PostgreSQL': 'postgresql', 'SQLite': 'sqlite'}.get(dialect, 'mysql')
     q = S.P(S.tokenize(query)).query()
@@ -94,6 +99,9 @@ def main():
         spec = files[0]
         t = spec.read_text()
         name = re.search(r'Definition (cases_\w+)', t).group(1)
+        if lib is not None:
+            run_extracted(lib, dialect, n, t, Path(d))
+            return
         t = t.replace('Eval vm_compute in (diagnose', '(* Eval vm_compute in (diagnose')
         t = t.rstrip() + ' *)\nRequire Import ResultText.\n' + \
             'Eval vm_compute in (map (fun c => map (map (result_text %s)) (run_rows %s c %d)) %s).\n' % (
@@ -105,6 +113,37 @@ def main():
             sys.exit(r.stdout + r.stderr)
         for row in rows:
             print('\t'.join(re.findall(r'"([^"]*)"', row)))
+
+
+T0 = __import__('time').time()
+
+
+def run_extracted(lib, dialect, n, spec_text, d):
+    """the cases of the translated file, as an OCaml program linked with the extracted library"""
+    m = re.search(r':= \[\n(.*)\n\]\.', spec_text, re.S)
+    cases = [c.strip().rstrip(';') for c in m.group(1).split('\n') if c.strip()]
+    body = '; '.join(term2ml.to_ml(c, str(d)) for c in cases)
+    ml = d / 'query.ml'
+    ml.write_text('open Sqlfs_lib\nlet () =\n  match dialect_named %s with\n'
+                  '  | None -> prerr_endline "unknown dialect"; exit 2\n'
+                  '  | Some dl -> List.iter (fun c -> Prelude.print_rows dl (run_rows dl c (Prelude.nat %d))) [%s]\n'
+                  % (term2ml.ml_string(dialect), n, body))
+    exe = d / 'query'
+    # a long table is a long list literal: the compiler needs a large stack too
+    r = subprocess.run(['sh', '-c', 'ulimit -s 8000000 2>/dev/null; exec "$@"', 'sh', 'ocamlopt', '-I', lib,
+                        os.path.join(lib, 'sqlfs_lib.cmx'), os.path.join(lib, 'prelude.cmx'), str(ml), '-o', str(exe)],
+                       capture_output=True, text=True, cwd=str(d))
+    if r.returncode != 0:
+        sys.exit(r.stdout + r.stderr)
+    if os.environ.get('SQLFS_TIMING'):
+        import time
+        sys.stderr.write('compiled at %.1f s\n' % (time.time() - T0))
+    # the extracted functions are not tail-recursive: a large stack (a finite one, which OCaml can guard)
+    r = subprocess.run(['sh', '-c', 'ulimit -s 8000000 2>/dev/null; exec "$0"', str(exe)], capture_output=True,
+                       text=True)
+    if r.returncode != 0:
+        sys.exit(r.stdout + r.stderr)
+    sys.stdout.write(r.stdout)
 
 
 if __name__ == '__main__':

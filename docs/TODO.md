@@ -581,8 +581,25 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   OCaml cannot generalise), compiles them with `ocamlopt` and runs them. On the OceanBase corpus (66 files, 769 cases) the
   extracted program reports the same failures as `vm_compute` (none) in 48 s, where the Coq run takes about an hour.
   `tools/sqlfs_run.py --dialect D --table t=t.csv "SELECT ..."` runs a query of a dialect on CSV tables and prints
-  the rows as the dialect's client does (the frontend of 7.1, then `vm_compute`, then `result_text`). Open: the same
-  driver on the extracted program (it needs an OCaml frontend), and the balanced structures for large inputs.
+  the rows as the dialect's client does (the frontend of 7.1, then `vm_compute`, then `result_text`).
+  With `--extracted LIBDIR` it runs on the extracted program instead: `tools/extraction/build_lib.sh LIBDIR` extracts
+  and compiles once (about 2 minutes) the semantics, the dialects, `run_rows`, `result_text` and the constructors which
+  the translator emits (`vocab.txt`); `term2ml.py` translates the translator's term to OCaml (the numerals take the
+  type of their position; the rows of the tables go to data files read at run time, so that a long table is not a
+  long literal), which is linked with the library and run natively. `check_terms.py` checks the translation on the
+  compiled conformance files: on the OceanBase corpus the 773 cases give the same result as `vm_compute` (none
+  failing). Performance (MySQL, a table of `n` rows, wall time of the whole driver):
+  | query | n = 1000 | 4000 | 16000 | 64000 |
+  |---|---|---|---|---|
+  | `count(*), sum(b)` | 0.8 s | 1.2 s | 2.5 s | 9.9 s |
+  | `GROUP BY a` (100 groups) | 0.7 s | 1.1 s | 2.7 s | 10.7 s |
+  | `ORDER BY b LIMIT 3` | 0.9 s | 1.5 s | 10.8 s | 205 s |
+  | `DISTINCT b` (1000 values) | 0.8 s | 1.0 s | 2.4 s | 9.8 s (116 s with the list of seen tuples) |
+  `DISTINCT` and the set operations without `ALL` keep the canonical forms of the tuples already seen in a balanced
+  tree (`dedup_tree`, `FiniteSetImpl`), proved equal to the list version (`dedup_tree_rec`, `dedup_on_rec`).
+  Open: `ORDER BY` is an insertion sort (`stable_sort`): a merge sort gives the same result only when the order of
+  the keys is a total preorder, which the comparisons of mixed types (MySQL) are not, so it needs that proof on
+  the keys of a sort (or a check of it) first.
 - **6.7 Coq hygiene**: no `Admitted`, no `Axiom`; `Print Assumptions` for each theorem in CI; module structure so the core (`SqlFull.v`) does not import any dialect; each dialect file imports only `Dialects.v` and `ValueKit.v`.
   **Status: DONE.** CI checks that no built file has `Admitted`, `admit` or `Axiom`, that the core (`src/data/sql/`) imports no dialect, that a dialect imports no other dialect (the members of the MySQL family import `MySQL.v`, of which they are instances: `mysql_vs`), and that the main results are closed under the global context (`src/testing/Assumptions.v`). The shared helpers (`canon_numeric`, `my_truth`, `case_by`, `z_arg`, ...) are in `ValueKit.v`.
 

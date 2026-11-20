@@ -385,8 +385,35 @@ case_eq (tuple_mem O (f x) seen); intro H.
 - simpl; rewrite H, IH; reflexivity.
 Qed.
 
+(** the balanced tree of [dedup_tree] holds the canonical forms of the tuples of the list of [dedup_rec] *)
+Lemma dedup_tree_rec :
+  forall (X : Type) (f : X -> tuple) l st sl,
+    FiniteSetImpl.Ok (OTuple T) st ->
+    (forall c, FiniteSetImpl.InT (OTuple T) c st <->
+               Oeset.mem_bool (OTuple T) c (map (canon_tuple O) sl) = true) ->
+    dedup_tree O f st l = dedup_rec O f sl l.
+Proof.
+intros X f l; induction l as [ | x l IH]; intros st sl Ok H; [reflexivity | ].
+simpl; unfold tuple_mem.
+case_eq (Oeset.mem_bool (OTuple T) (canon_tuple O (f x)) (map (canon_tuple O) sl)); intro K.
+- rewrite (proj2 (@FiniteSetImpl.mem_spec _ (OTuple T) st _ Ok) (proj2 (H _) K)); apply IH; trivial.
+- case_eq (FiniteSetImpl.mem (OTuple T) (canon_tuple O (f x)) st); intro M.
+  + rewrite (proj1 (H _) (proj1 (@FiniteSetImpl.mem_spec _ (OTuple T) st _ Ok) M)) in K; discriminate K.
+  + apply f_equal; apply IH; [apply (@FiniteSetImpl.add_ok _ (OTuple T)); exact Ok | ].
+    intro c; simpl map; rewrite (Oeset.mem_bool_unfold _ c (_ :: _)).
+    generalize (@FiniteSetImpl.add_spec _ (OTuple T) st (canon_tuple O (f x)) c Ok) (H c).
+    destruct (Oeset.compare (OTuple T) c (canon_tuple O (f x))); simpl; intuition; try discriminate.
+Qed.
+
+Lemma dedup_on_rec :
+  forall (X : Type) (f : X -> tuple) l, dedup_on O f l = dedup_rec O f nil l.
+Proof.
+intros X f l; apply dedup_tree_rec; [apply (@FiniteSetImpl.empty_ok _ (OTuple T)) | ].
+intro c; split; intro K; [inversion K | discriminate K].
+Qed.
+
 Theorem dedup_idem : forall l, dedup O (dedup O l) = dedup O l.
-Proof. intro l; apply dedup_rec_idem. Qed.
+Proof. intro l; unfold dedup; rewrite !dedup_on_rec; apply dedup_rec_idem. Qed.
 
 (** The grouping sets of [ROLLUP (e1, ..., en)]: [n + 1] sets, from all the expressions to none; those of
     [CUBE (e1, ..., en)]: [2 ^ n] sets, all the sublists (TODO 6.4) *)

@@ -1,0 +1,6 @@
+mk_case mk_case_limit col as_ select_full s_list str fn int from_as table pred cst agg join c_and o_by
+order_limit e_cond window from_query g_by values_ set_op_ e_sub from_fun count_star w_as w_agg agg_x
+agg_distinct c_not c_in g_sets c_exists w_row_number c_expr whole_partition w_last_value w_rank
+default_frame c_or join_lateral c_any agg_filter w_opts w_ntile w_nth_value w_dense_rank grouping c_all
+w_percent_rank w_lead w_cume_dist e_case c_true g_fine VZ VS VD VFl NullZ NullS NullQ
+
