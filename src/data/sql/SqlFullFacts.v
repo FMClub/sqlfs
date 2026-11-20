@@ -524,6 +524,52 @@ intros fr n gidx rk i; simpl.
 induction (frame_positions fr n gidx rk i) as [ | x l IH]; simpl; [reflexivity | rewrite IH; reflexivity].
 Qed.
 
+Lemma filter_true_seq : forall (f : nat -> bool) n, (forall j, f j = true) -> filter f (seq 0 n) = seq 0 n.
+Proof.
+intros f n H; induction (seq 0 n) as [ | x l IH]; simpl; [reflexivity | rewrite H, IH; reflexivity].
+Qed.
+
+(** [RANGE] and [GROUPS] [BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] are the whole partition *)
+Theorem frame_range_whole :
+  forall n gidx rk i, frame_positions (Frame_Range Unbounded_Preceding Unbounded_Following) n gidx rk i = seq 0 n.
+Proof. intros n gidx rk i; apply filter_true_seq; reflexivity. Qed.
+
+Theorem frame_groups_whole :
+  forall n gidx rk i, frame_positions (Frame_Groups Unbounded_Preceding Unbounded_Following) n gidx rk i = seq 0 n.
+Proof. intros n gidx rk i; apply filter_true_seq; reflexivity. Qed.
+
+(** [RANGE BETWEEN CURRENT ROW AND CURRENT ROW] is the peers of the current row (the rows of the same group of
+    the [ORDER BY] keys), and so is [GROUPS BETWEEN CURRENT ROW AND CURRENT ROW] *)
+Theorem frame_range_current_peers :
+  forall n gidx rk i,
+    frame_positions (Frame_Range Current_Row Current_Row) n gidx rk i =
+    filter (fun j => PeanoNat.Nat.eqb (nth j gidx 0) (nth i gidx 0)) (seq 0 n).
+Proof.
+intros n gidx rk i; cbn [frame_positions range_after_start range_before_end]; apply filter_ext; intro j.
+destruct (PeanoNat.Nat.leb_spec (nth i gidx 0) (nth j gidx 0));
+  destruct (PeanoNat.Nat.leb_spec (nth j gidx 0) (nth i gidx 0));
+  destruct (PeanoNat.Nat.eqb_spec (nth j gidx 0) (nth i gidx 0)); simpl; trivial; lia.
+Qed.
+
+Theorem frame_groups_current_peers :
+  forall n gidx rk i,
+    frame_positions (Frame_Groups Current_Row Current_Row) n gidx rk i =
+    filter (fun j => PeanoNat.Nat.eqb (nth j gidx 0) (nth i gidx 0)) (seq 0 n).
+Proof.
+intros n gidx rk i; cbn [frame_positions after_start before_end]; apply filter_ext; intro j.
+destruct (PeanoNat.Nat.leb_spec (nth i gidx 0) (nth j gidx 0));
+  destruct (PeanoNat.Nat.leb_spec (nth j gidx 0) (nth i gidx 0));
+  destruct (PeanoNat.Nat.eqb_spec (nth j gidx 0) (nth i gidx 0)); simpl; trivial; lia.
+Qed.
+
+(** the default frame with an [ORDER BY], [RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], is the rows up to
+    the last peer of the current row *)
+Theorem frame_range_running :
+  forall n gidx rk i,
+    frame_positions (Frame_Range Unbounded_Preceding Current_Row) n gidx rk i =
+    filter (fun j => PeanoNat.Nat.leb (nth j gidx 0) (nth i gidx 0)) (seq 0 n).
+Proof. intros n gidx rk i; reflexivity. Qed.
+
 (** The bound of the recursion does not matter once a fixpoint is reached (TODO 6.4): if the iteration of
     [WITH RECURSIVE] reaches an empty working table within [n] steps, any larger bound gives the same rows *)
 Fixpoint done_within (step : list tuple -> list tuple) (d : bool) (n : nat) (acc work : list tuple) : bool :=
