@@ -43,6 +43,7 @@ data/sql/SqlFull.v
 data/sql/SqlFullFacts.v
 data/sql/Oracles.v
 data/sql/SqlWellFormed.v
+data/sql/SqlRelate.v
 data/proof_of_concept/TuplesImpl.v
 data/proof_of_concept/IEEE.v
 data/proof_of_concept/Temporal.v
