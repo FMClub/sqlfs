@@ -9,15 +9,15 @@ D="$1"; OUT="$2"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 mkdir -p "$OUT"
 cd "$ROOT/src"
-MODS=$(ls testing/spec/Spec_*.vo | sed 's#.*/##;s#\.vo$##' | grep -v semijoin_nested_timeout)
+MODS=$(ls testing/spec/Spec_*.vo | sed 's#.*/##;s#\.vo$##')
 {
   echo 'Require Import List String SpecRunner Dialects PostgreSQL MySQL SQLite OceanBase MariaDB TiDB.'
   echo 'Import ListNotations. Open Scope string_scope.'
-  for m in $MODS; do echo "Require $m."; done
+  for m in $MODS; do echo "Require SQLFS.testing.spec.$m."; done
   echo 'Require Extraction. Require Import ExtrOcamlBasic ExtrOcamlNativeString.'
   printf 'Definition all_cases := ['
   sep=''
-  for m in $MODS; do n=$(echo $m | sed 's/^Spec_//'); printf '%s("%s", %s.cases_%s)' "$sep" "$n" "$m" "$n"; sep='; '; done
+  for m in $MODS; do n=$(echo $m | sed 's/^Spec_//'); printf '%s("%s", SQLFS.testing.spec.%s.cases_%s)' "$sep" "$n" "$m" "$n"; sep='; '; done
   echo '].'
   echo "Definition run_all := map (fun p => (fst p, diagnose $D (snd p))) all_cases."
   echo 'Extraction "sqlfs_cases.ml" run_all.'

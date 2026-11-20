@@ -553,6 +553,7 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   *The model's results define the expected semantics; where an engine deviates, the deviation is recorded, not copied.*
 - **5.7 Live engines**: when an environment with engines is available (Docker or a permitted host), a differential script: generate queries from a grammar of the fragment, run on the engine, compare with the model's `vm_compute`/extracted interpreter; until then, record that no live differential result exists.
 - **5.8 Metamorphic checks inside Coq**: prove or test the oracles of the tools: Pinolo's containment relations, ValScope's value-semantics rules, TLP (`p`, `NOT p`, `p IS NULL` partition), NoREC, PQS, as lemmas over the model for each dialect (see 6.4), so that a tool's oracle is justified by the semantics, and counterexamples are found by the model first.
+  **Status: PARTIAL.** `src/data/sql/Oracles.v`: TLP (`tlp_partition`: the rows are, as a bag, those where `p`, `NOT p`, `p IS NULL` hold; `tlp_sum` for sums and counts) and NoREC (`norec`), over three-valued logic. Open: Pinolo's containment relations and ValScope's value rules, and the statements over `eval_squery` of each dialect.
 - **5.9 CI**: the build workflow checks every conformance sample; add a job that regenerates samples from the checked-in generator and fails on a diff; budget the build time (split into jobs).
 
 ---------------------------------------------------------------------------------------------------------

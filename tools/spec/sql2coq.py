@@ -2448,6 +2448,11 @@ def parse_insert(toks, tables):
 def parse_results(res_lines, ncols):
     """Rows of a result in the tab format: the first line is the header."""
     lines = [l for l in res_lines]
+    # the warnings which a test prints after a result (--enable_warnings) are not rows
+    for k, l in enumerate(lines):
+        if l == 'Level\tCode\tMessage':
+            lines = lines[:k]
+            break
     blank = 0
     while lines and lines[-1].strip() == '':
         lines.pop()
@@ -2458,7 +2463,8 @@ def parse_results(res_lines, ncols):
         # a header alone is an empty result; followed by one blank line, a row holding ''
         # (several blank lines are ambiguous with the separators, and skipped)
         return [] if blank == 0 else [['']] if blank == 1 else None
-    if lines[0].startswith('ERROR'):
+    # an error: [ERROR 1064 ...] (mysqltest), [Error 1582 (42000): ...] (TiDB)
+    if lines[0].startswith('ERROR') or re.match(r'^Error \d+', lines[0]):
         return None
     if lines[0].startswith('+'):
         # result_format 4: +---+ / | h | / +---+ / | v | / +---+
@@ -2603,9 +2609,13 @@ def process(path, out, stats):
         s = stmt.strip()
         if len(s) > 20000:
             continue
-        if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?sql_mode\b', s, re.I):
-            # (--lenient) the semantics of the rest of the script depends on the new sql_mode: stop
-            stats['skip']['after a change of sql_mode'] = stats['skip'].get('after a change of sql_mode', 0) + len(items) - bi
+        if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?(sql_mode|names|'
+                                r'character_set_\w+|collation_\w+|time_zone|div_precision_increment|'
+                                r'tidb_enable_new_collation\w*|default_collation\w*|group_concat_max_len|'
+                                r'tidb_enable_noop_functions)\b|^\s*set\s+(character\s+set|charset)\b', s, re.I):
+            # (--lenient) the semantics of the rest of the script depends on the new sql_mode, collation, character
+            # set, time zone or precision: stop
+            stats['skip']['after a change of the session'] = stats['skip'].get('after a change of the session', 0) + len(items) - bi
             break
         if LENIENT:
             # (--lenient) a transaction, a routine or a statement which the translator cannot follow makes
@@ -2641,7 +2651,7 @@ def process(path, out, stats):
         if USER_FUNCS and re.search(r'\b(' + '|'.join(map(re.escape, USER_FUNCS)) + r')\s*\(', s, re.I):
             stats['skip']['user-defined function'] = stats['skip'].get('user-defined function', 0) + 1
             continue
-        failed = expect_err or (res is not None and any(l.startswith('ERROR') for l in res))
+        failed = expect_err or (res is not None and any(l.startswith('ERROR') or re.match(r'^Error \d+', l) for l in res))
         try:
             toks = tokenize(s)
         except Skip:

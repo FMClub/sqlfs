@@ -47,11 +47,25 @@ Definition parse_number (s : string) : num * bool :=
                        | _ => (0%Z, 0%nat, r)
                        end in
   let sgn z := if neg then Z.opp z else z in
-  let n := if Nat.eqb nf 0%nat 
-           then Num_Z (sgn iv)
-           else Num_Q (Q2Qc (Qmake (sgn (iv * Z.pow 10 (Z.of_nat nf) + fv)) 
-                                   (Z.to_pos (Z.pow 10 (Z.of_nat nf))))) in
-  (n, if Nat.eqb (ni + nf)%nat 0%nat then false else if String.eqb (string_rtrim r') EmptyString then true else false).
+  (* an exponent: [e] or [E], a sign, digits (MySQL reads ['123e-2'] as 1.23); bounded by 400 so that
+     [10 ^ e] stays small (a longer exponent is not read) *)
+  let '(ex, r'') := match r' with
+                    | String c r3 =>
+                      if (Ascii.eqb c "e"%char || Ascii.eqb c "E"%char) && negb (Nat.eqb (ni + nf)%nat 0%nat) then
+                        let '(eneg, r4) := match r3 with
+                                           | String "-" r5 => (true, r5) | String "+" r5 => (false, r5)
+                                           | _ => (false, r3) end in
+                        let '(ev, ne, r6) := digits_aux r4 0%Z 0%nat in
+                        if Nat.eqb ne 0%nat || Z.ltb 400 ev then (0%Z, r') else ((if eneg then Z.opp ev else ev), r6)
+                      else (0%Z, r')
+                    | EmptyString => (0%Z, r')
+                    end in
+  let mant := Q2Qc (Qmake (sgn (iv * Z.pow 10 (Z.of_nat nf) + fv)) (Z.to_pos (Z.pow 10 (Z.of_nat nf)))) in
+  let n := if Z.eqb ex 0 then
+             (if Nat.eqb nf 0%nat then Num_Z (sgn iv) else Num_Q mant)
+           else if Z.ltb 0 ex then Num_Q (Qcmult mant (Q2Qc (inject_Z (Z.pow 10 ex))))
+           else Num_Q (Qcdiv mant (Q2Qc (inject_Z (Z.pow 10 (Z.opp ex))))) in
+  (n, if Nat.eqb (ni + nf)%nat 0%nat then false else if String.eqb (string_rtrim r'') EmptyString then true else false).
 
 Definition parse_prefix s : num := fst (parse_number s).
 
@@ -513,7 +527,17 @@ Definition my_ts_of (v : value) : option (Z * bool) :=
   match v with
   | Value_string (Some t) => 
     match parse_date t with Some d => Some (ts_of d 0, false) | None =>
-    match parse_timestamp t with Some x => Some (x, true) | None => None end end
+    match parse_timestamp t with Some x => Some (x, true) | None =>
+    (* a string of digits is read as a number: [YYMMDD], [YYYYMMDD], [YYMMDDhhmmss], [YYYYMMDDhhmmss]
+       ([str_to_datetime] of [sql-common/my_time.cc]) *)
+    let cs := list_ascii_of_string t in
+    let n := List.length cs in
+    if forallb (fun c => let k := Ascii.nat_of_ascii c in Nat.leb 48 k && Nat.leb k 57) cs
+       && (Nat.eqb n 6 || Nat.eqb n 8 || Nat.eqb n 12 || Nat.eqb n 14)
+    then match Z_of_string t with
+         | Some z => match my_number_to_datetime z with Some x => Some (x, Nat.ltb 8 n) | None => None end
+         | None => None end
+    else None end end
   | _ => match temporal_parts v with
          | Some (0%nat, d, _) => Some (ts_of d 0, false)
          | Some (1%nat, _, _) => None

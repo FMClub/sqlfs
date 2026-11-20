@@ -74,3 +74,16 @@ Proof. check. Qed.
 (** [json] keeps its text *)
 Example pg_json_text : val PostgreSQL (fn "cast_json" [str "[1,2]"]) = "[1,2]".
 Proof. check. Qed.
+(** [numeric] modulo, and the cast of a [numeric] to an integer (rounded, then checked) *)
+Example pg_num_mod : val PostgreSQL (fn "%" [cst (VD 700 1); int 70]) = "0.0".
+Proof. check. Qed.
+Example pg_num_mod_big : val PostgreSQL (fn "mod" [cst (VD 999999999999999999999 0); cst (VD 1000000000000000000000 0)]) = "999999999999999999999".
+Proof. check. Qed.
+Example pg_num_to_int : val PostgreSQL (fn "cast_int" [cst (VD (-21474836484) 1)]) = "-2147483648".
+Proof. check. Qed.
+(** a string of digits is read as a date in the MySQL family ([str_to_datetime]; MariaDB [group_by.result]) *)
+Example my_date_digits : val MariaDB (fn "date" [str "20050606"]) = "2005-06-06".
+Proof. check. Qed.
+(** a string with an exponent, read as a number ([ROUND ('123e-2')] is 1) *)
+Example my_exp_string : val MySQL (fn "round" [str "123e-2"]) = "1".
+Proof. check. Qed.

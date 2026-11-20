@@ -1151,6 +1151,11 @@ Definition pg_dec2 (op : Qc * nat -> Qc * nat -> value) (old : list value -> val
 Definition pg_dec_plus (a b : Qc * nat) := VDec (Qcplus (fst a) (fst b)) (Nat.max (snd a) (snd b)) (Nat.max (snd a) (snd b)).
 Definition pg_dec_minus (a b : Qc * nat) := VDec (Qcminus (fst a) (fst b)) (Nat.max (snd a) (snd b)) (Nat.max (snd a) (snd b)).
 Definition pg_dec_mult (a b : Qc * nat) := VDec (Qcmult (fst a) (fst b)) (snd a + snd b) (snd a + snd b).
+(** [numeric_mod]: [x - trunc (x / y) * y], with the larger scale; a zero divisor is an error *)
+Definition pg_dec_mod (a b : Qc * nat) :=
+  if Qc_is_zero (fst b) then Value_Err "division by zero"
+  else VDec (Qcminus (fst a) (Qcmult (Qc_of_Z (Qc_trunc (Qcdiv (fst a) (fst b)))) (fst b)))
+            (Nat.max (snd a) (snd b)) (Nat.max (snd a) (snd b)).
 Definition pg_dec_div (a b : Qc * nat) := 
   let r := pg_div_scale (fst a) (snd a) (fst b) (snd b) in
   VDec (dec_round (Qcdiv (fst a) (fst b)) r) r r.
@@ -1319,6 +1324,8 @@ Definition cast_Z v :=
   | Value_F _ => float_to_Z v
   | Value_Z z => Value_Z z
   | Value_Q (Some q) => Value_Z (Some (Qc_round q))
+  (* a [numeric] is rounded ([numeric_int4]: half away from zero), then checked against the range *)
+  | Value_D (Some (q, _, _)) => Value_Z (Some (Qc_round q))
   | Value_string (Some s) => 
     match Z_of_string (string_rtrim (string_ltrim s)) with
     | Some z => Value_Z (Some z)
@@ -1923,8 +1930,8 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
       end in
   let div := by_zero (pg_int2 Z.quot (pg_flt2 "/" Qcdiv (pg_dec2 pg_dec_div (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.quot a b))
                     (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b)))))) in
-  let modulo := by_zero (pg_int2 Z.rem (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
-                       (fun _ _ => None))) in
+  let modulo := by_zero (pg_int2 Z.rem (pg_dec2 pg_dec_mod (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
+                       (fun _ _ => None)))) in
      ("plus", plus) :: ("+", plus)
   :: ("minus", minus) :: ("-", minus)
   :: ("mult", mult) :: ("*", mult)
