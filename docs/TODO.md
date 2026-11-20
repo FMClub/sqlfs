@@ -594,7 +594,7 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   | `count(*), sum(b)` | 0.8 s | 1.2 s | 2.5 s | 9.9 s |
   | `GROUP BY a` (100 groups) | 0.7 s | 1.1 s | 2.7 s | 10.7 s |
   | `ORDER BY b LIMIT 3` | 0.9 s | 1.5 s | 10.8 s | 205 s |
-  | `DISTINCT b` | DISTINCT_TIMES |
+  | `DISTINCT b` (1000 values) | 0.8 s | 1.0 s | 2.4 s | 9.8 s (116 s with the list of seen tuples) |
   `DISTINCT` and the set operations without `ALL` keep the canonical forms of the tuples already seen in a balanced
   tree (`dedup_tree`, `FiniteSetImpl`), proved equal to the list version (`dedup_tree_rec`, `dedup_on_rec`).
   Open: `ORDER BY` is an insertion sort (`stable_sort`): a merge sort gives the same result only when the order of
