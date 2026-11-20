@@ -578,7 +578,9 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   and the compiled conformance cases to OCaml (`ExtrOcamlNativeString`; `fix_weak.py` annotates the partial applications
   OCaml cannot generalise), compiles them with `ocamlopt` and runs them. On the OceanBase corpus (66 files, 769 cases) the
   extracted program reports the same failures as `vm_compute` (none) in 48 s, where the Coq run takes about an hour.
-  Open: the driver for SQL text and CSV tables (it needs the frontend of 7.1), and the balanced structures.
+  `tools/sqlfs_run.py --dialect D --table t=t.csv "SELECT ..."` runs a query of a dialect on CSV tables and prints
+  the rows as the dialect's client does (the frontend of 7.1, then `vm_compute`, then `result_text`). Open: the same
+  driver on the extracted program (it needs an OCaml frontend), and the balanced structures for large inputs.
 - **6.7 Coq hygiene**: no `Admitted`, no `Axiom`; `Print Assumptions` for each theorem in CI; module structure so the core (`SqlFull.v`) does not import any dialect; each dialect file imports only `Dialects.v` and `ValueKit.v`.
   **Status: DONE.** CI checks that no built file has `Admitted`, `admit` or `Axiom`, that the core (`src/data/sql/`) imports no dialect, that a dialect imports no other dialect (the members of the MySQL family import `MySQL.v`, of which they are instances: `mysql_vs`), and that the main results are closed under the global context (`src/testing/Assumptions.v`). The shared helpers (`canon_numeric`, `my_truth`, `case_by`, `z_arg`, ...) are in `ValueKit.v`.
 
