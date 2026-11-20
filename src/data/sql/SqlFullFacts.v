@@ -8,7 +8,7 @@
 
 Set Implicit Arguments.
 
-Require Import List Bool NArith String Permutation.
+Require Import List Bool NArith String Permutation Lia.
 
 Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection 
         FlatData Bool3 Formula SqlFull.
@@ -371,6 +371,33 @@ change ((if Fset.equal (A T) (squery_sort ORN basesort ce q1) (squery_sort ORN b
                           (eval_squery ce env q1 ++ eval_squery ce env q2))
          else nil) = eval_squery ce env q1 ++ eval_squery ce env q2).
 rewrite H, Hu; apply keep_errors_self.
+Qed.
+
+(** [DISTINCT] is idempotent (TODO 6.4): removing the duplicates of a list without duplicates changes
+    nothing, whatever the projection [f] on which the rows are compared *)
+Lemma dedup_rec_idem :
+  forall (X : Type) (f : X -> tuple) seen l,
+    dedup_rec O f seen (dedup_rec O f seen l) = dedup_rec O f seen l.
+Proof.
+intros X f seen l; revert seen; induction l as [ | x l IH]; intro seen; simpl; [reflexivity | ].
+case_eq (tuple_mem O (f x) seen); intro H.
+- apply IH.
+- simpl; rewrite H, IH; reflexivity.
+Qed.
+
+Theorem dedup_idem : forall l, dedup O (dedup O l) = dedup O l.
+Proof. intro l; apply dedup_rec_idem. Qed.
+
+(** The grouping sets of [ROLLUP (e1, ..., en)]: [n + 1] sets, from all the expressions to none; those of
+    [CUBE (e1, ..., en)]: [2 ^ n] sets, all the sublists (TODO 6.4) *)
+Lemma rollup_sets_length : forall (A : Type) (l : list A), List.length (rollup_sets l) = S (List.length l).
+Proof. intros A l; unfold rollup_sets; rewrite map_length, rev_length, seq_length; reflexivity. Qed.
+
+
+Lemma cube_sets_length : forall (A : Type) (l : list A), List.length (cube_sets l) = Nat.pow 2 (List.length l).
+Proof.
+intros A l; induction l as [ | x l IH]; simpl; [reflexivity | ].
+rewrite app_length, map_length, IH; lia.
 Qed.
 
 (** [UNION ALL] is commutative as a bag (TODO 6.4): the rows are the same, in another order *)

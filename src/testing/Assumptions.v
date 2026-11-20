@@ -13,3 +13,6 @@ Print Assumptions Versions.at_version_sub.
 Print Assumptions Oracles.tlp_partition.
 Print Assumptions Oracles.tlp_sum.
 Print Assumptions Oracles.norec.
+Print Assumptions SqlFullFacts.dedup_idem.
+Print Assumptions SqlFullFacts.cube_sets_length.
+Print Assumptions SqlFullFacts.rollup_sets_length.
