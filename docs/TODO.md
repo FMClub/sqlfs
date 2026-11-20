@@ -593,13 +593,19 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   |---|---|---|---|---|
   | `count(*), sum(b)` | 0.8 s | 1.2 s | 2.5 s | 9.9 s |
   | `GROUP BY a` (100 groups) | 0.7 s | 1.1 s | 2.7 s | 10.7 s |
-  | `ORDER BY b LIMIT 3` | 0.9 s | 1.5 s | 10.8 s | 205 s |
+  | `ORDER BY b LIMIT 3` | 0.7 s | 0.9 s | 2.2 s | 9.2 s (205 s with the insertion sort) |
   | `DISTINCT b` (1000 values) | 0.8 s | 1.0 s | 2.4 s | 9.8 s (116 s with the list of seen tuples) |
   `DISTINCT` and the set operations without `ALL` keep the canonical forms of the tuples already seen in a balanced
   tree (`dedup_tree`, `FiniteSetImpl`), proved equal to the list version (`dedup_tree_rec`, `dedup_on_rec`).
-  Open: `ORDER BY` is an insertion sort (`stable_sort`): a merge sort gives the same result only when the order of
-  the keys is a total preorder, which the comparisons of mixed types (MySQL) are not, so it needs that proof on
-  the keys of a sort (or a check of it) first.
+  `ORDER BY` (`sort_on`) is a stable merge sort (`msort`, `n log n` comparisons), proved equal to the stable insertion
+  sort of the earlier versions whenever the comparison of the keys is total and transitive on the rows sorted
+  (`msort_stable_sort`: the sort of a total preorder is unique). Where it is not (the comparisons of values of mixed
+  types in the MySQL family), the order of the rows is the one of the merge, as in the engines (`filesort` merges
+  sorted runs); the OceanBase corpus (773 cases, extracted) gives the same results with it. `ORDER BY b DESC LIMIT 3` on
+  64000 rows: 9.2 s (205 s with the insertion sort).
+  Open: `GROUP BY` is quadratic in the number of groups (`group_on` inserts in a list of groups): 16000 groups of one
+  row take 439 s (100 groups of 16000 rows, 2.3 s); a balanced map from the canonical keys to the groups, with its
+  proof of equivalence, is the next step.
 - **6.7 Coq hygiene**: no `Admitted`, no `Axiom`; `Print Assumptions` for each theorem in CI; module structure so the core (`SqlFull.v`) does not import any dialect; each dialect file imports only `Dialects.v` and `ValueKit.v`.
   **Status: DONE.** CI checks that no built file has `Admitted`, `admit` or `Axiom`, that the core (`src/data/sql/`) imports no dialect, that a dialect imports no other dialect (the members of the MySQL family import `MySQL.v`, of which they are instances: `mysql_vs`), and that the main results are closed under the global context (`src/testing/Assumptions.v`). The shared helpers (`canon_numeric`, `my_truth`, `case_by`, `z_arg`, ...) are in `ValueKit.v`.
 

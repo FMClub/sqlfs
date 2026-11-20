@@ -49,10 +49,124 @@ destruct l as [ | y l]; [apply refl_equal | ].
 simpl; rewrite H; apply refl_equal.
 Qed.
 
+(** ** The merge sort is the insertion sort for a total preorder (TODO 6.6)
+
+    On elements where [le] is total and transitive (a property [P] of the elements), the stable merge sort
+    [msort] and the stable insertion sort [stable_sort] give the same list. *)
+Section Msort.
+
+Variable X : Type.
+Variable le : X -> X -> bool.
+Variable P : X -> Prop.
+Hypothesis Htot : forall x y, P x -> P y -> le x y = true \/ le y x = true.
+Hypothesis Htrans : forall x y z, P x -> P y -> P z -> le x y = true -> le y z = true -> le x z = true.
+
+Lemma merge_nil_r : forall l, merge le l nil = l.
+Proof. intros [ | x l]; reflexivity. Qed.
+
+Lemma merge_nil_l : forall l, merge le nil l = l.
+Proof. intros [ | x l]; reflexivity. Qed.
+
+Lemma merge_cons_cons :
+  forall x l1 y l2,
+    merge le (x :: l1) (y :: l2) =
+    if le x y then x :: merge le l1 (y :: l2) else y :: merge le (x :: l1) l2.
+Proof. intros; reflexivity. Qed.
+
+Lemma insert_merge :
+  forall sa sb x, Forall P sa -> Forall P sb -> P x ->
+    insert_sorted le x (merge le sa sb) = merge le (insert_sorted le x sa) sb.
+Proof.
+intro sa; induction sa as [ | z sa IH]; intros sb x Ha Hb Hx.
+- induction sb as [ | y sb IHb]; [reflexivity | ].
+  change (merge le nil (y :: sb)) with (y :: sb); cbn [insert_sorted].
+  rewrite merge_cons_cons; destruct (le x y); [reflexivity | ].
+  f_equal; inversion Hb; subst; rewrite merge_nil_l in IHb; change (insert_sorted le x nil) with (x :: nil) in IHb; apply IHb; trivial.
+- inversion Ha as [ | ? ? Hz Ha']; subst.
+  induction sb as [ | y sb IHb]; [rewrite !merge_nil_r; reflexivity | ].
+  inversion Hb as [ | ? ? Hy Hb']; subst.
+  rewrite merge_cons_cons; cbn [insert_sorted].
+  case_eq (le x z); intro Kxz; case_eq (le z y); intro Kzy.
+  + cbn [insert_sorted]; rewrite Kxz, merge_cons_cons, (Htrans Hx Hz Hy Kxz Kzy), merge_cons_cons, Kzy.
+    reflexivity.
+  + cbn [insert_sorted]; rewrite merge_cons_cons.
+    case_eq (le x y); intro Kxy.
+    * rewrite merge_cons_cons, Kzy; reflexivity.
+    * f_equal; rewrite IHb; trivial; cbn [insert_sorted]; rewrite Kxz; reflexivity.
+  + cbn [insert_sorted]; rewrite Kxz, merge_cons_cons, Kzy, IH; trivial.
+  + cbn [insert_sorted].
+    assert (Kxy : le x y = false).
+    { case_eq (le x y); intro Kxy; [ | reflexivity].
+      destruct (Htot Hx Hz) as [K | K]; [rewrite K in Kxz; discriminate | ].
+      rewrite (Htrans Hz Hx Hy K Kxy) in Kzy; discriminate. }
+    rewrite Kxy, merge_cons_cons, Kzy; f_equal.
+    rewrite IHb; trivial; cbn [insert_sorted]; rewrite Kxz; reflexivity.
+Qed.
+
+Lemma Forall_insert : forall x l, P x -> Forall P l -> Forall P (insert_sorted le x l).
+Proof.
+intros x l Hx Hl; induction Hl as [ | y l Hy Hl IH]; cbn [insert_sorted]; [constructor; auto | ].
+destruct (le x y); constructor; auto.
+Qed.
+
+Lemma Forall_stable_sort : forall l, Forall P l -> Forall P (stable_sort le l).
+Proof.
+intros l Hl; induction Hl as [ | x l Hx Hl IH]; [constructor | ].
+apply Forall_insert; trivial.
+Qed.
+
+Lemma stable_sort_app :
+  forall a b, Forall P a -> Forall P b ->
+    stable_sort le (a ++ b) = merge le (stable_sort le a) (stable_sort le b).
+Proof.
+intros a b Ha Hb; induction Ha as [ | x a Hx Ha IH]; [simpl; rewrite merge_nil_l; reflexivity | ].
+change (insert_sorted le x (stable_sort le (a ++ b)) = merge le (insert_sorted le x (stable_sort le a)) (stable_sort le b)).
+rewrite IH; apply insert_merge; trivial; apply Forall_stable_sort; trivial.
+Qed.
+
+Lemma msort_fuel_stable_sort :
+  forall n l, (List.length l <= n)%nat -> Forall P l -> msort_fuel le n l = stable_sort le l.
+Proof.
+intro n; induction n as [ | n IH]; intros l Hn Hl.
+- destruct l; [reflexivity | simpl in Hn; lia].
+- destruct l as [ | x [ | y l]]; [reflexivity | reflexivity | ].
+  set (k := x :: y :: l) in *.
+  change (merge le (msort_fuel le n (firstn (PeanoNat.Nat.div (List.length k) 2) k))
+                   (msort_fuel le n (skipn (PeanoNat.Nat.div (List.length k) 2) k)) = stable_sort le k).
+  set (h := PeanoNat.Nat.div (List.length k) 2).
+  assert (D := PeanoNat.Nat.div_mod (List.length k) 2 (ltac:(lia))).
+  assert (M := PeanoNat.Nat.mod_upper_bound (List.length k) 2 (ltac:(lia))).
+  assert (L : (2 <= List.length k)%nat) by (unfold k; simpl; lia).
+  fold h in D.
+  rewrite <- (firstn_skipn h k) in Hl; apply Forall_app in Hl; destruct Hl as [H1 H2].
+  rewrite IH, IH; trivial.
+  + rewrite <- stable_sort_app; trivial; rewrite firstn_skipn; reflexivity.
+  + rewrite skipn_length; lia.
+  + rewrite firstn_length; lia.
+Qed.
+
+Theorem msort_stable_sort : forall l, Forall P l -> msort le l = stable_sort le l.
+Proof. intros l Hl; apply msort_fuel_stable_sort; trivial. Qed.
+
+End Msort.
+
 Lemma sort_on_nil :
   forall (X : Type) (keys : X -> list (value T)) (l : list X), sort_on O nil keys l = l.
 Proof.
 intros X keys l; unfold sort_on.
+rewrite (@msort_stable_sort _ _ (fun _ => True)).
+- rewrite stable_sort_trivial; [ | intros; apply refl_equal].
+  rewrite map_map; simpl; apply map_id; intros; apply refl_equal.
+- intros; left; reflexivity.
+- intros; reflexivity.
+- apply Forall_forall; intros; exact I.
+Qed.
+
+Lemma sort_on_nil_old :
+  forall (X : Type) (keys : X -> list (value T)) (l : list X),
+    map (@snd _ _) (stable_sort (fun x y => keys_le O nil (fst x) (fst y)) (map (fun x => (keys x, x)) l)) = l.
+Proof.
+intros X keys l.
 rewrite stable_sort_trivial; [ | intros; apply refl_equal].
 rewrite map_map; simpl; apply map_id; intros; apply refl_equal.
 Qed.

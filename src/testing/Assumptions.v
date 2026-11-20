@@ -29,3 +29,4 @@ Print Assumptions SqlFullFacts.frame_groups_current_peers.
 Print Assumptions SqlFullFacts.dedup_on_rec.
 Print Assumptions SqlFullFacts.rec_loop_fuel.
 Print Assumptions SqlRelate.sql_full_agree.
+Print Assumptions SqlFullFacts.msort_stable_sort.
