@@ -1098,6 +1098,31 @@ Fixpoint insert_sorted (le : X -> X -> bool) (x : X) (l : list X) :=
 Definition stable_sort (le : X -> X -> bool) (l : list X) :=
   fold_right (insert_sorted le) nil l.
 
+(** Stable merge sort: [merge] keeps the element of the left list first when the two are equivalent. It is
+    [stable_sort] when [le] is total and transitive on the elements ([msort_stable_sort] in
+    [SqlFullFacts.v]), in [n log n] comparisons instead of [n^2]. *)
+Fixpoint merge (le : X -> X -> bool) (l1 : list X) : list X -> list X :=
+  fix merge_aux (l2 : list X) : list X :=
+    match l1, l2 with
+    | nil, _ => l2
+    | _, nil => l1
+    | x :: l1', y :: l2' => if le x y then x :: merge le l1' l2 else y :: merge_aux l2'
+    end.
+
+Fixpoint msort_fuel (le : X -> X -> bool) (n : nat) (l : list X) : list X :=
+  match n with
+  | 0 => l
+  | S n =>
+    match l with
+    | nil | _ :: nil => l
+    | _ =>
+      let h := Nat.div (List.length l) 2 in
+      merge le (msort_fuel le n (firstn h l)) (msort_fuel le n (skipn h l))
+    end
+  end.
+
+Definition msort (le : X -> X -> bool) (l : list X) := msort_fuel le (List.length l) l.
+
 Fixpoint indexed_rec (i : nat) (l : list X) : list (nat * X) :=
   match l with
   | nil => nil
@@ -1168,7 +1193,7 @@ Definition keys_le specs (k1 k2 : list value) :=
 
 Definition sort_on (X : Type) (specs : list order_spec) (keys : X -> list value) (l : list X) :=
   map (@snd _ _)
-      (stable_sort (fun x y => keys_le specs (fst x) (fst y)) (map (fun x => (keys x, x)) l)).
+      (msort (fun x y => keys_le specs (fst x) (fst y)) (map (fun x => (keys x, x)) l)).
 
 Definition sorder_spec (o : sorder) : order_spec := match o with O_By _ d n => (d, n) end.
 
