@@ -193,12 +193,20 @@ Definition num_fun1 (conv : value -> option num) (f : num -> num) (l : list valu
     number of decimals it needs; the declared scale of a column is not known. *)
 
 (** the number of decimals of [q], at most 40 *)
-Definition dec_scale (q : Qc) : nat :=
-  let d := Zpos (Qden q) in
-  match find (fun s => Z.eqb (Z.modulo (Z.pow 10 (Z.of_nat s)) d) 0) (seq 0 41) with
-  | Some s => s
-  | None => 40%nat
+(** the exponents of 2 and of 5 in [d], and what remains *)
+Fixpoint factor25 (fuel : nat) (d : Z) (a b : nat) : nat * nat * Z :=
+  match fuel with
+  | O => (a, b, d)
+  | S f => if Z.eqb (Z.modulo d 2) 0 then factor25 f (d / 2) (S a) b
+           else if Z.eqb (Z.modulo d 5) 0 then factor25 f (d / 5) a (S b)
+           else (a, b, d)
   end.
+
+(** the number of decimals of [q]: exact when its expansion terminates ([d = 2^a 5^b]: [max a b]
+    decimals), 40 otherwise (then rounded) *)
+Definition dec_scale (q : Qc) : nat :=
+  let '(a, b, r) := factor25 (Pos.size_nat (Qden q)) (Zpos (Qden q)) 0 0 in
+  if Z.eqb r 1 then Nat.max a b else 40%nat.
 
 Definition num_scale (n : num) : nat := match n with Num_Z _ => 0%nat | Num_Q q => dec_scale q end.
 
@@ -220,7 +228,9 @@ Definition pad_zeros (width : nat) (s : string) : string :=
 Definition string_of_dec (q : Qc) : string :=
   let sc := dec_scale q in
   let m := Z.pow 10 (Z.of_nat sc) in
-  let scaled := (Qnum q * (m / Zpos (Qden q)))%Z in
+  let d := Zpos (Qden q) in
+  (* exact when the expansion terminates; rounded half away from zero otherwise *)
+  let scaled := (Z.sgn (Qnum q) * ((Z.abs (Qnum q) * m * 2 + d) / (2 * d)))%Z in
   let ip := (Z.abs scaled / m)%Z in
   let fp := (Z.abs scaled mod m)%Z in
   (if Z.ltb scaled 0 then "-" else "") ++ string_of_Z ip

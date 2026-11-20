@@ -67,6 +67,8 @@ Definition pg_var_agg (sample root : bool) (l : list value) : value :=
     | Some (num, den) => dbl_of root (Qcdiv num den)
     | None => Value_F None
     end
+  (* one value: the population variance is the constant zero ([make_result (&const_zero)], scale 0) *)
+  else if Nat.eqb (List.length nn) 1 && negb sample then VDec (Qc_of_Z 0) 0 0
   else
     let sc := fold_left (fun acc v => match dec_of_value v with Some (_, _, s) => Nat.max acc s | None => acc end) nn 0%nat in
     match var_frac sample (qcs is_null num_of_value nn) with

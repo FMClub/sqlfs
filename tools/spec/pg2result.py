@@ -71,6 +71,30 @@ def complete(s):
     return inq is None and (s.rstrip().endswith(';') or last.rstrip().endswith(';'))
 
 
+def literal_spans_lines(s):
+    """a string literal (outside comments) which contains a newline"""
+    inq = False
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if inq:
+            if c == "'":
+                if s.startswith("''", i):
+                    i += 2
+                    continue
+                inq = False
+            elif c == '\n':
+                return True
+        elif s.startswith('--', i):
+            j = s.find('\n', i)
+            i = len(s) if j < 0 else j
+            continue
+        elif c == "'":
+            inq = True
+        i += 1
+    return False
+
+
 def parse_out(lines):
     """[(statement, output lines)]"""
     items = []
@@ -241,10 +265,24 @@ def main():
         if lines and lines[-1] == '':
             lines.pop()
         DATESTYLE_CHANGED = False
+        copies = []
+        sql_path = os.path.join(regress, 'sql', name + '.sql')
+        if os.path.exists(sql_path):
+            sql_lines = open(sql_path, encoding='utf-8', errors='replace').read().split('\n')
+            j = 0
+            while j < len(sql_lines):
+                if re.match(r'^\s*copy\s+\w+.*\bfrom\s+stdin', sql_lines[j], re.I):
+                    j += 1
+                    block = []
+                    while j < len(sql_lines) and sql_lines[j] != '\\.':
+                        block.append(sql_lines[j])
+                        j += 1
+                    copies.append(block)
+                j += 1
         res = list(SETUP)
         for stmt, out in parse_out(lines):
             # one statement per line group, comments removed (sql2coq reads the statement up to ';')
-            if re.search(r"'(?:[^'\n]|'')*\n(?:[^']|'')*'", stmt):
+            if literal_spans_lines(stmt):
                 continue  # a literal on several lines: joining the lines would change it
             st = re.sub(r'(?m)--.*$', '', stmt).strip()
             st = re.sub(r'\s*\n\s*', ' ', st)
@@ -254,6 +292,15 @@ def main():
                 DATESTYLE_CHANGED = not st.lower().startswith('reset')
                 continue
             if re.match(r'^explain\b', st, re.I):
+                continue
+            m = re.match(r'^copy\s+(\w+)(\s*\([^)]*\))?\s+from\s+stdin', st, re.I)
+            if m:
+                # the data of COPY ... FROM stdin is in the .sql file only (psql does not echo it)
+                rows = copies.pop(0) if copies else []
+                cols = m.group(2) or ''
+                for k in range(0, len(rows), 100):
+                    vals = ', '.join('(' + ', '.join(sql_lit(v) for v in r.split('\t')) + ')' for r in rows[k:k + 100])
+                    res.append('INSERT INTO %s%s VALUES %s;' % (m.group(1), cols, vals))
                 continue
             res.append(st)
             res += convert_output(out)

@@ -106,10 +106,19 @@ def tokenize(s):
 # Parser
 # ----------------------------------------------------------------------------------------
 
+NAMED_WINDOWS = {}
+# the views of the script: name -> (query, columns); a view is a derived table where it is used
+VIEWS = {}
+
+
 class P:
     def __init__(self, toks):
         self.t = toks
         self.i = 0
+        # the named windows of the statement (WINDOW w AS ...), read by the translation of OVER w
+        global NAMED_WINDOWS
+        NAMED_WINDOWS = {}
+        self.named_windows = NAMED_WINDOWS
 
     def peek(self, k=0):
         return self.t[self.i + k] if self.i + k < len(self.t) else ('eof', '')
@@ -182,6 +191,22 @@ class P:
             q = self.query()
             self.need_op(')')
             return q
+        if ENGINE in ('postgresql', 'sqlite') and self.kw('values'):
+            # VALUES (e, ...), (e, ...): a query whose columns are c0, c1, ...
+            self.i += 1
+            rows = []
+            while True:
+                self.need_op('(')
+                row = [self.expr()]
+                while self.eat_op(','):
+                    row.append(self.expr())
+                self.need_op(')')
+                rows.append(row)
+                if not self.eat_op(','):
+                    break
+            if len(set(len(r) for r in rows)) != 1:
+                raise Skip('values arity')
+            return ('values', rows)
         return self.select()
 
     def limit(self):
@@ -255,17 +280,217 @@ class P:
         if self.kw('group'):
             self.i += 1
             self.need_kw('by')
-            group = []
+            dist_sets = False
+            if self.eat_kw('distinct'):
+                dist_sets = True
+            else:
+                self.eat_kw('all')
+            elems = []
             while True:
-                group.append(self.expr())
+                elems.append(self.group_element())
                 if not self.eat_op(','):
                     break
             if self.kw('with'):
-                raise Skip('with rollup')
+                # MySQL: GROUP BY a, b WITH ROLLUP
+                self.i += 1
+                if not (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'rollup'):
+                    raise Skip('with rollup')
+                self.i += 1
+                if any(k != 'plain' for k, _ in elems):
+                    raise Skip('with rollup')
+                elems = [('sets', rollup_sets([x for _, ss in elems for x in ss[0]]))]
+            if all(k == 'plain' for k, _ in elems):
+                group = [x for _, ss in elems for x in ss[0]]
+            else:
+                sets = [[]]
+                for _, ss in elems:
+                    sets = [a + b for a in sets for b in ss]
+                if dist_sets:
+                    out = []
+                    for st in sets:
+                        if not any(sorted(map(repr, st)) == sorted(map(repr, o)) for o in out):
+                            out.append(st)
+                    sets = out
+                group = ('sets', sets)
         having = self.expr() if self.eat_kw('having') else None
+        # WINDOW w AS (spec), ...: the named windows (one name space per statement)
+        if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'window':
+            self.i += 1
+            while True:
+                name = self.ident().lower()
+                self.need_kw('as')
+                self.need_op('(')
+                self.named_windows[name] = self.window_spec()
+                if not self.eat_op(','):
+                    break
         if self.kw('window', 'for', 'lock', 'into', 'procedure'):
             raise Skip('clause')
         return ('select', distinct, items, frm, where, group, having)
+
+    def group_element(self):
+        """an element of GROUP BY: an expression, (), ROLLUP (...), CUBE (...), GROUPING SETS (...); its grouping
+        sets ('plain' for an expression: one set of one expression)"""
+        def item():
+            # an argument of ROLLUP / CUBE: (e1, e2) is one item of several expressions
+            if self.op('(') and self.peek(1) == ('op', ')'):
+                self.i += 2
+                return []
+            if self.op('('):
+                save = self.i
+                self.i += 1
+                xs = [self.expr()]
+                if self.eat_op(','):
+                    xs.append(self.expr())
+                    while self.eat_op(','):
+                        xs.append(self.expr())
+                    self.need_op(')')
+                    return xs
+                self.i = save
+            return [self.expr()]
+        w = self.peek()[1].lower() if self.peek()[0] in ('id', 'kw') else ''
+        if w in ('rollup', 'cube') and self.peek(1) == ('op', '('):
+            self.i += 2
+            items = [item()]
+            while self.eat_op(','):
+                items.append(item())
+            self.need_op(')')
+            if w == 'rollup':
+                return ('sets', [sum(items[:k], []) for k in range(len(items), -1, -1)])
+            def cube(l):
+                if not l:
+                    return [[]]
+                sub = cube(l[1:])
+                return [l[0] + x for x in sub] + sub
+            return ('sets', cube(items))
+        if w == 'grouping' and self.peek(1)[0] in ('id', 'kw') and self.peek(1)[1].lower() == 'sets':
+            self.i += 2
+            self.need_op('(')
+            sets = []
+            while True:
+                if self.op('(') and self.peek(1) == ('op', ')'):
+                    self.i += 2
+                    sets.append([])
+                else:
+                    k, ss = self.group_element_in_sets()
+                    sets += ss
+                if not self.eat_op(','):
+                    break
+            self.need_op(')')
+            return ('sets', sets)
+        if self.op('(') and self.peek(1) == ('op', ')'):
+            self.i += 2
+            return ('sets', [[]])
+        return ('plain', [[self.expr()]])
+
+    def group_element_in_sets(self):
+        """an element inside GROUPING SETS: (e1, e2) is one set; ROLLUP, CUBE, GROUPING SETS nest"""
+        w = self.peek()[1].lower() if self.peek()[0] in ('id', 'kw') else ''
+        if w in ('rollup', 'cube', 'grouping'):
+            return self.group_element()
+        if self.op('('):
+            save = self.i
+            self.i += 1
+            xs = [self.expr()]
+            if self.eat_op(','):
+                xs.append(self.expr())
+                while self.eat_op(','):
+                    xs.append(self.expr())
+                self.need_op(')')
+                return ('sets', [xs])
+            self.i = save
+        return ('sets', [[self.expr()]])
+
+    def window_spec(self):
+        """the inside of OVER ( ... ), after '(': [name] [PARTITION BY ...] [ORDER BY ...] [frame] ')'"""
+        base = None
+        if self.peek()[0] == 'id' and self.peek()[1].lower() not in ('partition', 'order', 'rows', 'range', 'groups'):
+            base = self.ident().lower()
+        part, order, frame = [], [], None
+        if self.eat_kw('partition'):
+            self.need_kw('by')
+            part.append(self.expr())
+            while self.eat_op(','):
+                part.append(self.expr())
+        if self.eat_kw('order'):
+            self.need_kw('by')
+            while True:
+                e = self.expr()
+                d = 'asc'
+                if self.eat_kw('desc'):
+                    d = 'desc'
+                else:
+                    self.eat_kw('asc')
+                nulls = None
+                if self.eat_kw('nulls'):
+                    nulls = 'first' if self.eat_kw('first') else ('last' if self.eat_kw('last') else None)
+                    if nulls is None:
+                        raise Skip('window nulls')
+                order.append((e, d, nulls))
+                if not self.eat_op(','):
+                    break
+        if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('rows', 'range', 'groups'):
+            mode = self.peek()[1].lower()
+            self.i += 1
+
+            def bound():
+                if self.eat_kw('unbounded'):
+                    if self.eat_kw('preceding'):
+                        return ('up',)
+                    self.need_kw('following')
+                    return ('uf',)
+                if self.eat_kw('current'):
+                    self.need_kw('row')
+                    return ('cr',)
+                t = self.peek()
+                if t[0] != 'num' or '.' in t[1]:
+                    raise Skip('window frame offset')
+                self.i += 1
+                if self.eat_kw('preceding'):
+                    return ('p', int(t[1]))
+                self.need_kw('following')
+                return ('f', int(t[1]))
+            if self.eat_kw('between'):
+                lo = bound()
+                self.need_kw('and')
+                hi = bound()
+            else:
+                lo, hi = bound(), ('cr',)
+            excl = None
+            if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'exclude':
+                self.i += 1
+                if self.eat_kw('current'):
+                    self.need_kw('row')
+                    excl = 'Excl_Current_Row'
+                elif self.eat_kw('group'):
+                    excl = 'Excl_Group'
+                elif self.peek()[1].lower() == 'ties':
+                    self.i += 1
+                    excl = 'Excl_Ties'
+                else:
+                    self.need_kw('no')
+                    self.i += 1
+                    excl = 'Excl_No_Others'
+            frame = (mode, lo, hi, excl)
+        self.need_op(')')
+        return ('spec', base, part, order, frame)
+
+    def over(self):
+        """OVER (spec) or OVER name, after a call; None if there is none"""
+        if not self.kw('over'):
+            return None
+        self.i += 1
+        if self.eat_op('('):
+            return self.window_spec()
+        return ('spec', self.ident().lower(), [], [], None)
+
+    def null_treatment(self):
+        """IGNORE NULLS / RESPECT NULLS (between the call and OVER)"""
+        if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('ignore', 'respect') and \
+           self.peek(1)[0] in ('id', 'kw') and self.peek(1)[1].lower() == 'nulls':
+            ign = self.peek()[1].lower() == 'ignore'
+            self.i += 2
+            return ign
+        return False
 
     def ident(self):
         t = self.peek()
@@ -328,7 +553,7 @@ class P:
         if self.op('('):
             save = self.i
             self.i += 1
-            if not self.kw('select'):
+            if not self.kw('select', 'values', 'with'):
                 self.i = save
                 raise Skip('parenthesised table reference')
             q = self.query()
@@ -411,6 +636,19 @@ class P:
             alias = self.ident()
         if self.kw('use', 'force', 'ignore', 'partition'):
             raise Skip('index hint')
+        cols = None
+        if self.op('(') and ENGINE in ('postgresql', 'sqlite'):
+            # t [AS] alias (c1, c2, ...): the columns renamed
+            self.i += 1
+            cols = [self.ident()]
+            while self.eat_op(','):
+                cols.append(self.ident())
+            self.need_op(')')
+        if name.lower() in VIEWS:
+            q, vcols = VIEWS[name.lower()]
+            return ('derived', q, alias, cols or vcols)
+        if cols is not None:
+            return ('derived', ('select', False, [('star', None)], ('table', name, name), None, None, None), alias, cols)
         return ('table', name, alias)
 
     # ---- expressions (precedence climbing)
@@ -742,6 +980,15 @@ class P:
             lit = self.peek(1)[1]
             self.i += 2
             return ('temporal', ty, lit)
+        # PostgreSQL [type 'literal']: CAST ('literal' AS type)
+        if ENGINE == 'postgresql' and self.peek()[0] in ('id', 'kw') and self.peek(1)[0] == 'str' and \
+           self.peek()[1].lower() in ('int2', 'int4', 'int8', 'integer', 'int', 'smallint', 'bigint', 'float4', 'float8',
+                                      'real', 'numeric', 'decimal', 'text', 'varchar', 'bool', 'boolean', 'interval',
+                                      'json', 'jsonb', 'timestamptz', 'name', 'bpchar'):
+            ty = self.peek()[1].lower()
+            lit = self.peek(1)[1]
+            self.i += 2
+            return ('cast', ty, ('str', lit))
         if self.kw('interval') and self.peek(1) == ('op', '(') and ENGINE == 'mysql':
             # the function INTERVAL (n, n1, n2, ...)
             self.i += 2
@@ -844,9 +1091,12 @@ class P:
                 if self.eat_op('*'):
                     self.need_op(')')
                     flt = self.agg_filter()
-                    if self.kw('over'):
-                        raise Skip('window')
                     e = ('call', lname, [], True, False)
+                    w = self.over()
+                    if w is not None:
+                        if flt is not None:
+                            raise Skip('window filter')
+                        return ('wcall', e, w, False)
                     return ('filter', e, flt) if flt is not None else e
                 distinct = self.eat_kw('distinct')
                 if not distinct:
@@ -878,9 +1128,15 @@ class P:
                     self.need_op(')')
                     within = (oe, desc)
                 flt = self.agg_filter()
-                if self.kw('over'):
-                    raise Skip('window')
+                ign = self.null_treatment()
                 e = ('call', lname, args, False, distinct, within)
+                w = self.over()
+                if w is not None:
+                    if flt is not None or distinct or within is not None:
+                        raise Skip('window clause')
+                    return ('wcall', e, w, ign)
+                if ign:
+                    raise Skip('null treatment')
                 return ('filter', e, flt) if flt is not None else e
             if self.eat_op('.'):
                 if self.op('*'):
@@ -1204,6 +1460,10 @@ class Tr:
             return '(agg_filter "%s" %s %s)' % (name, self.ex(args[0]), self.cond(c))
         if k == 'bool':
             return '(cst (NullValues.Value_bool (Some %s)))' % ('true' if e[1] else 'false')
+        if k == 'icol':
+            return '(col (Attr_Z "%s"))' % e[1]
+        if k == 'wcall':
+            raise Skip('window function in this position')
         if k == 'cast':
             ty = e[1]
             f = {'signed': 'cast_int', 'unsigned': 'cast_unsigned', 'integer': 'cast_int', 'int': 'cast_int', 'bigint': 'cast_int', 'smallint': 'cast_int', 'char': 'cast_string', 'varchar': 'cast_string', 'text': 'cast_string', 'decimal': 'cast_numeric', 'numeric': 'cast_numeric', 'real': 'cast_double', 'float': 'cast_double', 'double': 'cast_double'}.get(ty)
@@ -1237,6 +1497,13 @@ class Tr:
                 return '(agg_x "hyp_%s_%s" %s (Some %s) [o_by %s %s])' % (name, 'desc' if desc else 'asc', self.ex(oe),
                                                                          self.ex(args[0]), self.ex(oe), d)
             raise Skip('within group ' + name)
+        if k == 'call' and e[1] == 'grouping' and e[2]:
+            # GROUPING (a, b, ...): the bits of the arguments which are not grouped, the first one highest
+            gs = ['(grouping %s)' % self.ex(a) for a in e[2]]
+            out = gs[0]
+            for g_ in gs[1:]:
+                out = '(fn "+" [(fn "*" [%s; int 2]); %s])' % (out, g_)
+            return out
         if k == 'call':
             name, args, star, distinct = e[1], e[2], e[3], e[4]
             if name in ('max', 'min') and ENGINE == 'sqlite' and len(args) > 1 and not star:
@@ -1331,6 +1598,24 @@ class Tr:
         return '(c_expr %s)' % self.ex(e)
 
 
+def has_wcall(e):
+    if isinstance(e, list):
+        return any(has_wcall(x) for x in e)
+    if not isinstance(e, tuple):
+        return False
+    if e and e[0] == 'wcall':
+        return True
+    return any(has_wcall(x) for x in e[1:])
+
+
+def rollup_sets(l):
+    return [l[:k] for k in range(len(l), -1, -1)]
+
+
+RANKING = {'row_number': 'w_row_number', 'rank': 'w_rank', 'dense_rank': 'w_dense_rank',
+           'percent_rank': 'w_percent_rank', 'cume_dist': 'w_cume_dist'}
+
+
 def has_call(e, name):
     if isinstance(e, list):
         return any(has_call(x, name) for x in e)
@@ -1346,6 +1631,8 @@ def is_agg_call(e):
     if e[0] == 'call' and len(e) > 5 and e[5] is not None:
         return True
     if e[0] == 'filter':
+        return True
+    if e[0] == 'call' and e[1] == 'grouping':
         return True
     return (e[0] == 'call' and e[1] in AGGS and
             not (ENGINE == 'sqlite' and e[1] in ('max', 'min') and len(e[2]) > 1))
@@ -1513,6 +1800,15 @@ class QTr:
                 return self.select(inner, order, limit, parent)
             cq, n, _, names = self.query(inner, parent)
             return self.apply_order(cq, n, order, limit) + (names,)
+        if k == 'values':
+            rows = q[1]
+            if any(has_agg(e) or has_wcall(e) for r in rows for e in r):
+                raise Skip('values with aggregates')
+            tr = Tr(Ctx(self.tables, parent), self)
+            n = len(rows[0])
+            atts = '; '.join('(Attr_Z "c%d")' % i for i in range(n))
+            body = '; '.join('[%s]' % '; '.join(tr.ex(e) for e in r) for r in rows)
+            return '(values_ [%s] [%s])' % (atts, body), n, False, [None] * n
         if k == 'setop':
             op, allq, l, r = q[1], q[2], q[3], q[4]
             lq, ln, _, lnames = self.query(l, parent)
@@ -1537,6 +1833,160 @@ class QTr:
                                                  'None' if off == 0 else '(Some %d%%N)' % off,
                                                  'None' if lim is None else '(Some %d%%N)' % lim), bool(order)
 
+    def window_select(self, s, exprs, order, limit, parent, tr):
+        """A query with window functions: an inner query computes the arguments, the partition and order
+        keys of the windows and the other parts of the select items (with the WHERE, GROUP BY and HAVING of
+        the query); SQ_Window adds one column per window function; an outer query computes the select
+        items from these columns, then DISTINCT, ORDER BY, LIMIT."""
+        _, distinct, items, frm, where, group, having = s
+        inner = []
+        wins = []
+
+        def icol(e):
+            for i, x in enumerate(inner):
+                if x == e:
+                    return ('icol', 'c%d' % i)
+            inner.append(e)
+            return ('icol', 'c%d' % (len(inner) - 1))
+
+        def lift(e):
+            if isinstance(e, list):
+                return [lift(x) for x in e]
+            if not isinstance(e, tuple):
+                return e
+            if e[0] == 'wcall':
+                for k, w in enumerate(wins):
+                    if w == e:
+                        return ('icol', 'w%d' % k)
+                wins.append(e)
+                return ('icol', 'w%d' % (len(wins) - 1))
+            if not has_wcall(e):
+                return icol(e)
+            if e[0] in ('subq', 'exists', 'insub', 'quant'):
+                raise Skip('window function in a subquery')
+            return tuple([e[0]] + [lift(x) for x in e[1:]])
+
+        names = {a.lower(): i for i, (_, a) in enumerate(exprs) if a}
+        outer = [lift(e) for e, _ in exprs]
+        okeys = []
+        for e, d in (order or []):
+            if e[0] == 'col' and e[1] is None and e[2].lower() in names:
+                okeys.append((('item', names[e[2].lower()]), d))
+            elif e[0] == 'num' and '.' not in e[1] and 1 <= int(e[1]) <= len(exprs):
+                okeys.append((('item', int(e[1]) - 1), d))
+            else:
+                okeys.append((lift(e), d))
+        if limit is not None and not order:
+            raise Skip('limit without order by (the rows are implementation defined)')
+        # the windows
+        wl = []
+        for k, (_, call, spec, ign) in enumerate(wins):
+            base = spec[1]
+            part, wo, frame = spec[2], spec[3], spec[4]
+            if base is not None:
+                if base not in NAMED_WINDOWS:
+                    raise Skip('unknown window ' + base)
+                b = NAMED_WINDOWS[base]
+                if b[1] is not None:
+                    raise Skip('window chain')
+                part = b[2]
+                wo = wo or b[3]
+                frame = frame or b[4]
+            lp = ['(col (Attr_Z "%s"))' % icol(x)[1] for x in part]
+            lo = []
+            for x, d, nulls in wo:
+                c = '(col (Attr_Z "%s"))' % icol(x)[1]
+                dd = 'Asc' if d == 'asc' else 'Desc'
+                if nulls is None:
+                    lo.append('(o_by %s %s)' % (c, dd))
+                else:
+                    lo.append('(o_by_nulls %s %s %s)' % (c, dd, 'Nulls_First' if nulls == 'first' else 'Nulls_Last'))
+            if frame is None:
+                fr = 'default_frame' if wo else 'whole_partition'
+            else:
+                mode, lo_b, hi_b, excl = frame
+                offsets = any(b[0] in ('p', 'f') for b in (lo_b, hi_b))
+
+                def cb(b):
+                    if b[0] == 'up':
+                        return 'Unbounded_Preceding'
+                    if b[0] == 'uf':
+                        return 'Unbounded_Following'
+                    if b[0] == 'cr':
+                        return 'Current_Row'
+                    if mode == 'range':
+                        return '(%s (QArith_base.Qmake (%d) 1))' % ('Preceding_Q' if b[0] == 'p' else 'Following_Q', b[1])
+                    return '(%s %d)' % ('Preceding' if b[0] == 'p' else 'Following', b[1])
+                if mode == 'range' and not offsets:
+                    ctor = 'Frame_Groups'
+                elif mode == 'range':
+                    if len(wo) != 1:
+                        raise Skip('range frame keys')
+                    ctor = 'Frame_Range'
+                else:
+                    ctor = {'rows': 'Frame_Rows', 'groups': 'Frame_Groups'}[mode]
+                fr = '(%s %s %s)' % (ctor, cb(lo_b), cb(hi_b))
+                if excl:
+                    fr = '(Frame_Excl %s %s)' % (fr, excl)
+            name, args, star = call[1], call[2], call[3]
+
+            def lit_nat(x):
+                if x[0] != 'num' or '.' in x[1] or x[1].startswith('-'):
+                    raise Skip('window function argument')
+                return int(x[1])
+            if name in RANKING and not args:
+                f = RANKING[name]
+            elif name == 'ntile' and len(args) == 1:
+                f = '(w_ntile %d)' % lit_nat(args[0])
+            elif name in ('lag', 'lead') and 1 <= len(args) <= 3:
+                n_ = lit_nat(args[1]) if len(args) > 1 else 1
+                dflt = '(col (Attr_Z "%s"))' % icol(args[2])[1] if len(args) > 2 else '(cst NullZ)'
+                f = '(w_%s (col (Attr_Z "%s")) %d %s)' % (name, icol(args[0])[1], n_, dflt)
+            elif name in ('first_value', 'last_value') and len(args) == 1:
+                f = '(w_%s (col (Attr_Z "%s")) %s)' % (name, icol(args[0])[1], fr)
+            elif name == 'nth_value' and len(args) == 2:
+                f = '(w_nth_value (col (Attr_Z "%s")) %d %s)' % (icol(args[0])[1], lit_nat(args[1]), fr)
+            elif name in AGGS and star and name == 'count':
+                f = '(w_agg "count(*)" (int 1) %s)' % fr
+            elif name in AGGS and len(args) == 1 and name not in AGGS2 and name != 'group_concat':
+                f = '(w_agg "%s" (col (Attr_Z "%s")) %s)' % (name, icol(args[0])[1], fr)
+            else:
+                raise Skip('window function ' + name)
+            if ign:
+                f = '(w_opts %s true false)' % f
+            wl.append('(w_as %s [%s] [%s] (Attr_Z "w%d"))' % (f, '; '.join(lp), '; '.join(lo), k))
+        if not inner:
+            icol(('num', '1'))
+        inner_s = ('select', False, [('item', x, None) for x in inner], frm, where, group, having)
+        body, _, _, _ = self.select(inner_s, None, None, parent)
+        win = '(window %s [%s])' % (body, '; '.join(wl))
+        n = len(outer)
+        sel = ['(as_ %s (Attr_Z "c%d"))' % (tr.ex(e), i) for i, e in enumerate(outer)]
+        keys = []
+        for e, d in okeys:
+            dd = 'Asc' if d == 'asc' else 'Desc'
+            if e[0] == 'item':
+                keys.append('(o_by (col (Attr_Z "c%d")) %s)' % (e[1], dd))
+                continue
+            idx = next((i for i, x in enumerate(outer) if x == e), None)
+            if idx is None:
+                if distinct:
+                    raise Skip('order by a hidden column of a distinct query')
+                idx = len(sel)
+                sel.append('(as_ %s (Attr_Z "c%d"))' % (tr.ex(e), idx))
+            keys.append('(o_by (col (Attr_Z "c%d")) %s)' % (idx, dd))
+        body = '(select_full %s (s_list [%s]) [(from_query %s)] c_true g_fine c_true)' % (
+            'Set_Distinct' if distinct else 'Set_All', '; '.join(sel), win)
+        ordered = False
+        if order:
+            off, lim = (limit if limit else (0, None))
+            body = '(order_limit %s [%s] %s %s)' % (body, '; '.join(keys),
+                                                     'None' if off == 0 else '(Some %d%%N)' % off,
+                                                     'None' if lim is None else '(Some %d%%N)' % lim)
+            ordered = True
+        outnames = [a if a else (e[2] if e[0] == 'col' else None) for e, a in exprs]
+        return body, n, ordered, outnames
+
     def select(self, s, order, limit, parent=None):
         _, distinct, items, frm, where, group, having = s
         ctx = Ctx(self.tables, parent)
@@ -1559,6 +2009,8 @@ class QTr:
                         exprs.append((('col', alias, n), n))
             else:
                 exprs.append((it[1], it[2]))
+        if any(has_wcall(e) for e, _ in exprs) or any(has_wcall(e) for e, _ in (order or [])):
+            return self.window_select(s, exprs, order, limit, parent, tr)
         names = {}
         outnames = []
         for i, (e, a) in enumerate(exprs):
@@ -1621,7 +2073,10 @@ class QTr:
         if where is not None and has_agg(where):
             raise Skip('aggregate in where')
         agg_query = any(has_agg(e) for e, _ in exprs) or (having is not None and has_agg(having))
-        if group is not None:
+        if isinstance(group, tuple) and group[0] == 'sets':
+            g = '(g_sets [%s])' % '; '.join('[%s]' % '; '.join(tr.ex(subst(x)) for x in st) for st in group[1])
+            group = [x for st in group[1] for x in st]
+        elif group is not None:
             g = '(g_by [%s])' % '; '.join(tr.ex(subst(x)) for x in group)
         else:
             g = 'g_fine'
@@ -1738,7 +2193,7 @@ def looks_like_statement(l):
 def parse_create(toks):
     p = P(toks)
     p.need_kw('create')
-    if p.kw('temporary'):
+    if p.kw('temporary') or (p.peek()[0] in ('id', 'kw') and p.peek()[1].lower() in ('temp', 'unlogged')):
         p.i += 1
     if not p.eat_kw('table'):
         raise Skip('create other')
@@ -2050,6 +2505,7 @@ USER_FUNCS = set()
 
 def process(path, out, stats):
     USER_FUNCS.clear()
+    VIEWS.clear()
     import os
     if os.path.getsize(path) > 3000000:
         stats['skipped_files'] += 1
@@ -2062,13 +2518,34 @@ def process(path, out, stats):
     base = path.split('/')[-1].replace('.result', '')
     cases = []
     # the statements which a loop or an eval of the test script runs are not in the result file
-    test_path = re.sub(r'/r/mysql/([^/]*)\.result$', r'/t/\1.test', path)
+    # the test script: OceanBase r/mysql/x.result -> t/x.test; TiDB and MySQL r/x.result -> t/x.test;
+    # MariaDB main/x.result -> main/x.test
+    test_path = path
+    for pat, rep in ((r'/r/mysql/([^/]*)\.result$', r'/t/\1.test'), (r'/r/([^/]*)\.result$', r'/t/\1.test'),
+                     (r'\.result$', '.test')):
+        cand = re.sub(pat, rep, path)
+        if cand != path and os.path.exists(cand):
+            test_path = cand
+            break
     items = None
     try:
         if test_path == path:
             raise OSError('no test script')
         test_src = open(test_path, encoding='utf-8', errors='replace').read()
-        if re.search(r'^\s*(while|eval|let|--source|--exec|--perl|--eval)\b', test_src, re.I | re.M):
+        src_check = test_src
+        if LENIENT:
+            # (--lenient) the includes which only check the server (have_innodb, not_embedded, ...) do not
+            # change the data
+            src_check = re.sub(r'(?im)^\s*-?-?source\s+include/(have|not|no|default|big|count_sessions|'
+                               r'wait_until_count_sessions|have_[a-z0-9_]*)[a-z0-9_]*\.inc\s*;?\s*$', '', test_src)
+        m_unsafe = re.search(r'^\s*(while|eval|let|--source|source|--exec|--perl|--eval|connect|connection|delimiter)\b',
+                             src_check, re.I | re.M)
+        if LENIENT and m_unsafe:
+            # (--lenient) the statements before the first loop, variable or connection are replayed
+            test_src = src_check[:m_unsafe.start()]
+            src_check = test_src
+            stats['truncated_files'] = stats.get('truncated_files', 0) + 1
+        if re.search(r'^\s*(while|eval|let|--source|source|--exec|--perl|--eval)\b', src_check, re.I | re.M):
             stats['skipped_files'] += 1
             return
         if re.search(r'^\s*(connect|connection|delimiter)\b', test_src, re.I | re.M):
@@ -2149,6 +2626,23 @@ def process(path, out, stats):
                     tables.pop(n.lower(), None)
                     if not p.eat_op(','):
                         break
+            elif head == 'create' and re.match(r'^\s*create\s+(or\s+replace\s+)?(temp|temporary\s+)?\s*view\b', s, re.I):
+                p = P(toks)
+                p.i = 1
+                if p.eat_kw('or'):
+                    p.i += 1
+                if p.peek()[1].lower() in ('temp', 'temporary'):
+                    p.i += 1
+                p.i += 1  # VIEW
+                vname = p.ident().lower()
+                vcols = None
+                if p.eat_op('('):
+                    vcols = [p.ident()]
+                    while p.eat_op(','):
+                        vcols.append(p.ident())
+                    p.need_op(')')
+                p.need_kw('as')
+                VIEWS[vname] = (p.query(), vcols)
             elif head == 'create':
                 # the parents of the foreign keys: a change of a parent can cascade to the child
                 refs = [toks[i + 1][1].lower() for i in range(len(toks) - 1)
@@ -2163,7 +2657,7 @@ def process(path, out, stats):
                     # an unsupported table: remember that it exists but is unreliable
                     p = P(toks)
                     p.i = 1
-                    while p.kw('temporary'):
+                    while p.kw('temporary') or (p.peek()[0] in ('id', 'kw') and p.peek()[1].lower() in ('temp', 'unlogged')):
                         p.i += 1
                     if p.eat_kw('table'):
                         if p.eat_kw('if'):
@@ -2283,7 +2777,7 @@ def process(path, out, stats):
 
 HEADER = """Require Import List String ZArith NArith.
 Require Import FiniteSet Values TuplesImpl GenericInstance SqlSyntax SqlFull SqlFullSyntax Dialects
-        PostgreSQL MySQL SQLite OceanBase SpecRunner.
+        PostgreSQL MySQL SQLite OceanBase MariaDB TiDB Percona PolarDB SpecRunner.
 Import ListNotations.
 Open Scope string_scope.
 """
