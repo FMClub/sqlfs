@@ -131,6 +131,9 @@ class P:
     def __init__(self, toks):
         self.t = toks
         self.i = 0
+        # the common table expressions in scope (WITH name [(columns)] AS (query)), innermost last: a
+        # reference to one is its query as a derived table (a non-recursive WITH is its substitution)
+        self.ctes = []
         # the named windows of the statement (WINDOW w AS ...), read by the translation of OVER w
         global NAMED_WINDOWS
         NAMED_WINDOWS = {}
@@ -169,6 +172,34 @@ class P:
 
     # ---- queries
     def query(self):
+        if self.kw('with') and not (self.peek(1)[0] in ('id', 'kw') and self.peek(1)[1].lower() == 'ordinality'):
+            self.i += 1
+            if self.kw('recursive'):
+                raise Skip('recursive with')
+            scope = {}
+            self.ctes.append(scope)
+            try:
+                while True:
+                    name = self.ident()
+                    cols = None
+                    if self.eat_op('('):
+                        cols = [self.ident()]
+                        while self.eat_op(','):
+                            cols.append(self.ident())
+                        self.need_op(')')
+                    self.need_kw('as')
+                    self.need_op('(')
+                    q = self.query()
+                    self.need_op(')')
+                    scope[name.lower()] = (q, cols)
+                    if not self.eat_op(','):
+                        break
+                return self.query_body()
+            finally:
+                self.ctes.pop()
+        return self.query_body()
+
+    def query_body(self):
         # INTERSECT binds tighter than UNION and EXCEPT in PostgreSQL and MySQL (8.0.31); SQLite and
         # Oracle give them the same precedence, from left to right
         tight = ENGINE in ('postgresql', 'mysql')
@@ -672,6 +703,17 @@ class P:
             alias = self.ident()
         elif self.peek()[0] == 'id' and not self.kw('join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'on', 'where', 'group', 'order', 'limit', 'having', 'union', 'intersect', 'except', 'minus', 'using', 'use', 'force', 'ignore', 'partition', 'straight_join'):
             alias = self.ident()
+        # MySQL index hints (USE | FORCE | IGNORE {INDEX | KEY} [FOR ...] (names)) do not change the rows
+        while ENGINE == 'mysql' and self.kw('use', 'force', 'ignore') and \
+                self.peek(1)[0] in ('id', 'kw') and self.peek(1)[1].lower() in ('index', 'key'):
+            self.i += 2
+            if self.eat_kw('for'):
+                while not self.op('(') and self.peek()[0] != 'eof':
+                    self.i += 1
+            self.need_op('(')
+            while not self.op(')') and self.peek()[0] != 'eof':
+                self.i += 1
+            self.need_op(')')
         if self.kw('use', 'force', 'ignore', 'partition'):
             raise Skip('index hint')
         cols = None
@@ -682,6 +724,10 @@ class P:
             while self.eat_op(','):
                 cols.append(self.ident())
             self.need_op(')')
+        for scope in reversed(self.ctes):
+            if name.lower() in scope:
+                q, ccols = scope[name.lower()]
+                return ('derived', q, alias, cols or ccols)
         if name.lower() in VIEWS:
             q, vcols = VIEWS[name.lower()]
             return ('derived', q, alias, cols or vcols)
@@ -2268,6 +2314,10 @@ def looks_like_statement(l):
     return bool(re.match(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|commit|rollback|use|analyze|call|start|begin)\b', l, re.I))
 
 
+# the AUTO_INCREMENT columns (their positions) of the tables
+AUTO_INC = {}
+
+
 def parse_create(toks):
     p = P(toks)
     p.need_kw('create')
@@ -2362,6 +2412,10 @@ def parse_create(toks):
                 elif t[0] in ('id', 'kw') and t[1].lower() == 'unsigned' and ENGINE == 'mysql' and \
                         ty in ('float', 'double', 'real', 'decimal', 'numeric'):
                     pass  # UNSIGNED on a float or a decimal only rejects the negative values (an error: not replayed)
+                elif t[0] in ('id', 'kw') and t[1].lower() == 'auto_increment' and ENGINE == 'mysql' and kind == 'Z':
+                    # the rows which give the column a value are those of the INSERT (parse_insert); the others,
+                    # whose value the engine generates, make the table unreliable
+                    AUTO_INC.setdefault(name.lower(), set()).add(len(cols))
                 elif t[0] in ('id', 'kw') and t[1].lower() in ('collate', 'charset', 'character', 'zerofill', 'default', 'auto_increment', 'generated', 'as', 'binary', 'unsigned', 'on', 'check', 'references'):
                     raise Skip('column option ' + t[1])
                 p.i += 1
@@ -2495,8 +2549,16 @@ def parse_insert(toks, tables):
                 row[i] = conv_value(v, t.cols[i][1], t.limits[i] if i < len(t.limits) else None)
             for i in range(len(row)):
                 if row[i] is None:
+                    if i in AUTO_INC.get(name.lower(), ()):
+                        raise Skip('auto_increment value')
                     row[i] = {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[t.cols[i][1]]
         out.append(row)
+    # an AUTO_INCREMENT column whose value is NULL or 0 gets the next value of the engine
+    for i in AUTO_INC.get(name.lower(), ()):
+        given = [vals[i] if cols is None else
+                 next((v for c, v in zip(cols, vals) if c.lower() == t.cols[i][0].lower()), None) for vals in rows]
+        if any(v is None or v == ('null',) or (v[0] == 'num' and float(v[1]) == 0) for v in given):
+            raise Skip('auto_increment value')
     return t, out
 
 
@@ -2721,6 +2783,9 @@ def process(path, out, stats):
         # a parenthesised query: (SELECT ...) UNION (SELECT ...)
         if head == '' and toks[0] == ('op', '(') and len(toks) > 1 and toks[1][0] in ('id', 'kw') and \
                 toks[1][1].lower() in ('select', 'with', 'values'):
+            head = 'select'
+        # a query with a WITH clause
+        if head == 'with':
             head = 'select'
         if failed and head in ('create', 'insert', 'update', 'delete', 'replace', 'alter', 'truncate', 'rename'):
             continue
