@@ -741,7 +741,7 @@ class P:
 
     def e_or(self):
         l = self.e_xor()
-        while self.eat_kw('or') or (ENGINE != 'postgresql' and self.eat_op('||')):
+        while self.eat_kw('or') or (ENGINE not in ('postgresql', 'oracle') and self.eat_op('||')):
             l = ('bin', 'or' if self.t[self.i - 1][1] in ('or', 'OR', 'Or') or self.t[self.i - 1][1].lower() == 'or' else '||', l, self.e_xor())
         return l
 
@@ -894,7 +894,7 @@ class P:
     def e_bitor(self):
         l = self.e_bitand()
         # in PostgreSQL, [||] is an operator of the same level as [|]: below [+], above the comparisons
-        while self.peek() == ('op', '|') or (ENGINE == 'postgresql' and self.peek() == ('op', '||')):
+        while self.peek() == ('op', '|') or (ENGINE in ('postgresql', 'oracle') and self.peek() == ('op', '||')):
             op = self.peek()[1]
             self.i += 1
             l = ('bin', op, l, self.e_bitand())
@@ -2988,7 +2988,7 @@ def main():
         args = args[2:]
     import os
     global ENGINE
-    ENGINE = {'PostgreSQL': 'postgresql', 'SQLite': 'sqlite'}.get(dialect, 'mysql')
+    ENGINE = {'PostgreSQL': 'postgresql', 'SQLite': 'sqlite', 'OceanBaseOracle': 'oracle'}.get(dialect, 'mysql')
     global SERVER_VERSION
     SERVER_VERSION = {'MariaDB': 110400, 'TiDB': 80011, 'OceanBaseMySQL': 50725, 'PolarDB': 80018}.get(dialect, 80400)
     stats = {'selects': 0, 'translated': 0, 'no_result': 0, 'skipped_files': 0, 'skip': {}}

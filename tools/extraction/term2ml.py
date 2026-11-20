@@ -9,10 +9,10 @@ position where it stands (KINDS), Z by default, or the one of its scope suffix (
 import re
 
 NAMES = {'int': 'int0', 'pred': 'pred0', 'join': 'join0', 'VZ': 'vZ', 'VS': 'vS', 'VD': 'vD', 'VFl': 'vFl',
-         'NullZ': 'nullZ', 'NullS': 'nullS', 'NullQ': 'nullQ', 'NullValues.VDate': 'Prelude.vdate',
+         'NullZ': 'nullZ', 'NullS': 'nullS', 'NullQ': 'nullQ', 'VQ': 'vQ', 'VB': 'vB', 'VI': 'vI', 'NullB': 'nullB', 'NullValues.VDate': 'Prelude.vdate',
          'NullValues.VTs': 'Prelude.vts', 'NullValues.VTime': 'Prelude.vtime',
          'QArith_base.Qmake': 'Prelude.qmake'}
-KINDS = {'VD': ['Z', 'nat'], 'VFl': [None, 'Z', 'Z'], 'NullValues.VDate': ['Z'], 'NullValues.VTs': ['Z', 'int'],
+KINDS = {'VD': ['Z', 'nat'], 'VQ': ['Z', 'positive'], 'VFl': [None, 'Z', 'Z'], 'NullValues.VDate': ['Z'], 'NullValues.VTs': ['Z', 'int'],
          'NullValues.VTime': ['Z', 'int'], 'Preceding': ['nat'], 'Following': ['nat'],
          'QArith_base.Qmake': ['Z', 'positive'], 'w_nth_value': [None, 'nat', None], 'w_ntile': ['nat'],
          'w_lead': [None, 'nat', None], 'w_lag': [None, 'nat', None], 'mk_case_limit': [None, 'nat']}
