@@ -136,6 +136,8 @@ connection or change of `sql_mode`; the lines printed by `--echo` are not rows. 
 | `win_empty_over:2` | `ROW_NUMBER () OVER ()`: the numbering of the rows is not specified (no `ORDER BY`) |
 | `group_by:286` | `DATE ('20050606')`: a string of digits read as a date; fixed after the run (`my_ts_of`) |
 
+Non-recursive `WITH` (since the run above; TODO 5.6): `cte_nonrecursive.result` and `cte_nonrecursive_not_embedded.result`, 37 queries translated, 37 pass.
+
 Found and fixed by the MariaDB runs: the decimals of `VARIANCE`/`STD` (argument decimals + 4, 20 cases), the maximal
 scale of `ROUND`/`TRUNCATE` (38; a scale of `2147483640` exhausted memory), several statements on one line.
 
