@@ -52,7 +52,9 @@ def ex(e):
     if k == 'is':
         return '(%s IS %s%s)' % (ex(e[3]), 'NOT ' if e[2] else '', e[1].upper())
     if k == 'in':
-        return '(%s %sIN (%s))' % (ex(e[2]), 'NOT ' if e[1] else '', ', '.join(ex(x) for x in e[3]))
+        # a scalar subquery as an item of the list keeps its own parentheses: IN ((SELECT ...)) is a subquery IN
+        items = ', '.join('(%s)' % ex(x) if x[0] == 'subq' else ex(x) for x in e[3])
+        return '(%s %sIN (%s))' % (ex(e[2]), 'NOT ' if e[1] else '', items)
     if k == 'insub':
         lhs = ex(e[2][0]) if len(e[2]) == 1 else '(%s)' % ', '.join(ex(x) for x in e[2])
         return '(%s %sIN (%s))' % (lhs, 'NOT ' if e[1] else '', query(e[3]))
