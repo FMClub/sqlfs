@@ -30,3 +30,28 @@ Example wf_correlated :
   wf (select_where [as_ (col a) c0] [from_query t]
         (c_exists (select_where [as_ (int 1) c1] [from_as t [(a, Attr_Z "b")]] (pred "=" [col (Attr_Z "b"); col a])))) = true.
 Proof. check. Qed.
+
+(** * Coverage of GROUP BY with the functional dependencies of keys: the table [t] has the key [id] *)
+Definition keys (r : relname) : list attribute :=
+  match r with Rel "t" => [Attr_Z "id"] | _ => nil end.
+Definition tk := from_as (table "t") [(Attr_Z "id", Attr_Z "t.id"); (Attr_Z "v", Attr_Z "t.v"); (Attr_Z "w", Attr_Z "t.w")].
+Definition by_key :=
+  select_full Set_All (s_list [as_ (col (Attr_Z "t.id")) c0; as_ (col (Attr_Z "t.v")) c1]) [tk] c_true
+              (g_by [col (Attr_Z "t.id")]) c_true.
+(** [t.v] is determined by the key [t.id], which is grouped *)
+Example covered_by_key : group_covered TNull relname keys by_key = true.
+Proof. check. Qed.
+(** without the key, [t.v] is a bare column *)
+Example bare_without_key : group_covered TNull relname (fun _ => nil) by_key = false.
+Proof. check. Qed.
+(** grouping by a column which is not the key determines nothing *)
+Example bare_other_group :
+  group_covered TNull relname keys
+    (select_full Set_All (s_list [as_ (col (Attr_Z "t.v")) c0; as_ count_star c1]) [tk] c_true
+                 (g_by [col (Attr_Z "t.w")]) c_true) = false.
+Proof. check. Qed.
+(** an aggregate without GROUP BY reads no bare column *)
+Example covered_aggregate :
+  group_covered TNull relname keys
+    (select_full Set_All (s_list [as_ count_star c0]) [tk] c_true g_fine c_true) = true.
+Proof. check. Qed.
