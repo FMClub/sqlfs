@@ -11,7 +11,8 @@ SLT="$1"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$ROOT/src/testing/slt"
 T="$SLT/test"
-rm -rf "$OUT"; mkdir -p "$OUT"
+# the generated directories are replaced; NOTICE (the licence of the copied data) is kept
+for d in SQLite PostgreSQL MySQL OceanBaseMySQL; do rm -rf "$OUT/$d"; done; mkdir -p "$OUT"
 EXPR=$(ls "$T"/random/expr/slt_good_*.test | head -6)
 gen() { # engine dialect max files...
   e="$1"; d="$2"; m="$3"; shift 3

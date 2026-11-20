@@ -42,7 +42,7 @@ Definition phases_expr_slt_good_1 : list slt_phase := [
     mk_slt_case "slt_good_1.test:59" "II" 1 (select_full Set_Distinct (s_list [(as_ (int (77)) (Attr_Z "c0")); (as_ (fn "-" [count_star; (int (11))]) (Attr_Z "c1"))]) [] c_true g_fine c_true) ["77"; "-10"] "SELECT DISTINCT + 77 AS col1, COUNT ( * ) - 11";
     mk_slt_case "slt_good_1.test:60" "I" 1 (select_full Set_All (s_list [(as_ (int (55)) (Attr_Z "c0"))]) [] c_true g_fine c_true) ["55"] "SELECT ALL + + 55";
     mk_slt_case "slt_good_1.test:61" "I" 1 (select_full Set_All (s_list [(as_ (int (67)) (Attr_Z "c0"))]) [] c_true g_fine c_true) ["67"] "SELECT + 67 AS col1";
-    mk_slt_case "slt_good_1.test:63" "I" 1 (select_full Set_All (s_list [(as_ (fn "cast_numeric" [(cst NullZ)]) (Attr_Z "c0"))]) [] c_true g_fine c_true) ["NULL"] "SELECT + CAST ( NULL AS REAL )";
+    mk_slt_case "slt_good_1.test:63" "I" 1 (select_full Set_All (s_list [(as_ (fn "cast_float4" [(cst NullZ)]) (Attr_Z "c0"))]) [] c_true g_fine c_true) ["NULL"] "SELECT + CAST ( NULL AS REAL )";
     mk_slt_case "slt_good_1.test:64" "I" 1 (select_full Set_All (s_list [(as_ (int (30)) (Attr_Z "c0"))]) [] c_true g_fine c_true) ["30"] "SELECT ALL 30 AS col2";
     mk_slt_case "slt_good_1.test:66" "I" 1 (select_full Set_All (s_list [(as_ (fn "neg" [(fn "neg" [(fn "neg" [(agg "avg" (fn "cast_int" [(cst NullZ)]))])])]) (Attr_Z "c0"))]) [] c_true g_fine c_true) ["NULL"] "SELECT - - ( + - AVG ( ALL CAST ( NULL AS INTEGER ) ) ) col2";
     mk_slt_case "slt_good_1.test:68" "I" 1 (select_full Set_Distinct (s_list [(as_ (fn "cast_int" [(int (37))]) (Attr_Z "c0"))]) [] c_true g_fine c_true) ["37"] "SELECT DISTINCT + CAST ( 37 AS INTEGER ) AS col2";
