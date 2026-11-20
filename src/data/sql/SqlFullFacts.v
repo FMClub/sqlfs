@@ -400,6 +400,37 @@ intros A l; induction l as [ | x l IH]; simpl; [reflexivity | ].
 rewrite app_length, map_length, IH; lia.
 Qed.
 
+(** Window frames (TODO 6.4): [ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW] is the running frame, the rows
+    from the first one to the current one; [ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] is the whole
+    partition *)
+Lemma filter_le_seq : forall i n, filter (fun j => PeanoNat.Nat.leb j i) (seq 0 n) = seq 0 (PeanoNat.Nat.min n (S i)).
+Proof.
+intros i n; induction n as [ | n IH]; [reflexivity | ].
+rewrite seq_S, filter_app, IH, PeanoNat.Nat.add_0_l; cbn [filter].
+case_eq (PeanoNat.Nat.leb n i); intro H.
+- apply PeanoNat.Nat.leb_le in H.
+  replace (PeanoNat.Nat.min n (S i)) with n by lia; replace (PeanoNat.Nat.min (S n) (S i)) with (S n) by lia.
+  rewrite seq_S; reflexivity.
+- apply PeanoNat.Nat.leb_gt in H.
+  replace (PeanoNat.Nat.min n (S i)) with (S i) by lia; replace (PeanoNat.Nat.min (S n) (S i)) with (S i) by lia.
+  apply app_nil_r.
+Qed.
+
+Theorem frame_running :
+  forall n gidx rk i, (S i <= n)%nat ->
+    frame_positions (Frame_Rows Unbounded_Preceding Current_Row) n gidx rk i = seq 0 (S i).
+Proof.
+intros n gidx rk i H; simpl.
+rewrite filter_le_seq, PeanoNat.Nat.min_r; [reflexivity | exact H].
+Qed.
+
+Theorem frame_whole_partition :
+  forall n gidx rk i, frame_positions (Frame_Rows Unbounded_Preceding Unbounded_Following) n gidx rk i = seq 0 n.
+Proof.
+intros n gidx rk i; simpl.
+induction (seq 0 n) as [ | x l IH]; simpl; [reflexivity | rewrite IH; reflexivity].
+Qed.
+
 (** [UNION ALL] is commutative as a bag (TODO 6.4): the rows are the same, in another order *)
 Theorem union_all_comm :
   forall ce env q1 q2,
