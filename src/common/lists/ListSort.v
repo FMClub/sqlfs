@@ -13,7 +13,7 @@
 
 Set Implicit Arguments.
 
-Require Import List Recdef Sorted Arith SetoidList Bool.
+Require Import List Recdef Sorted Arith SetoidList Bool Permutation Lia.
 
 Require Import BasicFacts ListFacts OrderedSet ListPermut.
 
@@ -1170,3 +1170,145 @@ intros x l;  induction l as [ | a1 l]; intros a Ha Hl.
 Qed.
 
 End NbOcc.
+
+(** * A stable merge sort, in [n log n] comparisons (TODO 6.6)
+
+    [mergesort] is a sorted permutation of its argument, as [quicksort], which is quadratic on a list which is
+    already sorted (its pivot is the first element); [Febag.elements] uses it. *)
+Section MergeSort.
+
+Hypothesis A : Type.
+Hypothesis OA : Oeset.Rcd A.
+
+Definition oleb x y := match Oeset.compare OA x y with Gt => false | _ => true end.
+
+Fixpoint mmerge (l1 : list A) : list A -> list A :=
+  fix mmerge_aux (l2 : list A) : list A :=
+    match l1, l2 with
+    | nil, _ => l2
+    | _, nil => l1
+    | x :: l1', y :: l2' => if oleb x y then x :: mmerge l1' l2 else y :: mmerge_aux l2'
+    end.
+
+Fixpoint msort_fuel (n : nat) (l : list A) : list A :=
+  match n with
+  | 0 => l
+  | S n =>
+    match l with
+    | nil | _ :: nil => l
+    | _ =>
+      let h := Nat.div (length l) 2 in
+      mmerge (msort_fuel n (firstn h l)) (msort_fuel n (skipn h l))
+    end
+  end.
+
+Definition mergesort (l : list A) := msort_fuel (length l) l.
+
+Lemma mmerge_nil_r : forall l, mmerge l nil = l.
+Proof. intros [ | x l]; reflexivity. Qed.
+
+Lemma mmerge_nil_l : forall l, mmerge nil l = l.
+Proof. intros [ | x l]; reflexivity. Qed.
+
+Lemma mmerge_cons :
+  forall x l1 y l2,
+    mmerge (x :: l1) (y :: l2) = if oleb x y then x :: mmerge l1 (y :: l2) else y :: mmerge (x :: l1) l2.
+Proof. intros; reflexivity. Qed.
+
+Lemma mmerge_Permutation : forall l1 l2, Permutation (l1 ++ l2) (mmerge l1 l2).
+Proof.
+intro l1; induction l1 as [ | x l1 IH1]; intro l2; [rewrite mmerge_nil_l; reflexivity | ].
+induction l2 as [ | y l2 IH2]; [rewrite mmerge_nil_r, app_nil_r; reflexivity | ].
+rewrite mmerge_cons; destruct (oleb x y).
+- simpl; apply perm_skip; apply IH1.
+- apply Permutation_trans with (y :: (x :: l1) ++ l2).
+  + apply Permutation_sym; exact (Permutation_middle (x :: l1) l2 y).
+  + apply perm_skip; exact IH2.
+Qed.
+
+Lemma msort_fuel_Permutation : forall n l, Permutation l (msort_fuel n l).
+Proof.
+intro n; induction n as [ | n IH]; intro l; [reflexivity | ].
+destruct l as [ | x [ | y l]]; try reflexivity.
+cbn [msort_fuel].
+set (k := x :: y :: l); set (h := Nat.div (length k) 2).
+apply Permutation_trans with (msort_fuel n (firstn h k) ++ msort_fuel n (skipn h k)); [ | apply mmerge_Permutation].
+rewrite <- (firstn_skipn h k) at 1; apply Permutation_app; apply IH.
+Qed.
+
+Theorem mergesort_Permutation : forall l, Permutation l (mergesort l).
+Proof. intro l; apply msort_fuel_Permutation. Qed.
+
+Lemma Permutation_permut :
+  forall l1 l2, Permutation l1 l2 -> _permut (fun x y => Oeset.compare OA x y = Eq) l1 l2.
+Proof.
+intros l1 l2 P; induction P as [ | x l l' P IH | x y l | l l' l'' P1 IH1 P2 IH2].
+- apply Pnil.
+- apply (Oeset.permut_cons OA x x l l' (Oeset.compare_eq_refl OA x)); exact IH.
+- apply (@Pcons _ _ _ y y (x :: l) (x :: nil) l); [apply Oeset.compare_eq_refl | apply Oeset.permut_refl].
+- apply Oeset.permut_trans with l'; assumption.
+Qed.
+
+Theorem mergesort_permut : forall l, _permut (fun x y => Oeset.compare OA x y = Eq) l (mergesort l).
+Proof. intro l; apply Permutation_permut; apply mergesort_Permutation. Qed.
+
+Lemma In_mergesort : forall l a, In a l <-> In a (mergesort l).
+Proof.
+intros l a; split; intro H; [apply (Permutation_in _ (mergesort_Permutation l)) | 
+  apply (Permutation_in _ (Permutation_sym (mergesort_Permutation l)))]; exact H.
+Qed.
+
+Lemma nb_occ_mergesort : forall x l, Oeset.nb_occ OA x (mergesort l) = Oeset.nb_occ OA x l.
+Proof. intros x l; apply sym_eq; apply Oeset.permut_nb_occ; apply mergesort_permut. Qed.
+
+(** sortedness: [le] is total and transitive *)
+Lemma le_total : forall x y, oleb x y = false -> oleb y x = true.
+Proof.
+intros x y; unfold oleb; rewrite (Oeset.compare_lt_gt OA y x); destruct (Oeset.compare OA x y); simpl; trivial; discriminate.
+Qed.
+
+Lemma HdRel_mmerge :
+  forall a l1 l2, HdRel (fun x y => Oeset.compare OA x y <> Gt) a l1 ->
+    HdRel (fun x y => Oeset.compare OA x y <> Gt) a l2 ->
+    HdRel (fun x y => Oeset.compare OA x y <> Gt) a (mmerge l1 l2).
+Proof.
+intros a [ | x l1] [ | y l2] H1 H2; try (rewrite ?mmerge_nil_l, ?mmerge_nil_r; assumption).
+rewrite mmerge_cons; destruct (oleb x y); constructor; [inversion H1 | inversion H2]; assumption.
+Qed.
+
+Lemma le_ngt : forall x y, oleb x y = true -> Oeset.compare OA x y <> Gt.
+Proof. intros x y; unfold oleb; destruct (Oeset.compare OA x y); try discriminate; intros _ K; discriminate K. Qed.
+
+Lemma mmerge_Sorted :
+  forall l1 l2, Sorted (fun x y => Oeset.compare OA x y <> Gt) l1 -> Sorted (fun x y => Oeset.compare OA x y <> Gt) l2 ->
+    Sorted (fun x y => Oeset.compare OA x y <> Gt) (mmerge l1 l2).
+Proof.
+intro l1; induction l1 as [ | x l1 IH1]; intros l2 S1 S2; [rewrite mmerge_nil_l; exact S2 | ].
+induction l2 as [ | y l2 IH2]; [rewrite mmerge_nil_r; exact S1 | ].
+rewrite mmerge_cons; case_eq (oleb x y); intro K.
+- inversion S1 as [ | ? ? S1' H1]; subst; constructor; [apply IH1; trivial | ].
+  apply HdRel_mmerge; [exact H1 | constructor; apply le_ngt; exact K].
+- inversion S2 as [ | ? ? S2' H2]; subst; constructor; [apply IH2; trivial | ].
+  apply HdRel_mmerge; [constructor; apply le_ngt; apply le_total; exact K | exact H2].
+Qed.
+
+Lemma msort_fuel_Sorted : forall n l, (length l <= n)%nat -> Sorted (fun x y => Oeset.compare OA x y <> Gt) (msort_fuel n l).
+Proof.
+intro n; induction n as [ | n IH]; intros l L.
+- destruct l; [constructor | simpl in L; inversion L].
+- destruct l as [ | x [ | y l]]; [constructor | constructor; [constructor | constructor] | ].
+  cbn [msort_fuel].
+  set (k := x :: y :: l) in *; set (h := Nat.div (length k) 2).
+  assert (D := Nat.div_mod (length k) 2 (ltac:(discriminate))).
+  assert (M := Nat.mod_upper_bound (length k) 2 (ltac:(discriminate))).
+  assert (L2 : (2 <= length k)%nat) by (unfold k; simpl; lia).
+  fold h in D.
+  apply mmerge_Sorted; apply IH.
+  + rewrite firstn_length; lia.
+  + rewrite skipn_length; lia.
+Qed.
+
+Theorem mergesort_sorted : forall l, is_sorted OA (mergesort l).
+Proof. intro l; rewrite is_sorted_Sorted; apply msort_fuel_Sorted; apply le_n. Qed.
+
+End MergeSort.

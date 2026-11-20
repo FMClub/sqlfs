@@ -140,10 +140,14 @@ def run_extracted(lib, dialect, n, spec_text, d):
         sys.stderr.write('compiled at %.1f s\n' % (time.time() - T0))
     # the extracted functions are not tail-recursive: a large stack (a finite one, which OCaml can guard)
     r = subprocess.run(['sh', '-c', 'ulimit -s 8000000 2>/dev/null; exec "$0"', str(exe)], capture_output=True,
-                       text=True)
+                       text=True, cwd=str(d))
     if r.returncode != 0:
         sys.exit(r.stdout + r.stderr)
     sys.stdout.write(r.stdout)
+    if os.environ.get('SQLFS_KEEP'):
+        # keep the program and its data files (to profile it)
+        import shutil
+        shutil.copytree(str(d), os.environ['SQLFS_KEEP'], dirs_exist_ok=True)
 
 
 if __name__ == '__main__':
