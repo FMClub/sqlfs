@@ -32,3 +32,12 @@ Print Assumptions SqlRelate.sql_full_agree.
 Print Assumptions SqlFullFacts.msort_stable_sort.
 Print Assumptions SqlGroupFacts.group_on_spec.
 Print Assumptions SqlFullFacts.frame_range_zero_offsets.
+Print Assumptions SqlFullFacts.tlp_join.
+Print Assumptions SqlFullFacts.norec_join.
+Print Assumptions SqlFullFacts.pqs_join.
+Print Assumptions SqlFullFacts.containment_and.
+Print Assumptions SqlFullFacts.containment_or.
+Print Assumptions SqlFullFacts.containment_distinct.
+Print Assumptions Oracles.max_filter_le.
+Print Assumptions Oracles.min_filter_ge.
+Print Assumptions Oracles.sum_filter_le.

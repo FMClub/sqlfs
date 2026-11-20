@@ -339,6 +339,127 @@ destruct (Bool.is_true (B T) (eval_scond ce (slice_t T relname t :: env) p));
   destruct (Bool.is_true (B T) (eval_scond ce (slice_t T relname t :: env) c)); apply refl_equal.
 Qed.
 
+(** ** The oracles of the testing tools over the evaluation (TODO 5.8)
+
+    TLP (ternary logic partitioning): the inner joins on [p] and on [NOT p], and the rows of the cross
+    product where [p] is neither true nor false (unknown), partition the cross product. NoREC: the number of
+    rows of the join on [p] is the number of combinations where [p] is true. Pinolo's containment relations: a
+    stronger condition ([p AND q]) gives a sub-multiset of the rows, a weaker one ([p OR q]) a super-multiset;
+    [DISTINCT] gives a sub-multiset. The joins are evaluated without failed rows ([inner_join_spec]). *)
+
+Lemma is_true3_negb : forall x, is_true3 T x = true -> is_true3 T (Bool.negb (B T) x) = false.
+Proof.
+intros x H; unfold is_true3 in *; apply Bool.true_is_true in H; rewrite H, Bool.negb_true.
+case_eq (Bool.is_true (B T) (Bool.false (B T))); intro K; [ | reflexivity].
+apply Bool.true_is_true in K; destruct (Bool.true_diff_false (B T)); rewrite K; reflexivity.
+Qed.
+
+Lemma partition3 :
+  forall (X : Type) (f g : X -> bool) (l : list X), (forall x, f x = true -> g x = false) ->
+    Permutation l (filter f l ++ filter g l ++ filter (fun x => negb (f x) && negb (g x)) l).
+Proof.
+intros X f g l H; induction l as [ | x l IH]; [constructor | ].
+simpl; case_eq (f x); intro F.
+- rewrite (H x F); simpl; constructor; exact IH.
+- case_eq (g x); intro G; simpl.
+  + apply Permutation_cons_app; exact IH.
+  + rewrite app_assoc; apply Permutation_cons_app; rewrite <- app_assoc; exact IH.
+Qed.
+
+Theorem tlp_join :
+  forall ce env f1 f2 p,
+    let l1 := eval_sfrom ce env f1 in
+    let l2 := eval_sfrom ce env f2 in
+    let tv t := eval_scond ce (slice_t T relname t :: env) p in
+    existsb (row_error O) (l1 ++ l2) = false ->
+    (forall t, In t (cross_product T l1 l2) ->
+               row_error O t = false /\ scond_raises ce (slice_t T relname t :: env) p = false /\
+               scond_raises ce (slice_t T relname t :: env) (C_Not p) = false) ->
+    Permutation (cross_product T l1 l2)
+      (eval_sfrom ce env (Fr_Join J_Inner false f1 f2 p) ++ eval_sfrom ce env (Fr_Join J_Inner false f1 f2 (C_Not p)) ++
+       filter (fun t => negb (is_true3 T (tv t)) && negb (is_true3 T (Bool.negb (B T) (tv t)))) (cross_product T l1 l2)).
+Proof.
+intros ce env f1 f2 p l1 l2 tv H1 H2.
+rewrite (inner_join_spec ce env f1 f2 p H1); [ | intros t Ht; destruct (H2 t Ht) as [Ha [Hb _]]; split; assumption].
+rewrite (inner_join_spec ce env f1 f2 (C_Not p) H1); [ | intros t Ht; destruct (H2 t Ht) as [Ha [_ Hc]]; split; assumption].
+apply (@partition3 _ (fun t => is_true3 T (tv t)) (fun t => is_true3 T (Bool.negb (B T) (tv t)))).
+intros t K; apply is_true3_negb; exact K.
+Qed.
+
+Theorem norec_join :
+  forall ce env f1 f2 p,
+    let l1 := eval_sfrom ce env f1 in
+    let l2 := eval_sfrom ce env f2 in
+    existsb (row_error O) (l1 ++ l2) = false ->
+    (forall t, In t (cross_product T l1 l2) ->
+               row_error O t = false /\ scond_raises ce (slice_t T relname t :: env) p = false) ->
+    List.length (eval_sfrom ce env (Fr_Join J_Inner false f1 f2 p)) =
+    fold_right plus 0 (map (fun t => if is_true3 T (eval_scond ce (slice_t T relname t :: env) p) then 1 else 0)
+                           (cross_product T l1 l2)).
+Proof.
+intros ce env f1 f2 p l1 l2 H1 H2; rewrite (inner_join_spec ce env f1 f2 p H1 H2); clear H1 H2.
+unfold l1, l2; generalize (cross_product T (eval_sfrom ce env f1) (eval_sfrom ce env f2)); intro l.
+induction l as [ | t l IH]; [reflexivity | ].
+simpl; destruct (is_true3 T (eval_scond ce (slice_t T relname t :: env) p)); simpl; rewrite IH; reflexivity.
+Qed.
+
+(** PQS (pivoted query synthesis): a combination of rows on which the condition is true (the pivot) is in the
+    result *)
+Theorem pqs_join :
+  forall ce env f1 f2 p t,
+    let l1 := eval_sfrom ce env f1 in
+    let l2 := eval_sfrom ce env f2 in
+    existsb (row_error O) (l1 ++ l2) = false ->
+    (forall t, In t (cross_product T l1 l2) ->
+               row_error O t = false /\ scond_raises ce (slice_t T relname t :: env) p = false) ->
+    In t (cross_product T l1 l2) -> is_true3 T (eval_scond ce (slice_t T relname t :: env) p) = true ->
+    In t (eval_sfrom ce env (Fr_Join J_Inner false f1 f2 p)).
+Proof.
+intros ce env f1 f2 p t l1 l2 H1 H2 I K; rewrite (inner_join_spec ce env f1 f2 p H1 H2).
+apply filter_In; split; assumption.
+Qed.
+
+(** a stronger condition: the rows of the join on [p AND q] are those of the join on [p] where [q] holds *)
+Theorem containment_and :
+  forall ce env f1 f2 p q,
+    let l1 := eval_sfrom ce env f1 in
+    let l2 := eval_sfrom ce env f2 in
+    existsb (row_error O) (l1 ++ l2) = false ->
+    (forall t, In t (cross_product T l1 l2) ->
+               row_error O t = false /\ scond_raises ce (slice_t T relname t :: env) p = false /\
+               scond_raises ce (slice_t T relname t :: env) (C_Conj And_F p q) = false) ->
+    eval_sfrom ce env (Fr_Join J_Inner false f1 f2 (C_Conj And_F p q)) =
+    filter (fun t => is_true3 T (eval_scond ce (slice_t T relname t :: env) q)) (eval_sfrom ce env (Fr_Join J_Inner false f1 f2 p)).
+Proof.
+intros ce env f1 f2 p q l1 l2 H1 H2; symmetry; apply inner_join_where; assumption.
+Qed.
+
+(** a weaker condition: the rows of the join on [p] are those of the join on [p OR q] where [p] holds *)
+Theorem containment_or :
+  forall ce env f1 f2 p q,
+    let l1 := eval_sfrom ce env f1 in
+    let l2 := eval_sfrom ce env f2 in
+    existsb (row_error O) (l1 ++ l2) = false ->
+    (forall t, In t (cross_product T l1 l2) ->
+               row_error O t = false /\ scond_raises ce (slice_t T relname t :: env) p = false /\
+               scond_raises ce (slice_t T relname t :: env) (C_Conj Or_F p q) = false) ->
+    eval_sfrom ce env (Fr_Join J_Inner false f1 f2 p) =
+    filter (fun t => is_true3 T (eval_scond ce (slice_t T relname t :: env) p)) (eval_sfrom ce env (Fr_Join J_Inner false f1 f2 (C_Conj Or_F p q))).
+Proof.
+intros ce env f1 f2 p q l1 l2 H1 H2.
+rewrite (inner_join_spec ce env f1 f2 p H1); [ | intros t Ht; destruct (H2 t Ht) as [Ha [Hb _]]; split; assumption].
+rewrite (inner_join_spec ce env f1 f2 (C_Conj Or_F p q) H1); [ | intros t Ht; destruct (H2 t Ht) as [Ha [_ Hc]]; split; assumption].
+rewrite filter_filter; apply filter_ext; intro t.
+replace (eval_scond ce (slice_t T relname t :: env) (C_Conj Or_F p q))
+  with (Bool.orb (B T) (eval_scond ce (slice_t T relname t :: env) p) (eval_scond ce (slice_t T relname t :: env) q))
+  by reflexivity.
+case_eq (is_true3 T (eval_scond ce (slice_t T relname t :: env) p)); intro K; [ | reflexivity].
+unfold is_true3 in *; apply Bool.true_is_true in K; rewrite K, Bool.orb_true_l.
+case_eq (Bool.is_true (B T) (Bool.true (B T))); intro E; [reflexivity | ].
+assert (E' := proj2 (Bool.true_is_true (B T) (Bool.true (B T))) eq_refl); rewrite E' in E; discriminate E.
+Qed.
+
+
 (** The rows of a left join which are not padded with NULLs are those of the
     inner join: a left join without unmatched row is an inner join. *)
 Lemma left_join_no_padding :
@@ -529,6 +650,20 @@ Qed.
 
 Theorem dedup_idem : forall l, dedup O (dedup O l) = dedup O l.
 Proof. intro l; unfold dedup; rewrite !dedup_on_rec; apply dedup_rec_idem. Qed.
+
+(** [DISTINCT] keeps a subsequence of the rows (the first of each) *)
+Lemma dedup_rec_incl :
+  forall (X : Type) (f : X -> tuple) seen l x, In x (dedup_rec O f seen l) -> In x l.
+Proof.
+intros X f seen l; revert seen; induction l as [ | y l IH]; intros seen x H; [contradiction H | ].
+simpl in H; destruct (tuple_mem O (f y) seen).
+- right; exact (IH _ _ H).
+- destruct H as [H | H]; [left; exact H | right; exact (IH _ _ H)].
+Qed.
+
+Theorem containment_distinct :
+  forall l x, In x (dedup O l) -> In x l.
+Proof. intros l x; unfold dedup; rewrite dedup_on_rec; apply dedup_rec_incl. Qed.
 
 (** The grouping sets of [ROLLUP (e1, ..., en)]: [n + 1] sets, from all the expressions to none; those of
     [CUBE (e1, ..., en)]: [2 ^ n] sets, all the sublists (TODO 6.4) *)
