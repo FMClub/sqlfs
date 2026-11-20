@@ -458,6 +458,72 @@ intros n gidx rk i; simpl.
 induction (seq 0 n) as [ | x l IH]; simpl; [reflexivity | rewrite IH; reflexivity].
 Qed.
 
+(** the positions of [seq 0 n] in an interval [a .. b] *)
+Lemma filter_interval :
+  forall a b n,
+    filter (fun j => PeanoNat.Nat.leb a j && PeanoNat.Nat.leb j b) (seq 0 n) =
+    seq a (PeanoNat.Nat.min (S b) n - a).
+Proof.
+intros a b n; induction n as [ | n IH]; [rewrite PeanoNat.Nat.min_0_r; reflexivity | ].
+rewrite seq_S, filter_app, IH, PeanoNat.Nat.add_0_l; cbn [filter].
+case_eq (PeanoNat.Nat.leb a n); intro Ha; [apply PeanoNat.Nat.leb_le in Ha | apply PeanoNat.Nat.leb_gt in Ha];
+  case_eq (PeanoNat.Nat.leb n b); intro Hb; try apply PeanoNat.Nat.leb_le in Hb;
+  try apply PeanoNat.Nat.leb_gt in Hb; cbn [andb].
+- replace (PeanoNat.Nat.min (S b) (S n) - a) with (S (PeanoNat.Nat.min (S b) n - a)) by lia.
+  rewrite seq_S; do 2 f_equal; lia.
+- rewrite app_nil_r; f_equal; lia.
+- rewrite app_nil_r; f_equal; lia.
+- rewrite app_nil_r; f_equal; lia.
+Qed.
+
+Lemma filter_from :
+  forall a n, filter (fun j => PeanoNat.Nat.leb a j) (seq 0 n) = seq a (n - a).
+Proof.
+intros a n; induction n as [ | n IH]; [reflexivity | ].
+rewrite seq_S, filter_app, IH, PeanoNat.Nat.add_0_l; cbn [filter].
+case_eq (PeanoNat.Nat.leb a n); intro Ha; [apply PeanoNat.Nat.leb_le in Ha | apply PeanoNat.Nat.leb_gt in Ha].
+- replace (S n - a) with (S (n - a)) by lia; rewrite seq_S; do 2 f_equal; lia.
+- rewrite app_nil_r; f_equal; lia.
+Qed.
+
+(** [ROWS BETWEEN k PRECEDING AND m FOLLOWING] is the interval of the rows [i - k .. i + m] of the partition *)
+Theorem frame_rows_bounded :
+  forall n gidx rk i k m,
+    frame_positions (Frame_Rows (Preceding k) (Following m)) n gidx rk i =
+    seq (i - k) (PeanoNat.Nat.min (S (i + m)) n - (i - k)).
+Proof.
+intros n gidx rk i k m; cbn [frame_positions after_start before_end]; rewrite <- filter_interval.
+apply filter_ext; intro j.
+case_eq (PeanoNat.Nat.leb i (j + k)); intro H1; [apply PeanoNat.Nat.leb_le in H1 | apply PeanoNat.Nat.leb_gt in H1];
+  case_eq (PeanoNat.Nat.leb (i - k) j); intro H2; try apply PeanoNat.Nat.leb_le in H2;
+  try apply PeanoNat.Nat.leb_gt in H2; try reflexivity; lia.
+Qed.
+
+(** [ROWS BETWEEN CURRENT ROW AND CURRENT ROW] is the current row *)
+Theorem frame_current_row :
+  forall n gidx rk i, (i < n)%nat -> frame_positions (Frame_Rows Current_Row Current_Row) n gidx rk i = i :: nil.
+Proof.
+intros n gidx rk i H; cbn [frame_positions after_start before_end]; rewrite filter_interval.
+replace (PeanoNat.Nat.min (S i) n - i) with 1 by lia; reflexivity.
+Qed.
+
+(** [ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING] is the rest of the partition *)
+Theorem frame_to_end :
+  forall n gidx rk i,
+    frame_positions (Frame_Rows Current_Row Unbounded_Following) n gidx rk i = seq i (n - i).
+Proof.
+intros n gidx rk i; cbn [frame_positions after_start before_end]; rewrite <- filter_from.
+apply filter_ext; intro j; apply andb_true_r.
+Qed.
+
+(** [EXCLUDE NO OTHERS] excludes nothing *)
+Theorem frame_exclude_no_others :
+  forall fr n gidx rk i, frame_positions (Frame_Excl fr Excl_No_Others) n gidx rk i = frame_positions fr n gidx rk i.
+Proof.
+intros fr n gidx rk i; simpl.
+induction (frame_positions fr n gidx rk i) as [ | x l IH]; simpl; [reflexivity | rewrite IH; reflexivity].
+Qed.
+
 (** The bound of the recursion does not matter once a fixpoint is reached (TODO 6.4): if the iteration of
     [WITH RECURSIVE] reaches an empty working table within [n] steps, any larger bound gives the same rows *)
 Fixpoint done_within (step : list tuple -> list tuple) (d : bool) (n : nat) (acc work : list tuple) : bool :=
