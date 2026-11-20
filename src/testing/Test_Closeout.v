@@ -87,3 +87,6 @@ Proof. check. Qed.
 (** a string with an exponent, read as a number ([ROUND ('123e-2')] is 1) *)
 Example my_exp_string : val MySQL (fn "round" [str "123e-2"]) = "1".
 Proof. check. Qed.
+(** leading inline flags of a regular expression ([(?i)]: MySQL [regular_expressions_func.result]) *)
+Example my_rx_inline : val MySQL (e_case (pred "regexp" [str "ABC"; str "(?i)^abc$"]) (int 1) (int 0)) = "1".
+Proof. check. Qed.

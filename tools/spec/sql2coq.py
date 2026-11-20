@@ -42,6 +42,18 @@ def tokenize(s):
         elif c == '-' and s.startswith('--', i) and (i + 2 >= n or s[i + 2] in ' \t'):
             while i < n and s[i] != '\n':
                 i += 1
+        elif s.startswith('/*!', i) and ENGINE == 'mysql':
+            # an executable comment of the MySQL family: /*! body */ is code, /*!NNNNN body */ is code from the
+            # server version NNNNN (MySQL 8.4 is 80400, MariaDB 11.4 is 110400); the body is put back in place
+            j = s.find('*/', i + 3)
+            if j < 0:
+                raise Skip('comment')
+            m = re.match(r'(\d{5,6})', s[i + 3:j])
+            body = s[i + 3 + (len(m.group(1)) if m else 0):j]
+            if m and int(m.group(1)) > SERVER_VERSION:
+                body = ''
+            s = s[:i] + ' ' + body + ' ' + s[j + 2:]
+            n = len(s)
         elif s.startswith('/*', i):
             j = s.find('*/', i + 2)
             if j < 0:
@@ -109,6 +121,8 @@ def tokenize(s):
 # ----------------------------------------------------------------------------------------
 
 NAMED_WINDOWS = {}
+# the version of the server, for the executable comments /*!NNNNN ... */ of the MySQL family
+SERVER_VERSION = 80400
 # the views of the script: name -> (query, columns); a view is a derived table where it is used
 VIEWS = {}
 
@@ -2852,6 +2866,8 @@ def main():
     import os
     global ENGINE
     ENGINE = {'PostgreSQL': 'postgresql', 'SQLite': 'sqlite'}.get(dialect, 'mysql')
+    global SERVER_VERSION
+    SERVER_VERSION = {'MariaDB': 110400, 'TiDB': 80011, 'OceanBaseMySQL': 50725, 'PolarDB': 80018}.get(dialect, 80400)
     stats = {'selects': 0, 'translated': 0, 'no_result': 0, 'skipped_files': 0, 'skip': {}}
     for path in args:
         out = []
