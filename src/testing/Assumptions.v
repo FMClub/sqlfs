@@ -16,3 +16,5 @@ Print Assumptions Oracles.norec.
 Print Assumptions SqlFullFacts.dedup_idem.
 Print Assumptions SqlFullFacts.cube_sets_length.
 Print Assumptions SqlFullFacts.rollup_sets_length.
+Print Assumptions SqlFullFacts.frame_running.
+Print Assumptions SqlFullFacts.frame_whole_partition.
