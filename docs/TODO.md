@@ -569,6 +569,11 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
 - **6.5 `FreshAttr.v`**: prove `fresh_attr_is_fresh` (injectivity of the decimal printing of naturals and pigeonhole), add it to `_CoqProject`, remove `Admitted`.
   **Status: DONE** (`fresh_attr_is_fresh` proved: injectivity of the decimal printing and the pigeonhole principle; the file is built; the two `Admitted` of `SqlAlgebra.v` that depended on it are proved too).
 - **6.6 Executable interpreter**: extraction of `eval_squery` and the dialect tables to OCaml with a driver that reads SQL text (via the frontend 7.1) and CSV tables and prints results; test it against `vm_compute` on the whole conformance corpus; measure performance (the Coq `vm_compute` is quadratic in places: `sort_on`, `group_on`, set operations on lists: replace by balanced structures with proved equivalence if needed).
+  **Status: PARTIAL.** `tools/extraction/build.sh DIALECT OUTDIR` extracts the semantics, the dialects, `SpecRunner.diagnose`
+  and the compiled conformance cases to OCaml (`ExtrOcamlNativeString`; `fix_weak.py` annotates the partial applications
+  OCaml cannot generalise), compiles them with `ocamlopt` and runs them. On the OceanBase corpus (66 files, 769 cases) the
+  extracted program reports the same failures as `vm_compute` (none) in 48 s, where the Coq run takes about an hour.
+  Open: the driver for SQL text and CSV tables (it needs the frontend of 7.1), and the balanced structures.
 - **6.7 Coq hygiene**: no `Admitted`, no `Axiom`; `Print Assumptions` for each theorem in CI; module structure so the core (`SqlFull.v`) does not import any dialect; each dialect file imports only `Dialects.v` and `ValueKit.v`.
   **Status: PARTIAL.** CI checks that no built file has `Admitted`, `admit` or `Axiom`, that the core (`src/data/sql/`) imports no dialect (`tools/check_hygiene.py`), and that the main results are closed under the global context (`src/testing/Assumptions.v`). Open: the dialect files import one another (the MySQL family imports `MySQL.v`, which imports `PostgreSQL.v` for shared helpers); moving those helpers into `ValueKit.v` is the remaining step.
 
