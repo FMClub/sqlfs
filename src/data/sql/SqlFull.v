@@ -1514,6 +1514,24 @@ Definition is_output_col (t : tuple) (e : sexpr) :=
   | _ => None
   end.
 
+(** The iteration of [WITH RECURSIVE]: [step] computes the rows of the recursive term from the working table;
+    the working table is replaced at each step, and [n] bounds the number of steps. When no fixpoint is
+    reached within [n] steps the result holds a failed row (MySQL, MariaDB, TiDB and OceanBase fail with
+    [cte_max_recursion_depth]; PostgreSQL and SQLite do not terminate, which is also a failure). *)
+Fixpoint rec_loop (step : list tuple -> list tuple) (distinct : bool) (sa : setA) (n : nat)
+         (acc work : list tuple) {struct n} : list tuple :=
+  match n with
+  | S n' =>
+    match work with
+    | nil => acc
+    | _ =>
+      let new := step work in
+      let new' := if distinct then eval_set_op Diff Set_Distinct new acc else new in
+      rec_loop step distinct sa n' (acc ++ new') new'
+    end
+  | O => match work with nil => acc | _ => acc ++ err_row (null_tuple sa) :: nil end
+  end.
+
 Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :=
   if is_hidden env e
   then null O
@@ -1749,23 +1767,7 @@ with eval_squery (ce : cte_env) (env : senv) (q : squery) {struct q} : list tupl
     let dedup (l : list tuple) := eval_set_op Union Set_Distinct l nil in
     let base := if is_distinct sq then dedup (eval_squery ce env q1) else eval_squery ce env q1 in
     (* the working table is replaced at each step; [rec_fuel] bounds the number of steps *)
-    let res :=
-        (fix loop (n : nat) (acc work : list tuple) {struct n} : list tuple :=
-           match n with
-           | S n' =>
-             match work with
-             | nil => acc
-             | _ =>
-               let new := eval_squery ((r, (sa, work)) :: ce) env q2 in
-               let new' := if is_distinct sq then eval_set_op Diff Set_Distinct new acc else new in
-               loop n' (acc ++ new') new'
-             end
-           | _ => 
-             (* the recursion has not reached a fixpoint within [rec_fuel] steps: MySQL, MariaDB, TiDB
-                and OceanBase fail ([cte_max_recursion_depth]); PostgreSQL and SQLite do not
-                terminate, which is also a failure of the evaluation *)
-             match work with nil => acc | _ => acc ++ err_row (null_tuple sa) :: nil end
-           end) rec_fuel base base in
+    let res := rec_loop (fun work => eval_squery ((r, (sa, work)) :: ce) env q2) (is_distinct sq) sa rec_fuel base base in
     eval_squery ((r, (sa, res)) :: ce) env q3
   end
 
