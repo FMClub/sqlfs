@@ -681,9 +681,14 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
 - **8.7 Further engines** (D1, decided in iteration 2): a DuckDB dialect, then CockroachDB.
 - **8.8 Old `TODO` comments** (iteration 2): `SqlExt.v` ignores the join type of a `Join_Item` (line 214);
   `SqlAlgebraExt.v` duplicates `sql_formula_to_alg` (line 133). Fix or document each.
+  **Status: DONE** (iteration 5): `SqlExt.v` has two join types, cross and inner, which are the same evaluation (a
+  cross join is an inner join on `TRUE`), so nothing is ignored; both comments now say what the code does.
 - **8.9 Failing conformance cases** (iteration 3): `docs/CONFORMANCE_SUMMARY.md` lists 215 failing cases for the
   PostgreSQL regression tests, 125 for TiDB, 118 for MySQL, 6 for MariaDB. Classify them again (model gap,
   translator gap, engine-specific output) and fix the model gaps, most frequent first.
 - **8.10 Storage order and names** (iteration 4, I11): the order in which a stored table is read depends on the
   names of its columns. Decide between the options of I11 and do it.
+  **Status: DONE** (iteration 5), by decision: option (a) of I11. The order of an unordered table is
+  implementation-defined in SQL, the harness compares such results as bags or with the allowed results of TODO
+  3.10, and `eval_rename` states its hypothesis on the order explicitly.
 

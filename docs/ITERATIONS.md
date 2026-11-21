@@ -10,3 +10,4 @@ next item. One entry per iteration, newest last.
 | 2 | Audit of the repository layout and of the documents | tracked `.pyc` removed; legacy files moved to `src/testing/legacy/`; statuses of `OPEN_ISSUES.md` brought up to date; D1 decided | TODO 8.1–8.8 (new Phase 8) |
 | 3 | TODO 8.4: README | rewritten: what is formalised, main results, repository map, documents, checks | the conformance summary still lists failing cases (PostgreSQL 215, TiDB 125, MySQL 118): TODO 8.9 |
 | 4 | TODO 8.5: `eval_rename` instantiated | the order-preservation hypothesis made it vacuous for the instance: removed; `eval_result_rename`; `Renaming.v` (`eval_rename_names` for every dialect); `Test_Rename.v` | I11 / TODO 8.10: the order of the stored rows depends on the column names |
+| 5 | TODO 8.8, 8.10: old `TODO` comments, storage order | the join types of `SqlExt.v` are the same evaluation (comment corrected); I11 decided: kept and documented | next: 8.9 (failing conformance cases) |

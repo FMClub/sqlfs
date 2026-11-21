@@ -130,7 +130,7 @@ with sql_item_to_alg i :=
         (sql_query_ext_to_alg sq)
   end
 with sql_join_item_to_alg i :=
-     let sql_formula_to_alg := (* TODO - avoid duplicit defitnition of sql_formula_to_alg *)
+     let sql_formula_to_alg := (* a local copy of the translation of the formulas, the same as in [sql_query_ext_to_alg] *)
         (fix sql_formula_to_alg f  :=
         match f with
         | Sql_Conj a f1 f2 => Sql_Conj a (sql_formula_to_alg f1) (sql_formula_to_alg f2)

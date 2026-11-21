@@ -267,7 +267,7 @@ compiled positional language of `SqlPositional.v` stays as the example of the fr
 Related, for TODO 6.1: `IN (subquery)` and grouped blocks inside formulas needed two fixes of `Sql.v` (A7, A8 in
 `docs/SQL_COVERAGE.md`); both are fixed and the relation covers them (`sql_full_agree3`).
 
-## I11 — The order in which a stored table is read depends on the names of its columns — OPEN
+## I11 — The order in which a stored table is read depends on the names of its columns — DECIDED (kept, documented)
 
 Found by iteration 4 (`docs/ITERATIONS.md`). A stored table is a bag (`instance : relname -> bagT`), and
 `eval_squery` reads its rows with `Febag.elements`, in the order of the tuples; the order of the tuples of the
@@ -283,5 +283,8 @@ result. Consequences:
 Options: (a) keep it, documented (the order of an unordered table is implementation-defined in SQL as well); (b)
 store tables as lists (insertion order, as the engines without a clustered key do), which changes
 `instance` in `SqlFull.v` and every statement which mentions `Febag.elements`; (c) prove the bag version of
-`eval_rename` for the queries whose result does not depend on the order of the stored rows. Tracked as TODO 8.10.
+`eval_rename` for the queries whose result does not depend on the order of the stored rows.
+
+Decision (iteration 5): option (a). Reopen if a result which depends on the stored order has to be compared with an
+engine row by row.
 
