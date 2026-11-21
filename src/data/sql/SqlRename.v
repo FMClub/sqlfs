@@ -1035,4 +1035,209 @@ Qed.
 Lemma first_error_eq : forall l, first_error O l = first_error O l.
 Proof. reflexivity. Qed.
 
+
+(** ** Expressions and conditions *)
+
+Notation ev' := (eval_sexpr ORN O basesort' instance').
+Notation ec' := (eval_scond ORN O basesort' instance').
+Notation er' := (scond_raises ORN O basesort' instance').
+Notation eq' := (eval_squery ORN O basesort' instance').
+Notation es' := (eval_sspec ORN O basesort' instance').
+Notation ef' := (eval_sfrom ORN O basesort' instance').
+Notation ev := (eval_sexpr ORN O basesort instance).
+Notation ec := (eval_scond ORN O basesort instance).
+Notation er := (scond_raises ORN O basesort instance).
+Notation eq_ := (eval_squery ORN O basesort instance).
+Notation es := (eval_sspec ORN O basesort instance).
+Notation ef := (eval_sfrom ORN O basesort instance).
+
+(** rows with the environments in which they have been built *)
+Definition RP (x' x : tuple T * SqlFull.senv T relname) := RT (fst x') (fst x) /\ REnv (snd x') (snd x).
+
+Definition Ee (e : SqlFull.sexpr T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env -> ev' ce' env' (re e) = ev ce env e.
+Definition Ec (c : SqlFull.scond T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env ->
+  ec' ce' env' (rc c) = ec ce env c /\ er' ce' env' (rc c) = er ce env c.
+Definition Eq (q : SqlFull.squery T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env ->
+  RL (eq' ce' env' (rq q)) (eq_ ce env q).
+Definition Es (sp : SqlFull.sspec T relname) := forall ce' ce env' env ex, RCE ce' ce -> REnv env' env ->
+  Forall2 RP (es' ce' env' (rsp sp) (map re ex)) (es ce env sp ex).
+Definition Ef (f : SqlFull.sfrom T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env ->
+  RL (ef' ce' env' (rf f)) (ef ce env f).
+
+Lemma REnv_row : forall sa' sa t' t env' env, sa' =S= rs sa -> RT t' t -> REnv env' env ->
+  REnv ((sa', t' :: nil, nil) :: env') ((sa, t :: nil, nil) :: env).
+Proof.
+intros sa' sa t' t env' env Hs Ht H; constructor; [ | exact H].
+split; [exact Hs | split; [constructor; [exact Ht | constructor] | reflexivity]].
+Qed.
+
+Ltac unf :=
+  cbn [r_e r_c r_q r_s r_f eval_sexpr eval_scond scond_raises eval_squery eval_sspec eval_sfrom] in *;
+  fold ev' ec' er' eq' es' ef' ev ec er eq_ es ef in *; fold r_e r_c r_q r_s r_f in *.
+
+Ltac open_e := unfold Ee, Ec, Eq, Es, Ef, LE, LO; cbv beta.
+
+Ltac prep :=
+  repeat match goal with
+         | H : (forall ce' ce env' env, _ -> _ -> _ /\ _) |- _ =>
+           let H1 := fresh "IHc" in let H2 := fresh "IHr" in
+           assert (H1 := fun ce' ce env' env a b => proj1 (H ce' ce env' env a b));
+           assert (H2 := fun ce' ce env' env a b => proj2 (H ce' ce env' env a b)); clear H
+         end.
+
+Ltac renv := first [ assumption | apply REnv_t; [assumption | renv] | apply REnv_row; [assumption | assumption | renv] ].
+
+Ltac leaf :=
+  match goal with
+  | H : forall ce' ce env' env, _ -> _ -> ?f ce' env' (?r ?x) = ?g ce env ?x |- ?f _ _ (?r ?x) = ?g _ _ ?x => apply H; [assumption | renv]
+  | H : forall y, In y ?l -> forall ce' ce env' env, _ -> _ -> ?f ce' env' (?r y) = ?g ce env y, Hy : In ?x ?l
+    |- ?f _ _ (?r ?x) = ?g _ _ ?x => apply (H x Hy); [assumption | renv]
+  | H : forall e d n, In (O_By e d n) ?l -> forall ce' ce env' env, _ -> _ -> ?f ce' env' (?r e) = ?g ce env e,
+    Hy : In (O_By ?x ?d ?n) ?l |- ?f _ _ (?r ?x) = ?g _ _ ?x => apply (H x d n Hy); [assumption | renv]
+  | |- row_error O _ = row_error O _ => apply row_error_RT; assumption
+  | |- lookup _ (rho ?a) = lookup _ ?a => apply lookup_R; renv
+  | |- dot T _ (rho ?a) = dot T _ ?a => apply RT_dot_all; assumption
+  end.
+
+Ltac rl :=
+  first [ eassumption
+        | apply F2_filter; [rl | intros ? ? ?]
+        | apply F2_sort_on; [rl | intros ? ? ?] ].
+
+Ltac rcong :=
+  repeat first
+   [ reflexivity
+   | leaf
+   | match goal with |- existsb _ _ = existsb _ _ => apply (F2_existsb _ _ RT); [rl | intros ? ? ?] end
+   | match goal with |- map _ (map r_e ?l) = map _ ?l => rewrite map_map; apply map_ext_in; intros ? ? end
+   | match goal with |- map _ (map _ ?l) = map _ ?l => rewrite map_map; apply map_ext_in; intros [? ? ?] ? end
+   | match goal with |- map _ _ = map _ _ => apply (F2_eq_map _ _ _ RT); [rl | intros ? ? ?] end
+   | match goal with |- flat_map _ _ = flat_map _ _ => rewrite !flat_map_concat_map; f_equal end
+   | match goal with |- ?L = ?R =>
+       lazymatch L with context [match ?a with _ => _ end] =>
+         lazymatch R with context [match ?b with _ => _ end] =>
+           first [ constr_eq a b; destruct a
+                 | let E := fresh "E" in assert (E : a = b) by rcong; rewrite E; destruct b ] end end end
+   | f_equal ].
+
+Ltac hid X :=
+  match goal with He : REnv ?env' ?env |- _ =>
+    let Hh := fresh "Hh" in
+    assert (Hh := is_hidden_R env' env X He); unf; rewrite Hh; destruct (is_hidden env X); [reflexivity | ]; clear Hh
+  end.
+
+Lemma e_const : forall v, Ee (E_Const T relname v).
+Proof. open_e; intros v ce' ce env' env Hc He; hid (E_Const T relname v); reflexivity. Qed.
+
+Lemma e_col : forall a, Ee (E_Col T relname a).
+Proof. open_e; intros a ce' ce env' env Hc He; hid (E_Col T relname a); rcong. Qed.
+
+Lemma e_fun : forall f l, LE T relname Ee l -> Ee (E_Fun f l).
+Proof. open_e; intros f l Hl ce' ce env' env Hc He; hid (E_Fun f l); rcong. Qed.
+
+Lemma e_agg : forall ag sq e c, Ee e -> Ec c -> Ee (E_Agg ag sq e c).
+Proof.
+open_e; intros ag sq e c IHe IH ce' ce env' env Hc He; prep; hid (E_Agg ag sq e c).
+rewrite (cols_e e ce' ce (RCE_Rsort _ _ Hc)), (cols_c c ce' ce (RCE_Rsort _ _ Hc)), <- map_app.
+generalize (agg_env_R (sc_e ce e ++ scond_cols ORN basesort ce c) env' env He); intro K.
+destruct K as [ | [[sa' g'] h'] [[sa g] h] X Y [S1 [S2 S3]] K]; [reflexivity | ]; simpl in S1, S2.
+rcong.
+Qed.
+
+Lemma spec_re : forall lo : list (sorder T relname),
+  map (@sorder_spec T relname) (map (fun o => match o with O_By e d n => O_By (re e) d n end) lo) = map (@sorder_spec T relname) lo.
+Proof. intro lo; rewrite map_map; apply map_ext; intros [e d n]; reflexivity. Qed.
+
+Lemma e_aggx : forall ag sq e sep lo c, Ee e -> (forall s, sep = Some s -> Ee s) -> LO T relname Ee lo -> Ec c ->
+  Ee (E_AggX ag sq e sep lo c).
+Proof.
+open_e; intros ag sq e sep lo c IHe IHs IHo IH ce' ce env' env Hc He; prep; hid (E_AggX ag sq e sep lo c).
+assert (R0 := RCE_Rsort _ _ Hc).
+match goal with |- context [agg_env ?cols' env'] =>
+  replace cols' with (map rho (sc_e ce e ++ scond_cols ORN basesort ce c ++
+                (match sep with Some s => sc_e ce s | None => nil end) ++
+                flat_map (fun o => match o with O_By e _ _ => sc_e ce e end) lo)) end.
+2:{ rewrite !map_app, (cols_e e ce' ce R0), (cols_c c ce' ce R0), (Cflat_o lo ce' ce (fun x d n _ => cols_e x) R0).
+    destruct sep as [s | ]; [rewrite (cols_e s ce' ce R0) | ]; reflexivity. }
+match goal with |- context [agg_env (map rho ?cols) env'] => generalize (agg_env_R cols env' env He); intro K end.
+destruct K as [ | [[sa' g'] h'] [[sa g] h] X Y [S1 [S2 S3]] K]; [reflexivity | ]; simpl in S1, S2.
+destruct sep as [s | ]; [specialize (IHs s eq_refl) | clear IHs].
+all: rewrite ?spec_re; rcong.
+
+Qed.
+
+Lemma e_case : forall c e1 e2, Ec c -> Ee e1 -> Ee e2 -> Ee (E_Case c e1 e2).
+Proof. open_e; intros c e1 e2 IH IH1 IH2 ce' ce env' env Hc He; prep; hid (E_Case c e1 e2); rcong. Qed.
+
+Lemma e_cond : forall c, Ec c -> Ee (E_Cond c).
+Proof. open_e; intros c IH ce' ce env' env Hc He; prep; hid (E_Cond c); rcong. Qed.
+
+Lemma e_sub : forall q, Eq q -> Ee (E_Sub q).
+Proof.
+open_e; intros q IH ce' ce env' env Hc He; hid (E_Sub q).
+generalize (IH ce' ce env' env Hc He); intro K.
+rewrite (F2_existsb _ _ _ _ _ _ _ K row_error_RT); destruct (existsb (row_error O) (eq_ ce env q)); [reflexivity | ].
+destruct K as [ | t' t l' l Ht K]; [reflexivity | ].
+rewrite (elements_labels_RT _ _ Ht).
+assert (V : match map rho ({{{labels T t}}}) with a :: nil => dot T t' a | _ => null O end =
+            match {{{labels T t}}} with a :: nil => dot T t a | _ => null O end).
+{ destruct ({{{labels T t}}}) as [ | a [ | b k]]; simpl; trivial; apply RT_dot_all; exact Ht. }
+destruct K; rewrite V; reflexivity.
+Qed.
+
+Lemma e_grouping : forall x, Ee x -> Ee (E_Grouping x).
+Proof.
+open_e; intros x _ ce' ce env' env Hc He; hid (E_Grouping x).
+f_equal; apply grouping_R; exact He.
+Qed.
+
+Lemma e_conj : forall a c1 c2, Ec c1 -> Ec c2 -> Ec (C_Conj a c1 c2).
+Proof. open_e; intros a c1 c2 IH1 IH2 ce' ce env' env Hc He; prep; unf; split; rcong. Qed.
+
+Lemma e_not : forall c, Ec c -> Ec (C_Not c).
+Proof. open_e; intros c IH ce' ce env' env Hc He; prep; unf; split; rcong. Qed.
+
+Lemma e_true : Ec (C_True T relname).
+Proof. open_e; intros; split; reflexivity. Qed.
+
+Lemma aff_re : forall l, map (sexpr_affinity O) (map re l) = map (sexpr_affinity O) l.
+Proof. intro l; rewrite map_map; apply map_ext; intros [ | a | | | | | | | ]; simpl; trivial. Qed.
+
+Lemma e_pred : forall p l, LE T relname Ee l -> Ec (C_Pred p l).
+Proof.
+open_e; intros p l IH ce' ce env' env Hc He; unf; rewrite aff_re.
+assert (M : map (ev' ce' env') (map re l) = map (ev ce env) l) by rcong.
+rewrite M; split; reflexivity.
+Qed.
+
+Lemma e_expr : forall e, Ee e -> Ec (C_Expr e).
+Proof. open_e; intros e IH ce' ce env' env Hc He; unf; rewrite (IH ce' ce env' env Hc He); split; reflexivity. Qed.
+
+Lemma dots_R : forall t' t la, RT t' t -> map (dot T t') (map rho la) = map (dot T t) la.
+Proof. intros t' t la H; rewrite map_map; apply map_ext; intro a; apply RT_dot_all; exact H. Qed.
+
+Lemma e_quant : forall qtf p l q la, LE T relname Ee l -> Eq q -> Ec (C_Quant qtf p l q la).
+Proof.
+open_e; intros qtf p l q la IH IHq ce' ce env' env Hc He; unf; cbv zeta.
+assert (M : map (ev' ce' env') (map re l) = map (ev ce env) l) by rcong.
+assert (K := IHq ce' ce env' env Hc He); rewrite M; split.
+- apply (F2_quant _ _ RT); [exact K | intros x y Hxy; rewrite (dots_R _ _ _ Hxy); reflexivity].
+- rewrite (F2_existsb _ _ _ _ _ _ _ K row_error_RT); f_equal.
+  apply (F2_existsb _ _ RT); [exact K | intros x y Hxy; rewrite (dots_R _ _ _ Hxy); reflexivity].
+Qed.
+
+Lemma e_in : forall l q la, LE T relname Ee l -> Eq q -> Ec (C_In l q la).
+Proof.
+open_e; intros l q la IH IHq ce' ce env' env Hc He; unf; cbv zeta.
+assert (M : map (ev' ce' env') (map re l) = map (ev ce env) l) by rcong.
+assert (K := IHq ce' ce env' env Hc He); rewrite M; split.
+- apply (F2_quant _ _ RT); [exact K | intros x y Hxy; rewrite (dots_R _ _ _ Hxy); reflexivity].
+- rewrite (F2_existsb _ _ _ _ _ _ _ K row_error_RT); reflexivity.
+Qed.
+
+Lemma e_exists : forall q, Eq q -> Ec (C_Exists q).
+Proof.
+open_e; intros q IHq ce' ce env' env Hc He; unf.
+assert (K := IHq ce' ce env' env Hc He); split; [destruct K; reflexivity | apply (F2_existsb _ _ RT); [exact K | apply row_error_RT]].
+Qed.
 End Sec.
