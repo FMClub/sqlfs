@@ -17,6 +17,8 @@ claim below is checked by computation in `src/testing/Test_Audit.v` and
 | A4 | `Sql.v` + `make_groups` | an aggregate query without `GROUP BY` over an empty input returns no row; SQL returns one | open in `Sql.v`, correct in `SqlFull.v` |
 | A5 | `Formula.v`, `Sql_In` | `(a, b) [NOT] IN (q)` was UNKNOWN whenever any component is NULL; SQL compares component-wise, so a definite mismatch gives FALSE | fixed (`in_match`) |
 | A6 | `Sql.v`, FROM list | items sharing an attribute name are merged silently (`FROM w, w` yields each row twice) | by design (named tuples); documented |
+| A7 | `Formula.v`, `in_match` | `(a, b) IN (q)` compares the components by the names of the columns of `q`, not by position: `SELECT ... WHERE (x) IN (SELECT y ...)` is FALSE or UNKNOWN whenever the names differ | documented; `SqlRelateSelect.v` relates the two semantics on the queries without `IN (subquery)` |
+| A8 | `Interp.v`, `find_eval_env` | an aggregate in a subquery is given to the outermost enclosing block whose columns cover its argument; SQL gives it to the innermost block which binds one of its columns (`SqlFull.v`, `agg_env`) | documented; `to_full3` relates grouped blocks outside the formulas only |
 
 A4 is not fixed in `Sql.v` because the equivalence proof with the algebra
 (`SqlAlgebra.v`) depends on the current definition of `make_groups`; see
