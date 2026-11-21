@@ -2329,6 +2329,8 @@ def looks_like_statement(l):
 
 # the AUTO_INCREMENT columns (their positions) of the tables
 AUTO_INC = {}
+# the NOT NULL columns (their positions) of the tables
+NOT_NULL = {}
 
 
 def parse_create(toks):
@@ -2346,6 +2348,9 @@ def parse_create(toks):
         raise Skip('qualified')
     if not p.eat_op('('):
         raise Skip('create like/as')
+    # the options of an earlier table of the same name (of another script) are forgotten
+    AUTO_INC.pop(name.lower(), None)
+    NOT_NULL.pop(name.lower(), None)
     cols = []
     limits = []
     while True:
@@ -2425,6 +2430,9 @@ def parse_create(toks):
                 elif t[0] in ('id', 'kw') and t[1].lower() == 'unsigned' and ENGINE == 'mysql' and \
                         ty in ('float', 'double', 'real', 'decimal', 'numeric'):
                     pass  # UNSIGNED on a float or a decimal only rejects the negative values (an error: not replayed)
+                elif t[0] in ('id', 'kw') and t[1].lower() == 'not' and p.peek(1)[0] in ('id', 'kw') and \
+                        p.peek(1)[1].lower() == 'null':
+                    NOT_NULL.setdefault(name.lower(), set()).add(len(cols))
                 elif t[0] in ('id', 'kw') and t[1].lower() == 'auto_increment' and ENGINE == 'mysql' and kind == 'Z':
                     # the rows which give the column a value are those of the INSERT (parse_insert); the others,
                     # whose value the engine generates, make the table unreliable
@@ -2512,7 +2520,9 @@ def conv_value(lit, kind, limit=None):
 def parse_insert(toks, tables):
     p = P(toks)
     p.need_kw('insert')
+    ignore = False
     if p.kw('ignore'):
+        ignore = True
         p.i += 1
     p.eat_kw('into')
     name = p.ident()
@@ -2564,6 +2574,17 @@ def parse_insert(toks, tables):
                 if row[i] is None:
                     if i in AUTO_INC.get(name.lower(), ()):
                         raise Skip('auto_increment value')
+                    if i in NOT_NULL.get(name.lower(), ()):
+                        # a NOT NULL column without DEFAULT (a table with a DEFAULT is not read) which the INSERT
+                        # does not give: an error in the strict mode; with IGNORE, the implicit default of the
+                        # type ('' or 0) and a warning (MySQL manual, "Data Type Default Values")
+                        if not ignore or ENGINE != 'mysql':
+                            raise Skip('not null column without value')
+                        lim = t.limits[i] if i < len(t.limits) else None
+                        if isinstance(lim, tuple) and lim[0] == 'tmp':
+                            raise Skip('implicit default of a temporal column')
+                        row[i] = conv_value(('str', '') if t.cols[i][1] == 'S' else ('num', '0'), t.cols[i][1], lim)
+                        continue
                     row[i] = {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[t.cols[i][1]]
         out.append(row)
     # an AUTO_INCREMENT column whose value is NULL or 0 gets the next value of the engine

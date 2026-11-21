@@ -752,5 +752,10 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   before the year 0, a round trip over 2000 days.
 - **8.14 `INSERT IGNORE` of a NULL into a `NOT NULL` string column** (iteration 6): the OceanBase suite expects the
   implicit default `''`; the replay gives NULL (`insert_ignore:117`).
+  **Status: DONE** (iteration 8). The translator records the `NOT NULL` columns: a column which an `INSERT IGNORE`
+  does not give takes the implicit default of its type (`''`, 0); without `IGNORE` the statement is an error of
+  the strict mode and the table is not read. Found on the way, and fixed: the `AUTO_INCREMENT` columns were
+  recorded by table name and never forgotten, so that a later table of the same name, in another script, was
+  skipped: 19 more cases are translated (775), all pass.
 - **8.15 Speed of the text of a long decimal** (iteration 6): `1.234 ^ 5678` (519 digits) takes 70 seconds to
   check, most of it in the conversion to text.
