@@ -156,3 +156,21 @@ Proof. check. Qed.
 
 Example ora_bad_format : text OceanBaseOracle (fn "to_date" [str "abcd-03-05"; str "YYYY-MM-DD"]) = "ERROR".
 Proof. check. Qed.
+
+(** Dates before the common era (PostgreSQL regression test [date]; TODO 8.13). The year [Y BC] is the year
+    [1 - Y] of the proleptic calendar; the conversions round the divisions down, so that the days before
+    0000-03-01 are right: the Julian day 0 is 4714-11-24 BC, and the day before 0001-01-01 BC is 0002-12-31 BC. *)
+Example julian_day_zero : (Temporal.days_from_civil (-4713) 11 24 + 2440588 = 0)%Z.
+Proof. vm_compute; reflexivity. Qed.
+Example day_before_year_zero :
+  Temporal.civil_from_days (Temporal.days_from_civil 0 1 1 - 1) = ((-1)%Z, 12%Z, 31%Z).
+Proof. vm_compute; reflexivity. Qed.
+Example calendar_round_trip :
+  forallb (fun n => let z := (Z.of_nat n * 97 - 900000)%Z in
+                    Z.eqb (let '(y, m, d) := Temporal.civil_from_days z in Temporal.days_from_civil y m d) z)
+          (seq 0 2000) = true.
+Proof. vm_compute; reflexivity. Qed.
+Example parse_bc : option_map Temporal.date_text (Temporal.parse_date "0002-12-31 BC") = Some "0002-12-31 BC".
+Proof. vm_compute; reflexivity. Qed.
+Example parse_ad : option_map Temporal.date_text (Temporal.parse_date "0001-01-01 AD") = Some "0001-01-01".
+Proof. vm_compute; reflexivity. Qed.

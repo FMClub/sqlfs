@@ -1584,12 +1584,17 @@ Definition pg_extract (field : string) (v : value) : value :=
                        | _ => (ts_days n, ts_usec n) end in
     let '(y, m, d) := civil_from_days days in
     match f with
-    | "year" => num y | "month" => num m | "day" => num d
+    (* there is no year 0: the years before the common era are negative ([extract_date] of [date.c]) *)
+    | "year" => num (if Z.ltb 0 y then y else y - 1) | "month" => num m | "day" => num d
     | "quarter" => num ((m - 1) / 3 + 1)
-    | "decade" => num (Z.div y 10) | "century" => num (if Z.leb y 0 then (y - 100) / 100 else (y + 99) / 100)
-    | "millennium" => num (if Z.leb y 0 then (y - 1000) / 1000 else (y + 999) / 1000)
+    | "decade" => num (if Z.leb 0 y then y / 10 else - ((8 - (y - 1)) / 10))
+    | "century" => num (if Z.ltb 0 y then (y + 99) / 100 else - ((99 - (y - 1)) / 100))
+    | "millennium" => num (if Z.ltb 0 y then (y + 999) / 1000 else - ((999 - (y - 1)) / 1000))
     | "dow" => num (day_of_week days) | "isodow" => num (iso_weekday days) | "doy" => num (day_of_year days)
-    | "week" => num (snd (iso_week_year days)) | "isoyear" => num (fst (iso_week_year days))
+    | "week" => num (snd (iso_week_year days))
+    | "isoyear" => let iy := fst (iso_week_year days) in num (if Z.ltb 0 iy then iy else iy - 1)
+    (* the Julian day: the days since 1970-01-01 are the day 2440588 *)
+    | "julian" => match k with 0%nat => num (days + 2440588) | _ => Value_Err "unit not supported" end
     | "hour" => num (us / 3600000000) | "minute" => num ((us / 60000000) mod 60)
     | "second" => micro (us mod 60000000)
     | "milliseconds" => VDec (Qcdiv (Qc_of_Z (us mod 60000000)) (Qc_of_Z 1000)) 3 3

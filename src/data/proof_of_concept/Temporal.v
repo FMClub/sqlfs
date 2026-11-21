@@ -20,7 +20,8 @@ Open Scope Z_scope.
     [days_from_civil] and [civil_from_days]. *)
 Definition days_from_civil (y m d : Z) : Z :=
   let y := if m <=? 2 then y - 1 else y in
-  let era := (if y >=? 0 then y else y - 399) / 400 in
+  (* the division of Coq rounds down, as the algorithm needs (in C it truncates and is corrected by hand) *)
+  let era := y / 400 in
   let yoe := y - era * 400 in
   let mp := (m + 9) mod 12 in
   let doy := (153 * mp + 2) / 5 + d - 1 in
@@ -29,7 +30,7 @@ Definition days_from_civil (y m d : Z) : Z :=
 
 Definition civil_from_days (z : Z) : Z * Z * Z :=
   let z := z + 719468 in
-  let era := (if z >=? 0 then z else z - 146096) / 146097 in
+  let era := z / 146097 in
   let doe := z - era * 146097 in
   let yoe := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365 in
   let y := yoe + era * 400 in
@@ -82,9 +83,11 @@ Definition pad (w : nat) (z : Z) : string :=
   let s := string_of_Z (Z.abs z) in
   ((if Z.ltb z 0 then "-" else "") ++ repeat_zero (w - String.length s) ++ s)%string.
 
+(** a year before the common era is printed as PostgreSQL does: the year 0 of the calendar is [0001 ... BC] *)
 Definition date_text (days : Z) : string :=
   let '(y, m, d) := civil_from_days days in
-  (pad 4 y ++ "-" ++ pad 2 m ++ "-" ++ pad 2 d)%string.
+  if Z.leb y 0 then (pad 4 (1 - y) ++ "-" ++ pad 2 m ++ "-" ++ pad 2 d ++ " BC")%string
+  else (pad 4 y ++ "-" ++ pad 2 m ++ "-" ++ pad 2 d)%string.
 
 (** a time of day with [fsp] fractional digits (0 to 6), truncated *)
 Definition time_text (usec : Z) (fsp : nat) : string :=
@@ -142,10 +145,19 @@ Fixpoint split_at (sep : ascii) (s : string) : list string :=
                        end
   end.
 
+(** [YYYY-MM-DD], with an optional era [AD] or [BC] after it (PostgreSQL): the year [Y BC] is the year [1 - Y] of
+    the proleptic calendar *)
 Definition parse_date (s : string) : option Z :=
+  let n := String.length s in
+  let suffix := if Nat.leb 3 n then substring (n - 3) 3 s else EmptyString in
+  let '(bc, s) := if String.eqb suffix " BC" then (true, substring 0 (n - 3) s)
+                  else if String.eqb suffix " AD" then (false, substring 0 (n - 3) s)
+                  else (false, s) in
   match split_at "-" s with
   | [y; m; d] => match digits_of y, digits_of m, digits_of d with
-                 | Some y, Some m, Some d => if valid_date y m d then Some (days_from_civil y m d) else None
+                 | Some y, Some m, Some d =>
+                   let y := if bc then 1 - y else y in
+                   if valid_date y m d && (negb bc || Z.ltb y 1) then Some (days_from_civil y m d) else None
                  | _, _, _ => None
                  end
   | _ => None

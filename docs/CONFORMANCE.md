@@ -92,6 +92,10 @@ test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 
+Run 9 (iteration 7, TODO 8.13): the dates before the common era (`BC`, `EXTRACT` of negative years, the Julian
+day): **121** fail (12 fewer than run 8; the files `date` and `timestamp` were run again, the others are those of
+run 8). The calendar conversions were off by one day before 0000-03-01: fixed.
+
 Run 8 (iteration 6 of `docs/ITERATIONS.md`, TODO 8.9; `strings` and `jsonb` are now read): **514** queries
 translated, **133** fail (238 of the same 514 failed before the fixes of this run). Fixed, each from the source of
 PostgreSQL: the widths of `format` (`text_format`, 17 cases); `json_strip_nulls` of a literal and its second argument
