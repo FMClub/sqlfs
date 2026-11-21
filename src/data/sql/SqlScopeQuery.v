@@ -11,7 +11,8 @@
     (the environments of the expressions), [Rq A B] when they are also allowed to be [env1] and [env2]
     themselves (the environments of the queries). *)
 Require Import List Bool String NArith FunctionalExtensionality.
-Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData SqlFull SqlInduction.
+Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData SqlFull SqlInduction
+        SqlCongruence.
 
 Section Atts.
 
@@ -167,4 +168,268 @@ apply (ind_q T relname
   try solve [solve_incl].
 Qed.
 
+Theorem cols_atts_e : forall e ce, incl (sc_e ce e) (atts_e T relname e).
+Proof.
+apply (ind_e T relname
+  (fun e => forall ce, incl (sc_e ce e) (atts_e T relname e))
+  (fun c => forall ce, incl (sc_c ce c) (atts_c T relname c))
+  (fun q => forall ce, incl (sc_q ce q) (atts_q T relname q))
+  (fun sp => forall ce, incl (sc_s ce sp) (atts_s T relname sp))
+  (fun f => forall ce, incl (sc_f ce f) (atts_f T relname f))); unfold LE, LO; intros;
+  cbn [sexpr_cols scond_cols squery_cols sspec_cols sfrom_cols atts_e atts_c atts_q atts_s atts_f];
+  fold (sc_e ce) (sc_c ce) (sc_q ce) (sc_s ce) (sc_f ce)
+       (atts_e T relname) (atts_c T relname) (atts_q T relname) (atts_s T relname) (atts_f T relname);
+  try solve [solve_incl].
+Qed.
+
+Theorem cols_atts_c : forall c ce, incl (sc_c ce c) (atts_c T relname c).
+Proof.
+apply (ind_c T relname
+  (fun e => forall ce, incl (sc_e ce e) (atts_e T relname e))
+  (fun c => forall ce, incl (sc_c ce c) (atts_c T relname c))
+  (fun q => forall ce, incl (sc_q ce q) (atts_q T relname q))
+  (fun sp => forall ce, incl (sc_s ce sp) (atts_s T relname sp))
+  (fun f => forall ce, incl (sc_f ce f) (atts_f T relname f))); unfold LE, LO; intros;
+  cbn [sexpr_cols scond_cols squery_cols sspec_cols sfrom_cols atts_e atts_c atts_q atts_s atts_f];
+  fold (sc_e ce) (sc_c ce) (sc_q ce) (sc_s ce) (sc_f ce)
+       (atts_e T relname) (atts_c T relname) (atts_q T relname) (atts_s T relname) (atts_f T relname);
+  try solve [solve_incl].
+Qed.
+
 End Cols.
+
+Section Scope.
+
+Hypothesis T : Tuple.Rcd.
+Hypothesis relname : Type.
+Hypothesis ORN : Oset.Rcd relname.
+Hypothesis O : dialect T.
+Hypothesis basesort : relname -> Fset.set (Tuple.A T).
+Hypothesis instance : relname -> Febag.bag (Fecol.CBag (Tuple.CTuple T)).
+
+Notation senv := (senv T relname).
+Notation mem a s := (Fset.mem (Tuple.A T) a s).
+
+Variables env1 env2 : senv.
+Variable U : list (Tuple.attribute T).
+
+Definition unbound (env : senv) (a : Tuple.attribute T) := forall s, In s env -> mem a (fst (fst s)) = false.
+
+Hypothesis F1 : forall a, In a U -> unbound env1 a.
+Hypothesis F2 : forall a, In a U -> unbound env2 a.
+
+Inductive R : senv -> senv -> Prop :=
+  | R_base : forall s, R (s :: env1) (s :: env2)
+  | R_cons : forall s A B, R A B -> R (s :: A) (s :: B).
+
+Definition Rq (A B : senv) := R A B \/ (A = env1 /\ B = env2).
+
+Lemma Rq_cons : forall s A B, Rq A B -> R (s :: A) (s :: B).
+Proof. intros s A B [H | [-> ->]]; [apply R_cons; exact H | apply R_base]. Qed.
+
+Lemma R_Rq : forall A B, R A B -> Rq A B.
+Proof. intros A B H; left; exact H. Qed.
+
+Lemma lookup_unbound : forall env a, unbound env a -> lookup env a = null_of T a.
+Proof.
+intros env a; induction env as [ | [[sa g] h] env IH]; intro H; [reflexivity | ]; simpl.
+assert (K : mem a sa = false) by exact (H _ (or_introl eq_refl)); rewrite K.
+apply IH; intros s Hs; apply H; right; exact Hs.
+Qed.
+
+Lemma lookup_R : forall A B a, R A B -> In a U -> lookup A a = lookup B a.
+Proof.
+intros A B a H Ha; induction H as [[[sa g] h] | [[sa g] h] A B H IH]; simpl.
+- destruct (mem a sa); [reflexivity | ].
+  rewrite (lookup_unbound env1 a (F1 a Ha)), (lookup_unbound env2 a (F2 a Ha)); reflexivity.
+- destruct (mem a sa); [reflexivity | exact IH].
+Qed.
+
+Lemma is_hidden_R : forall A B e, R A B -> is_hidden A e = is_hidden B e.
+Proof. intros A B e H; destruct H; reflexivity. Qed.
+
+Lemma agg_env_rec_unbound : forall cols env, (forall a, In a cols -> unbound env a) -> agg_env_rec cols env = nil.
+Proof.
+intros cols env; induction env as [ | [[sa g] h] env IH]; intro H; [reflexivity | ]; simpl.
+replace (existsb (fun a => mem a sa) cols) with false.
+- apply IH; intros a Ha s Hs; apply (H a Ha); right; exact Hs.
+- symmetry; apply Bool.not_true_iff_false; intro K; apply existsb_exists in K; destruct K as [a [Ha K]].
+  assert (K' : mem a sa = false) by exact (H a Ha _ (or_introl eq_refl)); rewrite K' in K; discriminate.
+Qed.
+
+Lemma agg_env_rec_R : forall cols A B, incl cols U -> R A B ->
+  (agg_env_rec cols A = nil /\ agg_env_rec cols B = nil) \/ R (agg_env_rec cols A) (agg_env_rec cols B).
+Proof.
+intros cols A B Hc H; induction H as [[[sa g] h] | [[sa g] h] A B H IH]; simpl.
+- destruct (existsb _ cols); [right; apply R_base | left].
+  split; apply agg_env_rec_unbound; intros a Ha; [apply F1 | apply F2]; apply Hc; exact Ha.
+- destruct (existsb _ cols); [right; apply R_cons; exact H | exact IH].
+Qed.
+
+Lemma agg_env_R : forall cols A B, incl cols U -> R A B -> R (agg_env cols A) (agg_env cols B).
+Proof.
+intros cols A B Hc H; unfold agg_env.
+destruct (agg_env_rec_R cols A B Hc H) as [[-> ->] | K]; [exact H | ].
+destruct K; exact (R_cons _ _ _ K) || (simpl; first [apply R_base | apply R_cons; assumption]).
+Qed.
+
+(** * The theorem *)
+
+Notation ev := (eval_sexpr ORN O basesort instance).
+Notation ec := (eval_scond ORN O basesort instance).
+Notation er := (scond_raises ORN O basesort instance).
+Notation eq_ := (eval_squery ORN O basesort instance).
+Notation es := (eval_sspec ORN O basesort instance).
+Notation ef := (eval_sfrom ORN O basesort instance).
+
+Definition RL (l1 l2 : list (Tuple.tuple T * senv)) := Forall2 (fun x y => fst x = fst y /\ R (snd x) (snd y)) l1 l2.
+
+Definition Ve (e : sexpr T relname) := incl (atts_e T relname e) U -> forall ce A B, R A B -> ev ce A e = ev ce B e.
+Definition Vc (c : scond T relname) := incl (atts_c T relname c) U ->
+  forall ce A B, R A B -> ec ce A c = ec ce B c /\ er ce A c = er ce B c.
+Definition Vq (q : squery T relname) := incl (atts_q T relname q) U -> forall ce A B, Rq A B -> eq_ ce A q = eq_ ce B q.
+Definition Vs (sp : sspec T relname) := incl (atts_s T relname sp) U ->
+  forall ce A B ex, Rq A B -> RL (es ce A sp ex) (es ce B sp ex).
+Definition Vf (f : sfrom T relname) := incl (atts_f T relname f) U -> forall ce A B, Rq A B -> ef ce A f = ef ce B f.
+
+Lemma incl_flat_map_inv : forall (X : Type) (f : X -> list (Tuple.attribute T)) l, incl (flat_map f l) U ->
+  forall x, In x l -> incl (f x) U.
+Proof. intros X f l H x Hx a Ha; apply H, in_flat_map; exists x; tauto. Qed.
+
+Lemma existsb_ext_in : forall (X : Type) (f g : X -> bool) l, (forall x, In x l -> f x = g x) -> existsb f l = existsb g l.
+Proof. intros X f g l H; induction l as [ | x l IH]; [reflexivity | simpl; rewrite H, IH; [reflexivity | | left]; auto]. intros; apply H; right; assumption. Qed.
+
+Ltac split_incl :=
+  repeat match goal with
+         | H : incl (_ ++ _) U |- _ => apply incl_app_inv in H; destruct H
+         end.
+
+Ltac prep_s :=
+  intros; cbn [atts_e atts_c atts_q atts_s atts_f] in *;
+  fold (atts_e T relname) (atts_c T relname) (atts_q T relname) (atts_s T relname) (atts_f T relname) in *; split_incl;
+  repeat match goal with
+         | H : incl ?u U -> _, K : incl ?u U |- _ => specialize (H K)
+         | H : (forall ce A B, _ -> _ /\ _) |- _ =>
+           let H1 := fresh "IH1" in let H2 := fresh "IH2" in
+           assert (H1 := fun ce A B r => proj1 (H ce A B r)); assert (H2 := fun ce A B r => proj2 (H ce A B r)); clear H
+         | H : forall y, In y ?l -> incl _ U -> _, K : incl (flat_map _ ?l) U |- _ =>
+           let H' := fresh "IHl" in pose proof (fun y Hy => H y Hy (incl_flat_map_inv _ _ _ K y Hy)) as H'; clear H
+         | H : forall e d n, In (O_By e d n) ?l -> incl _ U -> _, K : incl (flat_map _ ?l) U |- _ =>
+           let H' := fresh "IHo" in pose proof (fun e d n Hy => H e d n Hy (incl_flat_map_inv _ _ _ K _ Hy)) as H'; clear H
+         end.
+
+Ltac rel := first [ assumption | apply R_Rq; rel | apply R_cons; rel | apply Rq_cons; rel | apply R_base ].
+
+Ltac leaf :=
+  match goal with
+  | H : forall ce A B, _ -> ?f ce A ?x = ?f ce B ?x |- ?f _ _ ?x = ?f _ _ ?x => apply H; rel
+  | H : forall ce A B ex, _ -> ?f ce A ?x ex = ?f ce B ?x ex |- ?f _ _ ?x _ = ?f _ _ ?x _ => apply H; rel
+  | H : forall y, In y ?l -> forall ce A B, _ -> ?f ce A y = ?f ce B y, Hy : In ?x ?l |- ?f _ _ ?x = ?f _ _ ?x =>
+    apply (H x Hy); rel
+  | H : forall e d n, In (O_By e d n) ?l -> forall ce A B, _ -> ?f ce A e = ?f ce B e, Hy : In (O_By ?x ?d ?n) ?l
+    |- ?f _ _ ?x = ?f _ _ ?x => apply (H x d n Hy); rel
+  | |- is_hidden _ _ = is_hidden _ _ => apply is_hidden_R; rel
+  | |- lookup _ ?a = lookup _ ?a =>
+    apply lookup_R; [rel | match goal with K : incl ?l U |- _ => apply K; simpl; tauto end]
+  end.
+
+Ltac scong :=
+  repeat (first [ reflexivity
+                | leaf
+                | match goal with |- map _ ?l = map _ ?l => apply map_ext_in; intros ? ? end
+                | match goal with |- flat_map _ ?l = flat_map _ ?l => apply flat_map_ext_in; intros ? ? end
+                | match goal with |- filter _ ?l = filter _ ?l => apply filter_ext_in; intros ? ? end
+                | match goal with |- existsb _ ?l = existsb _ ?l => apply existsb_ext_in; intros ? ? end
+                | match goal with |- ?L = ?R =>
+                    lazymatch L with context [match ?a with _ => _ end] =>
+                      lazymatch R with context [match ?b with _ => _ end] =>
+                        first [ constr_eq a b; destruct a
+                              | let E := fresh "E" in assert (E : a = b) by scong; rewrite E; destruct b ] end end end
+                | match goal with |- (fun _ => _) = (fun _ => _) => let t := fresh "t" in extensionality t end
+                | f_equal ]).
+
+Ltac unf := cbn [eval_sexpr eval_scond scond_raises eval_squery eval_sspec eval_sfrom
+                 atts_e atts_c atts_q atts_s atts_f] in *;
+  fold ev ec er eq_ es ef (atts_e T relname) (atts_c T relname) (atts_q T relname) (atts_s T relname)
+       (atts_f T relname) in *.
+
+Ltac open_v := unfold Ve, Vc, Vq, Vs, Vf, LE, LO; cbv beta.
+
+Lemma v_const : forall v, Ve (E_Const T relname v).
+Proof. open_v; prep_s; unf; scong. Qed.
+
+Lemma v_col : forall a, Ve (E_Col T relname a).
+Proof. open_v; prep_s; unf; scong. Qed.
+
+Lemma v_fun : forall f l, LE T relname Ve l -> Ve (E_Fun f l).
+Proof. open_v; prep_s; unf; scong. Qed.
+
+Lemma v_agg : forall ag sq e c, Ve e -> Vc c -> Ve (E_Agg ag sq e c).
+Proof.
+open_v; prep_s; unf; match goal with HR : R _ _ |- _ => rename HR into H5 end.
+assert (Hc : incl (sexpr_cols ORN basesort ce e ++ scond_cols ORN basesort ce c) U).
+{ apply incl_app; eapply incl_tran; [apply cols_atts_e | assumption | apply cols_atts_c | assumption]. }
+rewrite (is_hidden_R A B (E_Agg ag sq e c) H5); destruct (is_hidden B _); [reflexivity | ].
+generalize (agg_env_R _ A B Hc H5); generalize (agg_env (sexpr_cols ORN basesort ce e ++ scond_cols ORN basesort ce c) A)
+  (agg_env (sexpr_cols ORN basesort ce e ++ scond_cols ORN basesort ce c) B); intros X Y HXY.
+destruct HXY as [[[sa g] h] | [[sa g] h] X Y HXY]; scong.
+Qed.
+
+Lemma v_aggx : forall ag sq e sep lo c, Ve e -> (forall s, sep = Some s -> Ve s) -> LO T relname Ve lo -> Vc c ->
+  Ve (E_AggX ag sq e sep lo c).
+Proof.
+open_v; intros ag sq e sep lo c He Hs Ho Hc0.
+destruct sep as [s0 | ]; [specialize (Hs s0 eq_refl) | clear Hs]; prep_s; unf;
+  match goal with HR : R _ _ |- _ => rename HR into H5 end.
+all: match goal with |- context [agg_env ?cols ?A] =>
+       assert (Hc : incl cols U) by
+         (repeat apply incl_app; try (eapply incl_tran; [apply cols_atts_e | assumption]);
+          try (eapply incl_tran; [apply cols_atts_c | assumption]); try (intros ? []);
+          intros x Hx; apply in_flat_map in Hx; destruct Hx as [[y d n] [Hy Hx]];
+          apply (incl_flat_map_inv _ _ _ ltac:(eassumption) _ Hy); exact (cols_atts_e _ _ _ _ y ce x Hx)) end.
+all: match type of H5 with R ?A ?B => rewrite (is_hidden_R A B _ H5); destruct (is_hidden B _); [reflexivity | ];
+       match goal with |- context [agg_env ?cols A] =>
+         generalize (agg_env_R cols A B Hc H5); generalize (agg_env cols A) (agg_env cols B); intros X Y HXY end end.
+all: destruct HXY as [[[sa g] h] | [[sa g] h] X Y HXY]; scong.
+Qed.
+
+Lemma v_case : forall c e1 e2, Vc c -> Ve e1 -> Ve e2 -> Ve (E_Case c e1 e2).
+Proof. open_v; prep_s; unf; scong. Qed.
+
+Lemma v_cond : forall c, Vc c -> Ve (E_Cond c).
+Proof. open_v; prep_s; unf; scong. Qed.
+
+Lemma v_sub : forall q, Vq q -> Ve (E_Sub q).
+Proof. open_v; prep_s; unf; scong. Qed.
+
+Lemma v_grouping : forall x, Ve x -> Ve (E_Grouping x).
+Proof. open_v; prep_s; unf; match goal with HR : R ?A ?B |- _ => destruct HR end; reflexivity. Qed.
+
+Lemma v_conj : forall a c1 c2, Vc c1 -> Vc c2 -> Vc (C_Conj a c1 c2).
+Proof. open_v; prep_s; unf; split; scong. Qed.
+
+Lemma v_not : forall c, Vc c -> Vc (C_Not c).
+Proof. open_v; prep_s; unf; split; scong. Qed.
+
+Lemma v_true : Vc (C_True T relname).
+Proof. open_v; intros; split; reflexivity. Qed.
+
+Lemma v_pred : forall p l, LE T relname Ve l -> Vc (C_Pred p l).
+Proof. open_v; prep_s; unf; split; scong. Qed.
+
+Lemma v_expr : forall e, Ve e -> Vc (C_Expr e).
+Proof. open_v; prep_s; unf; split; scong. Qed.
+
+Lemma v_quant : forall qtf p l q la, LE T relname Ve l -> Vq q -> Vc (C_Quant qtf p l q la).
+Proof. open_v; prep_s; unf; split; scong. Qed.
+
+Lemma v_in : forall l q la, LE T relname Ve l -> Vq q -> Vc (C_In l q la).
+Proof. open_v; prep_s; unf; split; scong. Qed.
+
+Lemma v_exists : forall q, Vq q -> Vc (C_Exists q).
+Proof. open_v; prep_s; unf; split; scong. Qed.
+
+End Scope.
+
+
+
