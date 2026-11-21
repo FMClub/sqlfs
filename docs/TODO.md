@@ -666,6 +666,7 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   its former text).
 - **8.4 README** (iteration 2): it describes the state before the dialects, the conformance harness, the tools and
   the theorems of Phase 6. Rewrite it with a map of the repository, the main results and the checks to run.
+  **Status: DONE** (iteration 3).
 - **8.5 `eval_rename` is not instantiated** (iteration 2): no concrete renaming shows that its hypotheses can be
   met (an order-preserving bijection which is not the identity, `Hdot` for the tuples of the instance), and it is
   stated for the list of rows only: add an instance checked by computation, and the corollaries for
@@ -675,4 +676,6 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
 - **8.7 Further engines** (D1, decided in iteration 2): a DuckDB dialect, then CockroachDB.
 - **8.8 Old `TODO` comments** (iteration 2): `SqlExt.v` ignores the join type of a `Join_Item` (line 214);
   `SqlAlgebraExt.v` duplicates `sql_formula_to_alg` (line 133). Fix or document each.
-
+- **8.9 Failing conformance cases** (iteration 3): `docs/CONFORMANCE_SUMMARY.md` lists 215 failing cases for the
+  PostgreSQL regression tests, 125 for TiDB, 118 for MySQL, 6 for MariaDB. Classify them again (model gap,
+  translator gap, engine-specific output) and fix the model gaps, most frequent first.
