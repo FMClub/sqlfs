@@ -156,6 +156,7 @@ testing/Test_ResultText.v
 testing/Test_Positional.v
 testing/Test_SqlPositional.v
 testing/Test_Rename.v
+testing/Test_Relate.v
 testing/Test_Typing.v
 testing/Test_TypeOf.v
 testing/Test_Refinement.v

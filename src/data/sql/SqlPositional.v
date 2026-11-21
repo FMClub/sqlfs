@@ -12,10 +12,10 @@
     semantics and its lemmas are unchanged: it is the named view of the positional one.
 
     The dialect has no error value ([Herr], [Hpe]), converts nothing before a comparison ([Hcoerce]), its NULLs
-    have no type ([Hnull]), and it does not convert the columns of a set operation ([Hu]); the positional
+    have no type ([Hnull]), and it does not convert the columns of a set operation ([Hun]); the positional
     attributes are distinct ([Hpa]), and the stored rows have the attributes of their table ([Hinst]). *)
 Require Import List Bool Arith Lia.
-Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData Bool3 Formula SqlFull SqlRelateSelect.
+Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData Bool3 Formula SqlFull SqlRelate SqlRelateSelect.
 Import Tuple.
 
 Section Sec.
@@ -273,7 +273,7 @@ Hypothesis Herr : forall v, is_error O v = false.
 Hypothesis Hpe : forall p l, pred_error O p l = false.
 Hypothesis Hcoerce : forall p ks l, cmp_coerce O p ks l = l.
 Hypothesis Hnull : forall a v, is_null O v = true -> null_of T a = v.
-Hypothesis Hu : forall atts rows, unify_rows O atts rows = rows.
+Hypothesis Hun : forall l, unify_column O l = l.
 Hypothesis Hinst : forall r t, In t (Febag.elements _ (instance r)) -> labels T t =S= basesort r.
 
 Lemma store_id : forall a v, store O a v = v.
@@ -444,6 +444,24 @@ Qed.
 
 Definition Inv n t row := labels T t =S= rangeS 0 n /\ readat 0 n t = row.
 
+(** the invariant holds up to the equality of tuples *)
+Lemma Inv_teq : forall n t' t row, t' =t= t -> Inv n t row -> Inv n t' row.
+Proof.
+intros n t' t row H [L R]; rewrite tuple_eq in H; destruct H as [Hl Hd]; split.
+- rewrite (Fset.equal_eq_1 _ _ _ _ Hl); exact L.
+- rewrite <- R; unfold readat; apply map_ext_in; intros j Hj; apply Hd.
+  rewrite (Fset.mem_eq_2 _ _ _ Hl), (Fset.mem_eq_2 _ _ _ L), mem_range; rewrite in_seq in Hj.
+  apply andb_true_iff; split; [apply Nat.leb_le | apply Nat.ltb_lt]; lia.
+Qed.
+
+Lemma Inv_unify : forall n atts rows l, Forall2 (Inv n) rows l -> Forall2 (Inv n) (unify_rows O atts rows) l.
+Proof.
+intros n atts rows l H; assert (U := SqlRelate.unify_rows_eq T O Hun atts rows).
+revert l H; induction U as [ | x y l1 l2 Hxy U IH]; intros l H; inversion H; subst; constructor.
+- apply (Inv_teq _ _ _ _ Hxy); assumption.
+- apply IH; assumption.
+Qed.
+
 Lemma prod_inv : forall lf off acc accp, Forall2 (Inv off) acc accp ->
   (forall q, In q lf -> Forall2 (Inv (parity q)) (eq0 (pq_to q)) (peval q)) ->
   Forall2 (Inv (off + fold_right (fun q n => parity q + n) 0 lf))
@@ -571,7 +589,7 @@ destruct q as [r | items lf w | lf w | q1 q2].
      else nil).
   rewrite (Fset.equal_eq_1 _ _ _ _ (pq_sort q1)), (Fset.equal_eq_2 _ _ _ _ (pq_sort q2)), range_equal.
   cbn [peval parity]; destruct (Nat.eqb (parity q1) (parity q2)) eqn:E; [ | constructor].
-  rewrite Hu, (keep_errors_id T O Herr); cbn [eval_set_op]; apply Forall2_app; [apply IH | ].
+  apply Inv_unify; rewrite (keep_errors_id T O Herr); cbn [eval_set_op]; apply Forall2_app; [apply IH | ].
   apply Nat.eqb_eq in E; rewrite E; apply IH.
 Qed.
 

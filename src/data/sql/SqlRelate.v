@@ -190,11 +190,91 @@ clear r; induction all as [ | a all IHa]; [reflexivity | ].
 simpl; rewrite (H a (or_introl eq_refl)); apply IHa; intros t Ht; apply H; right; exact Ht.
 Qed.
 
+(** ** The columns of a set operation
+
+    For a dialect which does not convert the columns of a set operation ([Hun]), [unify_rows] gives the same
+    rows, up to the equality of tuples (the tuples are built again: they are not the same terms, which is why the
+    statement is not an equality of lists). *)
+Section Unify.
+
+Hypothesis Hun : forall l, unify_column O l = l.
+
+Lemma unify_rows_eq : forall atts rows, Forall2 (fun t' t => t' =t= t) (unify_rows O atts rows) rows.
+Proof.
+intros atts rows; unfold unify_rows.
+set (cols := map (fun a => (a, unify_column O (map (fun t => dot T t a) rows))) atts).
+assert (G : forall rest n, (forall i t, nth_error rest i = Some t -> nth_error rows (n + i) = Some t) ->
+  Forall2 (fun t' t => t' =t= t)
+    (map (fun it : nat * tuple T =>
+            let (i, t) := it in
+            mk_tuple T (labels T t)
+              (fun x => match find (fun c : attribute T * list (value T) => Oset.eq_bool (OAtt T) (fst c) x) cols with
+                        | Some (_, vs) => nth i vs (dot T t x)
+                        | None => dot T t x
+                        end)) (combine (seq n (length rest)) rest)) rest).
+{ intro rest; induction rest as [ | t rest IH]; intros n Hn; [constructor | ].
+  cbn [length seq combine map]; constructor.
+  - rewrite tuple_eq; split; [apply labels_mk_tuple | ].
+    intros x Hx; rewrite dot_mk_tuple.
+    rewrite (Fset.mem_eq_2 _ _ _ (labels_mk_tuple _ _ _)) in Hx; rewrite Hx.
+    case_eq (find (fun c : attribute T * list (value T) => Oset.eq_bool (OAtt T) (fst c) x) cols); [ | intros; reflexivity].
+    intros [a vs] Hf; destruct (find_some _ _ Hf) as [Hin Ha]; simpl in Ha.
+    rewrite Oset.eq_bool_true_iff in Ha; subst a.
+    unfold cols in Hin; rewrite in_map_iff in Hin; destruct Hin as [b [Eb _]]; injection Eb; intros Ev Ex; subst b.
+    rewrite Hun in Ev; subst vs.
+    assert (K := Hn 0%nat t eq_refl); rewrite PeanoNat.Nat.add_0_r in K.
+    apply nth_error_nth; rewrite (map_nth_error _ _ _ K); reflexivity.
+  - apply IH; intros i u Hu; replace (S n + i)%nat with (n + S i)%nat by (rewrite PeanoNat.Nat.add_succ_r; reflexivity).
+    apply Hn; exact Hu. }
+exact (G rows 0%nat (fun i t H => H)).
+Qed.
+
+(** the bag of rows which are equal one by one *)
+Lemma eq_rows_bag : forall l1 l2, Forall2 (fun t' t : tuple T => t' =t= t) l1 l2 ->
+  Febag.equal BTupleT (Febag.mk_bag BTupleT l1) (Febag.mk_bag BTupleT l2) = true.
+Proof.
+intros l1 l2 H; rewrite Febag.nb_occ_equal; intro t; rewrite !Febag.nb_occ_mk_bag.
+induction H as [ | x y l1 l2 Hxy H IH]; [reflexivity | ].
+rewrite !(Oeset.nb_occ_unfold _ _ (_ :: _)), IH; f_equal.
+case_eq (Oeset.compare (OTuple T) t y); intro K.
+- rewrite (Oeset.compare_eq_trans _ _ _ _ K (Oeset.compare_eq_sym _ _ _ Hxy)); reflexivity.
+- rewrite (Oeset.compare_lt_eq_trans _ _ _ _ K (Oeset.compare_eq_sym _ _ _ Hxy)); reflexivity.
+- rewrite Oeset.compare_lt_gt, CompOpp_iff in K; simpl in K.
+  rewrite Oeset.compare_lt_gt, (Oeset.compare_eq_lt_trans _ _ _ _ Hxy K); reflexivity.
+Qed.
+
+Lemma unify_rows_bag : forall atts rows,
+  Febag.equal BTupleT (Febag.mk_bag BTupleT (unify_rows O atts rows)) (Febag.mk_bag BTupleT rows) = true.
+Proof. intros; apply eq_rows_bag, unify_rows_eq. Qed.
+
+(** a failed row is one up to the equality of tuples *)
+Lemma row_error_teq : forall t u, t =t= u -> row_error O t = row_error O u.
+Proof.
+intros t u H; rewrite tuple_eq in H; destruct H as [Hl Hd]; unfold row_error.
+rewrite <- (Fset.elements_spec1 _ _ _ Hl).
+assert (K : forall a, In a ({{{labels T t}}}) -> is_error O (dot T t a) = is_error O (dot T u a)).
+{ intros a Ha; rewrite (Hd a (Fset.in_elements_mem _ _ _ Ha)); reflexivity. }
+induction ({{{labels T t}}}) as [ | a l IH]; [reflexivity | ].
+simpl; rewrite (K a (or_introl eq_refl)), IH; [reflexivity | intros b Hb; apply K; right; exact Hb].
+Qed.
+
+(** the rows of [unify_rows] hold no error when the rows do not *)
+Lemma unify_rows_clean : forall atts rows, (forall u, In u rows -> row_error O u = false) ->
+  forall t, In t (unify_rows O atts rows) -> row_error O t = false.
+Proof.
+intros atts rows H t Ht; assert (K := unify_rows_eq atts rows).
+induction K as [ | x y l1 l2 Hxy K IH]; [contradiction Ht | ].
+destruct Ht as [E | Ht]; [subst x; rewrite (row_error_teq _ _ Hxy); apply H; left; reflexivity | ].
+apply IH; [intros u Hu; apply H; right; exact Hu | exact Ht].
+Qed.
+
+End Unify.
+
 Section Agree.
 
 Hypothesis Hcanon :
   forall t u, Oeset.eq_bool (OTuple T) (canon_tuple O t) (canon_tuple O u) = Oeset.eq_bool (OTuple T) t u.
-Hypothesis Hu : forall atts rows, unify_rows O atts rows = rows.
+Hypothesis Hun : forall l, unify_column O l = l.
 (** the stored rows hold no error value *)
 Hypothesis Herr : forall r t, In t (Febag.elements BTupleT (instance r)) -> row_error O t = false.
 
@@ -215,9 +295,12 @@ intros env q; induction q as [r | o q1 IH1 q2 IH2 | ]; intros q' H; simpl in H; 
                                      eval_squery ORN O basesort instance nil env b))
                 else nil)) in Ht.
   destruct (Fset.equal _ _ _); [ | contradiction Ht].
-  rewrite Hu, keep_errors_clean in Ht.
-  + destruct (eval_set_op_incl _ _ _ _ Ht) as [K | K]; [exact (IH1 _ Ha _ K) | exact (IH2 _ Hb _ K)].
-  + intros u Hu'; destruct (in_app_or _ _ _ Hu') as [K | K]; [exact (IH1 _ Ha _ K) | exact (IH2 _ Hb _ K)].
+  assert (C : forall u, In u (eval_squery ORN O basesort instance nil env a ++ eval_squery ORN O basesort instance nil env b) ->
+              row_error O u = false)
+    by (intros u Hu'; destruct (in_app_or _ _ _ Hu') as [K | K]; [exact (IH1 _ Ha _ K) | exact (IH2 _ Hb _ K)]).
+  apply (unify_rows_clean Hun _ _) in Ht; [exact Ht | ].
+  intros u Hu'; rewrite keep_errors_clean in Hu'; [ | exact C].
+  destruct (eval_set_op_incl _ _ _ _ Hu') as [K | K]; [exact (IH1 _ Ha _ K) | exact (IH2 _ Hb _ K)].
 Qed.
 
 Theorem sql_full_agree :
@@ -244,7 +327,7 @@ intros unknown contains_nulls env env' q; induction q as [r | o q1 IH1 q2 IH2 | 
                                   eval_squery ORN O basesort instance nil env b))
              else nil))
             (eval_sql_query basesort instance unknown contains_nulls env' (Sql_Set o q1 q2)) = true).
-  rewrite S', Hu, keep_errors_clean;
+  rewrite S', (Febag.equal_eq_1 _ _ _ _ (unify_rows_bag Hun _ _)), keep_errors_clean;
     [ | intros u Hu'; destruct (in_app_or _ _ _ Hu') as [K | K];
         [exact (to_full_clean _ _ _ Ha _ K) | exact (to_full_clean _ _ _ Hb _ K)]].
   set (R := eval_set_op O o Set_All _ _).
