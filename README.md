@@ -74,6 +74,7 @@ make                                              # the library and the examples
 python3 tools/check_hygiene.py                    # no Admitted, no Axiom, the core imports no dialect
 python3 tools/functions/check_provenance.py       # every function of the tables has a source
 python3 tools/spec/sqlprint.py --dialect MySQL tools/spec/roundtrip_samples.sql
+python3 tools/spec/test_sql2coq.py                # the translator of the conformance harness
 ```
 
 

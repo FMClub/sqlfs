@@ -801,3 +801,8 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   **Status: DONE** (iteration 11). The `interval` of the MySQL family follows `get_interval_value`; a sum with a
   fraction of a second has 6 fractional digits. TiDB `time`: 1 failing case (38 before), a datetime written as a
   number with a fraction.
+- **8.24 The translator of the harness has no test** (iteration 13): four problems were found in it by reading
+  failing cases (8.9, 8.14, 8.17, 8.19).
+  **Status: DONE** (iteration 13). `tools/spec/test_sql2coq.py`: 9 regression tests on small result files, run by
+  the continuous integration.
+
