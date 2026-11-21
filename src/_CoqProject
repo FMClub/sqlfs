@@ -45,6 +45,9 @@ data/sql/SqlGroupFacts.v
 data/sql/Oracles.v
 data/sql/SqlWellFormed.v
 data/sql/SqlScoping.v
+data/sql/SqlInduction.v
+data/sql/SqlCongruence.v
+data/sql/SqlSorts.v
 data/sql/SqlRelate.v
 data/proof_of_concept/TuplesImpl.v
 data/proof_of_concept/IEEE.v
@@ -82,6 +85,7 @@ data/dialects/TiDB.v
 data/dialects/Percona.v
 data/dialects/PolarDB.v
 data/dialects/Versions.v
+data/dialects/Refinement.v
 data/dialects/ResultText.v
 data/dialects/Positional.v
 data/dialects/Typing.v
@@ -143,6 +147,7 @@ testing/Test_WellFormed.v
 testing/Test_ResultText.v
 testing/Test_Positional.v
 testing/Test_Typing.v
+testing/Test_Refinement.v
 testing/Test_Fetch.v
 testing/Test_MariaDB.v
 testing/Test_Session.v

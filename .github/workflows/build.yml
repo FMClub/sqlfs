@@ -25,6 +25,10 @@ jobs:
               (cd src && coqc -R . SQLFS testing/Assumptions.v) | tee /tmp/assumptions.txt
               if grep -q "Axioms:" /tmp/assumptions.txt; then exit 1; fi
             endGroup
+            startGroup "The congruence and the refinement use only functional extensionality"
+              (cd src && coqc -R . SQLFS testing/AssumptionsExt.v) > /tmp/assumptions_ext.txt
+              python3 tools/check_axioms.py < /tmp/assumptions_ext.txt
+            endGroup
       - name: Revert permissions
         if: always()
         run: sudo chown -R 1001:116 .

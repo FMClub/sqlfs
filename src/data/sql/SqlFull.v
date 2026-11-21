@@ -270,7 +270,16 @@ Record dialect : Type :=
       unify_column : list value -> list value;
       (** the table functions: the rows of a call, [None] for a function which the dialect does not have
           (TODO 3.4) *)
-      table_fun : string -> option (list value -> list (list value))
+      table_fun : string -> option (list value -> list (list value));
+      (** * The interpretation of the function symbols, the predicates and the aggregates
+
+          They are a part of the dialect, not of the instance [T] of the values: two dialects evaluate
+          their queries with the same instance (the same types of values, tuples and queries), and differ
+          only by their records, which makes the evaluations of two dialects comparable
+          ([SqlCongruence.v]). *)
+      interp_fun : symb -> list value -> value;
+      interp_pred : predicate -> list value -> bool3;
+      interp_agg : aggregate -> list value -> value
     }.
 
 Hypothesis O : dialect.
@@ -628,6 +637,7 @@ with squery_uses (q : squery) {struct q} : list use :=
                 match w with 
                 | W_As f lp lo _ => 
                   flat_map sexpr_uses lp ++ flat_map nulls_features lo ++
+                  flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo ++
                   (fix fuses (f : swfun) : list use :=
                      match f with
                      | W_Agg ag _ e fr => U_Agg ag :: sexpr_uses e ++ frame_bound_is_groups fr
@@ -1441,7 +1451,7 @@ Fixpoint eval_wsem (a : attribute) (w : wsem)
     let vs := map arg (frame_rows fr sorted gidx rk i) in
     match first_error vs with
     | Some err => err
-    | None => interp_aggregate T ag (quantify sq vs)
+    | None => interp_agg O ag (quantify sq vs)
     end
   | WS_Row_Number => value_of_Z O (Z.of_nat (S i))
   | WS_Rank =>
@@ -1710,11 +1720,11 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
     let vs := map (eval_sexpr ce env) l in
     match first_error (if lazy_symbol O f then firstn 1 vs else vs) with
     | Some err => err
-    | None => interp_symbol T f vs
+    | None => interp_fun O f vs
     end
   | E_Agg ag sq e c =>
     match agg_env (sexpr_cols ce e ++ scond_cols ce c) env with
-    | nil => interp_aggregate T ag nil
+    | nil => interp_agg O ag nil
     | (sa, g, _) :: env' =>
       let renv t := (sa, t :: nil, nil) :: env' in
       if existsb row_error g || existsb (fun t => scond_raises ce (renv t) c) g
@@ -1724,7 +1734,7 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
                         (filter (fun t => is_true3 (eval_scond ce (renv t) c)) g) in
         match first_error vals with
         | Some err => err
-        | None => interp_aggregate T ag (quantify sq vals)
+        | None => interp_agg O ag (quantify sq vals)
         end
     end
   | E_AggX ag sq e sep lo c =>
@@ -1732,7 +1742,7 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
                 (match sep with Some s => sexpr_cols ce s | None => nil end) ++
                 flat_map (fun o => match o with O_By e _ _ => sexpr_cols ce e end) lo in
     match agg_env cols env with
-    | nil => interp_aggregate T ag nil
+    | nil => interp_agg O ag nil
     | (sa, g, _) :: env' =>
       let renv t := (sa, t :: nil, nil) :: env' in
       if existsb row_error g || existsb (fun t => scond_raises ce (renv t) c) g
@@ -1745,7 +1755,7 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
                                        match sep with Some s => eval_sexpr ce (renv t) s :: nil | None => nil end) sorted in
         match first_error (vals ++ flat_map keys rows) with
         | Some err => err
-        | None => interp_aggregate T ag (match sep with Some _ => vals | None => quantify sq vals end)
+        | None => interp_agg O ag (match sep with Some _ => vals | None => quantify sq vals end)
         end
     end
   | E_Case c e1 e2 =>
@@ -1772,12 +1782,12 @@ with eval_scond (ce : cte_env) (env : senv) (c : scond) {struct c} : bool3 :=
   | C_Conj a c1 c2 => interp_conj (B T) a (eval_scond ce env c1) (eval_scond ce env c2)
   | C_Not c => Bool.negb (B T) (eval_scond ce env c)
   | C_True => Bool.true (B T)
-  | C_Pred p l => interp_predicate T p (cmp_coerce O p (map sexpr_affinity l) (map (eval_sexpr ce env) l))
+  | C_Pred p l => interp_pred O p (cmp_coerce O p (map sexpr_affinity l) (map (eval_sexpr ce env) l))
   | C_Expr e => truth_of_value O (eval_sexpr ce env e)
   | C_Quant qtf p l q la =>
     let lv := map (eval_sexpr ce env) l in
     interp_quant (B T) qtf
-                 (fun t => interp_predicate T p (lv ++ map (dot T t) la))
+                 (fun t => interp_pred O p (lv ++ map (dot T t) la))
                  (eval_squery ce env q)
   | C_In l q la =>
     let lv := map (eval_sexpr ce env) l in

@@ -117,7 +117,14 @@ Definition vs_interp_aggregate (d : vsem) (a : Values.aggregate) (l : list value
     end
   end.
 
-(** * The instance of [Tuple.Rcd] of a dialect *)
+(** * The instance of [Tuple.Rcd] of a dialect
+
+    The values, tuples and queries of all the dialects are those of one instance: the interpretation of the
+    functions, predicates and aggregates of a dialect is a part of its record [dialect_of d] (the fields
+    [interp_fun], [interp_pred], [interp_agg]), which [SqlFull.v]'s evaluation reads; the interpretations of
+    the instance itself are those of [NullValues] and the evaluation does not use them. [TD d] is therefore
+    the same instance for every [d], and the evaluations of two dialects can be compared on the same query
+    ([SqlCongruence.v]). *)
 
 Definition TD (d : vsem) : Tuple.Rcd :=
   Tuple2.T attribute type NullValues.value 
@@ -126,7 +133,7 @@ Definition TD (d : vsem) : Tuple.Rcd :=
            NullValues.default_value 
            OAN FAN NullValues.OVal NullValues.FVal
            Values.predicate _ Values.aggregate OP (OSymbol _ NullValues.OVal) OAgg Bool3.Bool3
-           (vs_interp_predicate d) (vs_interp_symbol d) (vs_interp_aggregate d).
+           NullValues.interp_predicate NullValues.interp_symbol NullValues.interp_aggregate.
 
 Definition is_some {A : Type} (o : option A) : bool := match o with Some _ => true | None => false end.
 
@@ -172,7 +179,8 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (fun a => match a with Attr_string _ => 1%nat | Attr_Z _ | Attr_bool _ => 2%nat | _ => 2%nat end)
              (fun p ks l => match p with Values.Predicate s => vs_cmp_coerce d s ks l end)
              (vs_unify d)
-             (vs_table_fun d).
+             (vs_table_fun d)
+             (vs_interp_symbol d) (vs_interp_predicate d) (vs_interp_aggregate d).
 
 (** * Moving a query to a dialect
 
