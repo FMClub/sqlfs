@@ -464,6 +464,14 @@ Definition f_trim_str (k : skit) (where_ : nat) (l : list value) : value :=
               | 1%nat => ltrim_str r s
               | _ => rtrim_str r s
               end)
+  (* [TRIM (LEADING FROM s)], without the string to remove: the spaces *)
+  | Some (s :: nil) =>
+    let s := cps s in let r := 32 :: nil in
+    ret_cp k (match where_ with
+              | O => rtrim_str r (ltrim_str r s)
+              | 1%nat => ltrim_str r s
+              | _ => rtrim_str r s
+              end)
   | Some _ => Value_Err "wrong number of arguments"
   | None => sk_null k
   end.

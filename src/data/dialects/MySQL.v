@@ -411,6 +411,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("abs", fun l => match l with
                       | Value_D (Some (q, f, s)) :: nil => 
                         VDec (match Qccompare q (Qc_of_Z 0) with Lt => Qcopp q | _ => q end) f s
+                      | v :: nil => my_int_range v (num_fun1 conv num_abs l)
                       | _ => num_fun1 conv num_abs l end)
   :: ("sign", num_fun1 conv num_sign)
   :: ("floor", num_fun1 conv num_floor)
@@ -421,7 +422,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                           match z_arg d with Some d => let d := clamp_scale d in my_dround false q d | None => Value_Z None end
                         | v :: nil => num_fun1 conv (fun a => num_round a 0) l
                         | v :: d :: nil => match conv v, z_arg d with
-                                           | Some a, Some d => let d := clamp_scale d in value_of_num (num_round a d) 
+                                           | Some a, Some d => let d := clamp_scale d in my_int_range v (value_of_num (num_round a d)) 
                                            | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   :: ("truncate", fun l => match l with

@@ -20,3 +20,4 @@ next item. One entry per iteration, newest last.
 | 12 | TODO 8.11 (dates) | infinite dates and timestamps, special date inputs; PostgreSQL: 53 failing of 514 | — |
 | 13 | TODO 8.24: tests of the translator | `tools/spec/test_sql2coq.py` (9 tests), in the continuous integration | — |
 | 14 | TODO 8.25 (part), 8.26 | acceptance: aggregates in `GROUP BY`, `SELECT DISTINCT` ordered by an unselected expression; result files of the same name no longer overwrite each other (TiDB: 12 more files checked) | TODO 8.27 (`TRIM` forms), 8.28 (replay of the scripts) |
+| 15 | TODO 8.21, 8.27 | `ABS` / `ROUND` out of the range of `BIGINT`; `TRIM (LEADING FROM s)` | — |

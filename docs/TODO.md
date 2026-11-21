@@ -794,6 +794,8 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   before).
 - **8.21 Overflow of `BIGINT` in the MySQL family** (iteration 9): `ABS (-9223372036854775808)`, `ROUND
   (9223372036854775807, -1)` are errors; the integers of the model are unbounded there.
+  **Status: DONE** (iteration 15). The sums, differences and products of integers were already checked
+  (`my_arith2`); `ABS` and `ROUND` of an integer are now (`my_int_range`).
 - **8.22 Wildcards of JSON paths in the MySQL family** (iteration 10): `$.*`, `$[*]`, `$**.a` are read as member
   names by `parse_path`; `JSON_EXTRACT` and `JSON_CONTAINS_PATH` with them are wrong.
 - **8.23 `INTERVAL` with a fraction in the MySQL family** (iteration 10): `d + INTERVAL 1.2 SECOND`, `INTERVAL '1.9'
@@ -820,6 +822,7 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   files of cases are checked. A test in `tools/spec/test_sql2coq.py`.
 - **8.27 `TRIM ([LEADING | BOTH | TRAILING] FROM s)` without the characters to remove** (iteration 14): an error
   in the model (TiDB `executor/issues`).
+  **Status: DONE** (iteration 15): the spaces are removed (`f_trim_str`).
 - **8.28 Replay of the scripts** (iteration 14): the failing cases of TiDB which come from statements the
   translator does not follow (`EXPLAIN ANALYZE` of an `INSERT`, cascading foreign keys, temporary tables shadowing a
   table, `LAST_INSERT_ID ()`, batch DML): the tables they change must be marked unreliable.

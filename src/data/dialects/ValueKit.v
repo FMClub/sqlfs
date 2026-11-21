@@ -864,6 +864,17 @@ Definition dec_max (a b : option nat) : option nat :=
 Definition dec_sum (a b : option nat) : option nat :=
   match a, b with Some x, Some y => Some (x + y)%nat | _, _ => None end.
 
+(** the result [r] of a function of the integer [v] ([ABS], [ROUND] to tens): out of the range of [BIGINT], or of
+    [BIGINT UNSIGNED] for an unsigned argument, it is an error ([ER_DATA_OUT_OF_RANGE]) *)
+Definition my_int_range (v r : value) : value :=
+  match v, r with
+  | Value_I (Some (_, 1%nat)), (Value_Z (Some z) | Value_I (Some (z, _))) =>
+    if int_range_ok 1 z then r else Value_Err "BIGINT UNSIGNED value is out of range"
+  | (Value_Z (Some _) | Value_I (Some _)), (Value_Z (Some z) | Value_I (Some (z, _))) =>
+    if int_range_ok 64 z then r else Value_Err "BIGINT value is out of range"
+  | _, _ => r
+  end.
+
 (** [fi] is the operation on integers, if the result of two integers is an integer *)
 Definition my_arith2 (fi : option (Z -> Z -> Z)) (fd : Qc * nat * nat -> Qc * nat * nat -> value)
            (other : list value -> value) (l : list value) : value :=

@@ -242,3 +242,11 @@ Example pg_float_to_num : text PostgreSQL (fn "cast_numeric" [f8 "NaN"]) = "NaN"
 Proof. check. Qed.
 Example pg_lit_plus : text PostgreSQL (fn "+" [str "1.5"; int 1]) = "2.5".
 Proof. check. Qed.
+
+(** the functions of an integer of the MySQL family fail out of the range of [BIGINT] (TODO 8.21) *)
+Example my_abs_min : fails MySQL (fn "abs" [int (-9223372036854775808)]) = true.
+Proof. check. Qed.
+Example my_round_max : fails MySQL (fn "round" [int 9223372036854775807; int (-1)]) = true.
+Proof. check. Qed.
+Example my_round_ok : text MySQL (fn "round" [int 1234; int (-1)]) = "1230".
+Proof. check. Qed.
