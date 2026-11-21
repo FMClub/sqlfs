@@ -102,6 +102,8 @@ Ltac same_helpers :=
            | @eval_squery _ _ _ => fail | @eval_sspec _ _ _ => fail | @eval_sfrom _ _ _ => fail
            | @interp_fun _ => fail | @interp_pred _ => fail | @interp_agg _ => fail | @table_fun _ => fail
            | @eval_window _ => fail | @eval_wsem _ => fail
+           | @where_rows _ _ _ => fail | @select_rest _ _ _ => fail | @gkeys_of _ _ _ => fail
+           | @row_vals_of _ _ _ => fail
            | _ => progress change (h O2) with (h O1)
            end
          end.
@@ -530,7 +532,7 @@ Proof.
   + ihq cong_q q; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
   + ihf cong_f f1; ihf cong_f f2; ihc cong_c c; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
   + ih_l cong_e args; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-Qed.
+Time Qed.
 
 (** * The congruence
 
