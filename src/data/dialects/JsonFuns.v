@@ -38,7 +38,7 @@ Fixpoint set_path (create replace : bool) (p : list step) (j v : json) : json :=
       if Z.leb 0 i && Z.ltb i n
       then JArr (firstn (Z.to_nat i) l ++ [set_path create replace r (nth (Z.to_nat i) l JNull) v] ++ skipn (S (Z.to_nat i)) l)
       else match r with nil => if create && Z.leb n i then JArr (l ++ [v]) else j | _ => j end
-    | _ => if Z.eqb i 0 then set_path create replace r j v
+    | _ => if Z.eqb i 0 || Z.eqb i (-1) then set_path create replace r j v   (* [[0]], [[last]] *)
            else match r with nil => if create && Z.ltb 0 i then JArr [j; v] else j | _ => j end
     end
   end.

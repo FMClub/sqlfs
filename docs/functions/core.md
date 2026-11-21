@@ -71,7 +71,7 @@ documented somewhere in this directory.
 
 | Names | Dialects | Notes |
 |---|---|---|
-| `json`, `json_array`, `json_object`, `json_extract`, `json_type`, `json_valid`, `json_array_length` | SQLite (`json1`), MySQL | `->`, `->>` also |
+| `json`, `json_array`, `json_object`, `json_extract`, `json_type`, `json_valid`, `json_array_length` | SQLite (`json1`), MySQL | `->`, `->>` also. The paths of the MySQL family (`json_path.cc`) have `.*`, `[*]`, `[m to n]`, `last`, `last-n` and `**`; `json_extract` with such a path or with several paths gives the array of the values found; `[0]` and `[last]` apply to a value which is not an array. SQLite has none of them |
 | `json_contains`, `json_keys`, `json_length`, `json_unquote` | MySQL | `Item_func_json_*` |
 | `json_build_array`, `json_build_object`, `jsonb_build_array`, `jsonb_build_object`, `json_typeof`, `jsonb_typeof`, `jsonb_array_length`, `to_json`, `to_jsonb`, `#>>` | PostgreSQL | manual 9.16 |
 

@@ -798,6 +798,13 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   (`my_arith2`); `ABS` and `ROUND` of an integer are now (`my_int_range`).
 - **8.22 Wildcards of JSON paths in the MySQL family** (iteration 10): `$.*`, `$[*]`, `$**.a` are read as member
   names by `parse_path`; `JSON_EXTRACT` and `JSON_CONTAINS_PATH` with them are wrong.
+  **Status: DONE** (iteration 19). `parse_wpath` and `seek` (`Json.v`): `.*`, `[*]`, `[m to n]`, `last`, `last-n`, `**`,
+  and the wrapping of a value which is not an array by `[0]` and `[last]`; `JSON_EXTRACT` takes several paths and
+  gives the array of the values found; the functions which name one place (`JSON_SET`, `JSON_LENGTH`, ...) reject
+  a wildcard or a range; `JSON_SET` on `[last]` of a value which is not an array replaces it; a NULL path of
+  `JSON_CONTAINS_PATH` and `JSON_SEARCH` gives NULL. Tests: `src/testing/Test_Json.v` (the examples of the MySQL
+  manual); TiDB `expression/json`: 5 failing cases before, 0 after. Not modelled: the
+  removal of the duplicates which `**` can give with the wrapping; the path arguments of `JSON_SEARCH`.
 - **8.23 `INTERVAL` with a fraction in the MySQL family** (iteration 10): `d + INTERVAL 1.2 SECOND`, `INTERVAL '1.9'
   MINUTE` (the fraction is dropped or rounded by the unit), `INTERVAL true MICROSECOND`: 11 cases of TiDB `time`.
   **Status: DONE** (iteration 11). The `interval` of the MySQL family follows `get_interval_value`; a sum with a

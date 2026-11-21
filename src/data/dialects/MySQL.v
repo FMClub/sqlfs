@@ -212,9 +212,6 @@ Definition my_rx : rx_env :=
             (negb (Nat.eqb (ms_regex ss) 1))
             "Illegal argument to a regular expression".
 
-(** a path with a wildcard *)
-Definition json_wild (t : string) : bool := match index 0 "*" t with Some _ => true | None => false end.
-
 (** the JSON functions of TODO 2.8: a document, then paths (and values); NULL if one is NULL *)
 Definition my_json_update (create replace : bool) (l : list value) : value :=
   match l with
@@ -227,8 +224,7 @@ Definition my_json_update (create replace : bool) (l : list value) : value :=
                | nil => Some acc
                | p :: v :: r' => match text_of p with
                                  (* a path with [*] or [**] is not allowed in the functions which change a document *)
-                                 | Some t => if json_wild t then None else
-                                             match parse_path t with
+                                 | Some t => match my_path t with
                                              | Some st => go r' (set_path create replace st acc (my_json_of_value v))
                                              | None => None end
                                  | None => None end
@@ -248,8 +244,7 @@ Definition my_json_paths (f : list step -> json -> option json) (l : list value)
     else match my_json_doc d with
          | Some (Some j) =>
            let r := fold_left (fun acc p => match acc, text_of p with
-                                            | Some a, Some t => if json_wild t then None else
-                                                                match parse_path t with Some st => f st a | None => None end
+                                            | Some a, Some t => match my_path t with Some st => f st a | None => None end
                                             | _, _ => None end) paths (Some j) in
            match r with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
          | Some None => Value_J None
@@ -268,7 +263,7 @@ Definition my_json_pathvals (f : list step -> json -> json -> option json) (l : 
                match r with
                | nil => Some acc
                | p :: v :: r' => match text_of p with
-                                 | Some t => match parse_path t with
+                                 | Some t => match my_path t with
                                              | Some st => match f st acc (my_json_of_value v) with Some a => go r' a | None => None end
                                              | None => None end
                                  | None => None end
@@ -577,7 +572,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                                        | _, _ => Value_D None end
                                | _ => Value_D None end)
   (* JSON *)
-  :: ("json_extract", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
+  :: ("json_extract", fun l => match l with _ :: _ :: _ => my_json_extract l | _ => Value_J None end)
   (* TODO 2.8: updates by path, removal, arrays, merges, depth, search, overlaps, pretty printing *)
   :: ("json_set", my_json_update true true) :: ("json_insert", my_json_update true false)
   :: ("json_replace", my_json_update false true)
@@ -595,11 +590,12 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                              | _ => Value_Z None end)
   :: ("json_contains_path", fun l => match l with
                                      | d :: mode :: paths =>
+                                       if existsb is_null l then Value_Z None else
                                        match my_json_doc d, text_of mode with
                                        | Some (Some j), Some m =>
                                          let found := map (fun p => match text_of p with
-                                                                    | Some t => match parse_path t with
-                                                                                | Some st => match follow st j with Some _ => Some true | None => Some false end
+                                                                    | Some t => match my_seek j t with
+                                                                                | Some (_, r) => Some (match r with nil => false | _ => true end)
                                                                                 | None => None end
                                                                     | None => None end) paths in
                                          if existsb (fun x => match x with None => true | _ => false end) found
@@ -614,7 +610,9 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                        | _, _ => Value_Z None end
                                      | _ => Value_Z None end)
   :: ("json_search", fun l => match l with
-                              | d :: mode :: str :: _ =>
+                              | d :: mode :: str :: rest =>
+                                (* a NULL path is a NULL result; a NULL escape is the default one *)
+                                if existsb is_null (skipn 1 rest) then Value_J None else
                                 match my_json_doc d, text_of mode, text_of str with
                                 | Some (Some j), Some m, Some t =>
                                   let ps := search_paths (json_size j) t "$" j in
@@ -639,8 +637,8 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                             | None => Value_Err "Invalid JSON text in argument 1"
                                             | _ => Value_string None end
                               | _ => Value_string None end)
-  :: ("->", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
-  :: ("->>", fun l => match l with d :: p :: nil => my_json_unquote (my_json_extract d p) | _ => Value_string None end)
+  :: ("->", fun l => match l with _ :: _ :: _ => my_json_extract l | _ => Value_J None end)
+  :: ("->>", fun l => match l with d :: p :: nil => my_json_unquote (my_json_extract l) | _ => Value_string None end)
   :: ("json_unquote", fun l => match l with v :: nil => my_json_unquote v | _ => Value_string None end)
   :: ("json_object", fun l => 
         let fix pairs (l : list value) : option (list (string * json)) :=
@@ -669,7 +667,9 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                             | _ => Value_string None end)
   :: ("json_length", fun l => match l with 
                               | v :: nil => match my_json_doc v with Some (Some j) => Value_Z (Some (json_length j)) | Some None => Value_Z None | None => Value_Err "Invalid JSON text in argument 1" end
-                              | v :: p :: nil => match my_json_extract v p with Value_J (Some (t, _)) => match parse_json t with Some j => Value_Z (Some (json_length j)) | None => Value_Z None end | Value_Err e => Value_Err e | _ => Value_Z None end
+                              | v :: p :: nil => match (match text_of p with
+                                                        | Some t => match my_path t with Some _ => my_json_extract l | None => Value_Err "Invalid JSON path expression" end
+                                                        | None => Value_J None end) with Value_J (Some (t, _)) => match parse_json t with Some j => Value_Z (Some (json_length j)) | None => Value_Z None end | Value_Err e => Value_Err e | _ => Value_Z None end
                               | _ => Value_Z None end)
   :: ("json_keys", fun l => match l with 
                             | v :: nil => match my_json_doc v with Some (Some (JObj ms)) => VJ 0 (JArr (map (fun m => JStr (fst m)) (normalize_members ms))) | Some _ => Value_J None | None => Value_Err "Invalid JSON text in argument 1" end

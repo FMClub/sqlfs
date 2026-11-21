@@ -116,3 +116,41 @@ Proof. check. Qed.
 
 Example lite_array : text SQLite (fn "json_array" [int 1; str "two"; cst NullZ]) = "[1,""two"",null]".
 Proof. check. Qed.
+
+(** Paths with wildcards and ranges in the MySQL family (TODO 8.22; the examples of "The JSON Data Type" and
+    "Functions That Search JSON Values" of the MySQL manual). *)
+Definition jx (d : string) (ps : list string) := text MySQL (fn "json_extract" (str d :: map str ps)).
+Example my_wild :
+  (jx "[10, 20, [30, 40]]" ["$[1]"],
+   jx "[10, 20, [30, 40]]" ["$[1]"; "$[0]"],
+   jx "[10, 20, [30, 40]]" ["$[2][*]"],
+   jx "{""a"": 1, ""b"": 2, ""c"": [3, 4, 5]}" ["$.*"],
+   jx "{""a"": 1, ""b"": 2, ""c"": [3, 4, 5]}" ["$.c[*]"],
+   jx "{""a"": {""b"": 1}, ""c"": {""b"": 2}}" ["$**.b"])
+  = ("20", "[20, 10]", "[30, 40]", "[1, 2, [3, 4, 5]]", "[3, 4, 5]", "[1, 2]").
+Proof. check. Qed.
+Example my_ranges :
+  (jx "[1, 2, 3, 4, 5]" ["$[1 to 3]"],
+   jx "[1, 2, 3, 4, 5]" ["$[last-3 to last-1]"],
+   jx "[1, 2, 3, 4, 5]" ["$[last]"],
+   jx "[1, 2, 3, 4, 5]" ["$[last-1]"],
+   jx "[1, 2, 3, 4, 5]" ["$[7]"],
+   jx "[1, 2, 3, 4, 5]" ["$[3 to 9]"])
+  = ("[2, 3, 4]", "[2, 3, 4]", "5", "4", "NULL", "[4, 5]").
+Proof. check. Qed.
+(** a value which is not an array is taken as an array of one element by [[0]] and [[last]]; a path with a
+    wildcard gives an array even for one value; [**] alone or tripled is not a path *)
+Example my_autowrap :
+  (jx "{""a"": 1}" ["$[0]"], jx "{""a"": 1}" ["$[last]"], jx "{""a"": 1}" ["$[1]"], jx "{""a"": 1}" ["$[0 to 2].a"],
+   jx "{""a"": 1}" ["$.*"], jx "{""a"": 1}" ["$**"], jx "{""a"": 1}" ["$***.a"], jx "{""a"": 1}" ["$[1"])
+  = ("{""a"": 1}", "{""a"": 1}", "NULL", "[1]", "[1]", "ERROR", "ERROR", "ERROR").
+Proof. check. Qed.
+(** the functions which take one place of the document reject the wildcards *)
+Example my_wild_rejected :
+  (text MySQL (fn "json_set" [str "{}"; str "$.*"; str ""]),
+   text MySQL (fn "json_remove" [str "{}"; str "$.*"]),
+   text MySQL (fn "json_length" [str "[1, 2]"; str "$[*]"]),
+   text MySQL (fn "json_contains_path" [str "{""a"": {""b"": 1}}"; str "one"; str "$**.b"]),
+   text MySQL (fn "json_contains_path" [str "{""a"": {""b"": 1}}"; str "all"; str "$.a"; str "$.*.c"]))
+  = ("ERROR", "ERROR", "ERROR", "1", "0").
+Proof. check. Qed.

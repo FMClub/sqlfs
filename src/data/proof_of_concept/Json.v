@@ -275,6 +275,140 @@ Definition parse_path (s : string) : option (list step) :=
   | _ => None
   end.
 
+(** * Paths with wildcards (MySQL: [sql-common/json_path.cc], [json_dom.cc] [find_child_doms])
+
+    [.*] is every member of an object, [[*]] every element of an array, [[m to n]] a range of elements,
+    [**] the value and all its descendants; [last] and [last-n] count the elements from the end (a negative
+    index, as in [follow]). An array step whose index would be in a one-element array ([0], [last], a range
+    with them) applies to a value which is not an array as if it were wrapped in one. *)
+Inductive wstep : Type := WS : step -> wstep | WKeys | WIdxs | WRange : Z -> Z -> wstep | WDeep.
+
+Fixpoint no_spaces (s : string) : string :=
+  match s with
+  | String " " r => no_spaces r
+  | String c r => String c (no_spaces r)
+  | EmptyString => EmptyString
+  end.
+
+(** an index: [n], [last], [last-n] *)
+Definition parse_cell_index (s : string) : option Z :=
+  match s with
+  | String "l" (String "a" (String "s" (String "t" r))) =>
+    match r with
+    | EmptyString => Some (-1)%Z
+    | String "-" n => match digits_value n with Some v => Some (-1 - v)%Z | None => None end
+    | _ => None
+    end
+  | _ => digits_value s
+  end.
+
+(** the text between the brackets, without its spaces *)
+Definition parse_cell (s : string) : option wstep :=
+  if String.eqb s "*" then Some WIdxs
+  else match index 0 "to" s with
+       | Some k => match parse_cell_index (substring 0 k s),
+                         parse_cell_index (substring (k + 2) (String.length s - (k + 2)) s) with
+                   | Some a, Some b => Some (WRange a b)
+                   | _, _ => None end
+       | None => match parse_cell_index s with Some i => Some (WS (SIdx i)) | None => None end
+       end.
+
+Fixpoint parse_wpath_steps (fuel : nat) (s : string) : option (list wstep) :=
+  match fuel with
+  | O => None
+  | S f =>
+    let cont (w : wstep) (rest : string) :=
+        match parse_wpath_steps f rest with Some p => Some (w :: p) | None => None end in
+    match s with
+    | EmptyString => Some nil
+    | String " " r => parse_wpath_steps f r
+    (* [**] is followed by a step which is not [**] *)
+    | String "*" (String "*" r) => match r with
+                                   | EmptyString | String "*" _ => None
+                                   | _ => cont WDeep r end
+    | String "." (String "*" r) => cont WKeys r
+    | String "." (String """" r) =>
+      match take_str (String.length r) r with
+      | Some (k, rest) => cont (WS (SKey k)) rest
+      | None => None
+      end
+    | String "." r =>
+      let k := (fix key (t : string) : string :=
+                  match t with
+                  | String c t' => if (Ascii.eqb c "." || Ascii.eqb c "[" || Ascii.eqb c "*" || Ascii.eqb c " ")%bool
+                                   then EmptyString else String c (key t')
+                  | EmptyString => EmptyString end) r in
+      if String.eqb k EmptyString then None
+      else cont (WS (SKey k)) (substring (String.length k) (String.length r - String.length k) r)
+    | String "[" r =>
+      let inside := (fix upto (t : string) : string :=
+                       match t with
+                       | String "]" _ => EmptyString
+                       | String c t' => String c (upto t')
+                       | EmptyString => EmptyString end) r in
+      if Nat.leb (String.length r) (String.length inside) then None   (* no closing bracket *)
+      else match parse_cell (no_spaces inside) with
+           | Some w => cont w (substring (S (String.length inside)) (String.length r - S (String.length inside)) r)
+           | None => None
+           end
+    | _ => None
+    end
+  end.
+
+Definition parse_wpath (s : string) : option (list wstep) :=
+  match s with
+  | String "$" r => parse_wpath_steps (S (String.length r)) r
+  | _ => None
+  end.
+
+(** the path without wildcard nor range *)
+Fixpoint wpath_exact (p : list wstep) : option (list step) :=
+  match p with
+  | nil => Some nil
+  | WS st :: r => match wpath_exact r with Some l => Some (st :: l) | None => None end
+  | _ => None
+  end.
+
+(** the position of an index in an array of [n] elements *)
+Definition cell_pos (n i : Z) : Z := if Z.ltb i 0 then (n + i)%Z else i.
+
+(** the values at a path, in the order of the document *)
+Fixpoint seek (fuel : nat) (p : list wstep) (j : json) : list json :=
+  match fuel with
+  | O => nil
+  | S f =>
+    match p with
+    | nil => j :: nil
+    | WS (SKey k) :: r =>
+      match j with
+      | JObj l => match find (fun m => String.eqb (fst m) k) (rev l) with Some (_, v) => seek f r v | None => nil end
+      | _ => nil
+      end
+    | WS (SIdx i) :: r =>
+      match j with
+      | JArr l => let i := cell_pos (Z.of_nat (List.length l)) i in
+                  if Z.ltb i 0 then nil
+                  else match nth_error l (Z.to_nat i) with Some v => seek f r v | None => nil end
+      | _ => if Z.eqb (cell_pos 1 i) 0 then seek f r j else nil
+      end
+    | WKeys :: r => match j with JObj l => flat_map (fun m => seek f r (snd m)) l | _ => nil end
+    | WIdxs :: r => match j with JArr l => flat_map (seek f r) l | _ => nil end
+    | WRange a b :: r =>
+      let range (n : Z) := (Z.to_nat (Z.max 0 (cell_pos n a)), Z.to_nat (Z.min n (cell_pos n b + 1))) in
+      match j with
+      | JArr l => let '(lo, hi) := range (Z.of_nat (List.length l)) in
+                  flat_map (seek f r) (firstn (hi - lo) (skipn lo l))
+      | _ => let '(lo, hi) := range 1%Z in if Nat.ltb lo hi then seek f r j else nil
+      end
+    | WDeep :: r =>
+      seek f r j ++ match j with
+                    | JArr l => flat_map (seek f p) l
+                    | JObj l => flat_map (fun m => seek f p (snd m)) l
+                    | _ => nil
+                    end
+    end
+  end.
+
 (** * Types and lengths *)
 Definition json_type_name (j : json) : string :=
   match j with

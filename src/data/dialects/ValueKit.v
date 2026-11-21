@@ -734,16 +734,41 @@ Definition my_json_doc (v : value) : option (option json) :=
               end
   end.
 
-Definition my_json_extract (doc p : value) : value :=
-  match my_json_doc doc, text_of p with
-  | None, _ => Value_Err "Invalid JSON text in argument 1"
-  | Some None, _ => Value_J None
-  | Some (Some d), Some path => 
-    match parse_path path with
-    | Some st => match follow st d with Some r => VJ 0 r | None => Value_J None end
-    | None => Value_Err "Invalid JSON path expression"
+(** a path without wildcard nor range (the functions which change a document, [JSON_LENGTH], ...) *)
+Definition my_path (t : string) : option (list step) :=
+  match parse_wpath t with Some w => wpath_exact w | None => None end.
+
+(** the values at a path of the MySQL family, and whether the path may have several *)
+Definition my_seek (d : json) (t : string) : option (bool * list json) :=
+  match parse_wpath t with
+  | Some w => Some (match wpath_exact w with Some _ => false | None => true end,
+                    seek (List.length w + json_size d + 1) w (normalize d))
+  | None => None
+  end.
+
+(** [JSON_EXTRACT (doc, path, ...)]: the value at the path; with several paths, or a path with a wildcard or a
+    range, the array of the values found; NULL if there is none or if an argument is NULL *)
+Definition my_json_extract (l : list value) : value :=
+  match l with
+  | doc :: paths =>
+    match my_json_doc doc with
+    | None => Value_Err "Invalid JSON text in argument 1"
+    | Some None => Value_J None
+    | Some (Some d) =>
+      if existsb is_null paths then Value_J None
+      else let found := map (fun p => match text_of p with Some t => my_seek d t | None => None end) paths in
+           if existsb (fun x => match x with None => true | _ => false end) found
+           then Value_Err "Invalid JSON path expression"
+           else let vals := flat_map (fun x => match x with Some (_, r) => r | None => nil end) found in
+                let many := existsb (fun x => match x with Some (b, _) => b | None => false end) found
+                            || Nat.ltb 1 (List.length paths) in
+                match vals with
+                | nil => Value_J None
+                | v :: nil => VJ 0 (if many then JArr vals else v)
+                | _ => VJ 0 (JArr vals)
+                end
     end
-  | _, None => Value_J None
+  | nil => Value_J None
   end.
 
 Definition my_json_unquote (v : value) : value :=
