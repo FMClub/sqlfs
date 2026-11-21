@@ -759,3 +759,9 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   skipped: 19 more cases are translated (775), all pass.
 - **8.15 Speed of the text of a long decimal** (iteration 6): `1.234 ^ 5678` (519 digits) takes 70 seconds to
   check, most of it in the conversion to text.
+- **8.16 The calendar conversions are not proved** (iteration 8; the bug of 8.13 was in them): prove that
+  `civil_from_days` and `days_from_civil` are inverse of each other.
+  **Status: DONE** (iteration 8). `src/data/proof_of_concept/TemporalFacts.v`: `civil_round_trip` (every day),
+  `days_round_trip` (every valid date), `civil_valid`; by the periodicity of both functions (400 years are 146097
+  days) and a check of one period by computation.
+

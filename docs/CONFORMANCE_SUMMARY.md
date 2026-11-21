@@ -7,7 +7,7 @@ for the suites, the method and the explanation of each failure).
 |---|---|---|---|---|---|
 | OceanBase test suite (run 20) | `OceanBaseMySQL` | 775 | 0 | 1 | 774 |
 | PostgreSQL regression tests (run 9) | `PostgreSQL` | 514 | 120 | 0 | 394 |
-| MariaDB mysql-test, 44 files (run 3) | `MariaDB` | 346 | 6 | 32 | 308 |
+| MariaDB mysql-test, 44 files (run 4) | `MariaDB` | 396 | 7 | 23 | 366 |
 | TiDB integrationtest (run 2) | `TiDB` | 1935 | 125 | 47 | 1763 |
 | MySQL mysql-test (run 2) | `MySQL` | 1122 | 118 | 0 | 1004 |
 

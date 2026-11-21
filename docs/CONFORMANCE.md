@@ -154,6 +154,10 @@ connection or change of `sql_mode`; the lines printed by `--echo` are not rows. 
 | `win_empty_over:2` | `ROW_NUMBER () OVER ()`: the numbering of the rows is not specified (no `ORDER BY`) |
 | `group_by:286` | `DATE ('20050606')`: a string of digits read as a date; fixed after the run (`my_ts_of`) |
 
+Run 4 (iteration 8, after the translator forgets the options of earlier tables of the same name): **396** queries
+translated, **7** fail (the cases of the table above without `group_by:286`, and `win_percentile:59`, the same
+`MEDIAN ... OVER ()` through a view); `subselect` (23 cases) is not run (memory limit of 5 GB).
+
 Non-recursive `WITH` (since the run above; TODO 5.6): `cte_nonrecursive.result` and `cte_nonrecursive_not_embedded.result`, 37 queries translated, 37 pass.
 
 Found and fixed by the MariaDB runs: the decimals of `VARIANCE`/`STD` (argument decimals + 4, 20 cases), the maximal
