@@ -159,6 +159,18 @@ def conditions_of_a_block_with_grouping_sets():
 
 
 @test
+def window_in_an_aggregate():
+    """TODO 8.25: a window function in the argument of an aggregate cannot be written in SqlFull: no case."""
+    out = translate('MariaDB', {'a': (
+        "create table t1 (i int);\ninsert into t1 values (1),(2);\n"
+        "select SUM( SUM(i) OVER () ) from t1;\n"
+        "ERROR HY000: Window function is not allowed in window specification or aggregate\n"
+        "select SUM(i) OVER () from t1;\nSUM(i) OVER ()\n3\n3\n")})['a']
+    assert case(out, 'a:2') == '', out
+    assert case(out, 'a:3') != '', out
+
+
+@test
 def result_files_of_the_same_name():
     """TODO 8.26: two result files of the same name in different directories give two files of cases."""
     with tempfile.TemporaryDirectory() as d:

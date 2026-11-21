@@ -39,7 +39,9 @@ Definition maria_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Lateral | F_Frame_Groups | F_Nulls_Order 
   | F_Grouping_Sets | F_Cube | F_Fetch_Percent
-  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate => false
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate | F_Frame_Bounds | F_Ntile_Zero => false
+  (* [ER_NO_ORDER_LIST_IN_WINDOW_SPEC] *)
+  | F_Shift_No_Order => false
   | _ => true
   end.
 

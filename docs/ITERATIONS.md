@@ -22,3 +22,4 @@ next item. One entry per iteration, newest last.
 | 14 | TODO 8.25 (part), 8.26 | acceptance: aggregates in `GROUP BY`, `SELECT DISTINCT` ordered by an unselected expression; result files of the same name no longer overwrite each other (TiDB: 12 more files checked) | TODO 8.27 (`TRIM` forms), 8.28 (replay of the scripts) |
 | 15 | TODO 8.21, 8.27 | `ABS` / `ROUND` out of the range of `BIGINT`; `TRIM (LEADING FROM s)` | — |
 | 16 | TODO 8.29: the relation theorems of 6.1 and 6.3 | two hypotheses (`Hu`, `Hperm`) were false for the instance: replaced by ones which hold; `Test_Relate.v` instantiates `sql_full_agree3` | TODO 8.30 (`Hnull` and the typed NULLs) |
+| 17 | TODO 8.25 (windows) | acceptance: `NTILE (0)`, frames which start after their end, `LAG` / `LEAD` without `ORDER BY` in MariaDB; the extracted interpreter still builds and agrees with `vm_compute` on two files | — |

@@ -201,7 +201,15 @@ Inductive feature : Type :=
   | F_Group_Aggregate
   (** [SELECT DISTINCT ... ORDER BY e] where [e] is not one of the selected expressions (an error of PostgreSQL,
       of Oracle, and of the MySQL family with [ONLY_FULL_GROUP_BY]; SQLite takes the value of a row) *)
-  | F_Order_Not_Selected.
+  | F_Order_Not_Selected
+  (** a window frame whose start is after its end by its form ([BETWEEN 1 FOLLOWING AND CURRENT ROW], [BETWEEN
+      CURRENT ROW AND 1 PRECEDING], a start [UNBOUNDED FOLLOWING], an end [UNBOUNDED PRECEDING]): no engine has it *)
+  | F_Frame_Bounds
+  (** [NTILE (0)]: no engine has it *)
+  | F_Ntile_Zero
+  (** [LAG] or [LEAD] over a window without [ORDER BY] (an error of MariaDB: "No order list in window
+      specification") *)
+  | F_Shift_No_Order.
 
 Record dialect : Type :=
   mk_dialect
@@ -598,10 +606,28 @@ Definition nulls_features (o : sorder) : list use :=
   | O_By _ _ _ => (U_Feature F_Nulls_Order) :: nil
   end.
 
+(** the bounds of a frame whose start is after its end, by their form *)
+Definition bounds_illegal (lo hi : frame_bound) : bool :=
+  match lo, hi with
+  | Unbounded_Following, _ | _, Unbounded_Preceding => true
+  | (Following _ | Following_Q _), (Current_Row | Preceding _ | Preceding_Q _) => true
+  | Current_Row, (Preceding _ | Preceding_Q _) => true
+  | _, _ => false
+  end.
+
 Fixpoint frame_bound_is_groups (f : frame) : list use :=
   match f with
-  | Frame_Groups _ _ => (U_Feature F_Frame_Groups) :: nil
+  | Frame_Groups lo hi => (U_Feature F_Frame_Groups) :: (if bounds_illegal lo hi then (U_Feature F_Frame_Bounds) :: nil else nil)
+  | Frame_Rows lo hi | Frame_Range lo hi => if bounds_illegal lo hi then (U_Feature F_Frame_Bounds) :: nil else nil
   | Frame_Excl f' _ => (U_Feature F_Frame_Exclusion) :: frame_bound_is_groups f'
+  end.
+
+(** what a window function uses by its form: [ordered] tells whether its window has an [ORDER BY] *)
+Fixpoint wfun_static (f : swfun) (ordered : bool) : list use :=
+  match f with
+  | W_Ntile 0%nat => U_Feature F_Ntile_Zero :: nil
+  | W_Lag _ _ _ | W_Lead _ _ _ => if ordered then nil else U_Feature F_Shift_No_Order :: nil
+  | W_Opts f' _ _ => wfun_static f' ordered
   | _ => nil
   end.
 
@@ -694,7 +720,8 @@ with squery_uses (q : squery) {struct q} : list use :=
                        (if ign then (U_Feature F_Null_Treatment) :: nil else nil) ++
                        (if last then (U_Feature F_From_Last) :: nil else nil) ++ fuses f'
                      | _ => nil
-                     end) f
+                     end) f ++
+                  wfun_static f (match lo with nil => false | _ => true end)
                 end) lw
   | SQ_With _ q1 q2 => (U_Feature F_With) :: squery_uses q1 ++ squery_uses q2
   | SQ_WithRec _ _ q1 q2 q3 =>

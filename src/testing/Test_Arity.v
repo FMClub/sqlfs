@@ -95,3 +95,25 @@ Proof. check. Qed.
 Example distinct_order_selected :
   accepts_q PostgreSQL (distinct_order (col v1)) = true /\ accepts_q PostgreSQL (distinct_order (col c0)) = true.
 Proof. split; check. Qed.
+
+(** static errors of the windows (MariaDB's [win_*] tests; TODO 8.25): [NTILE (0)] and a frame which starts after
+    its end are rejected by every dialect, [LAG] over a window without [ORDER BY] by MariaDB *)
+Definition win (f : swfun TNull relname) (lo : list (sorder TNull relname)) :=
+  window (select_full Set_All (s_list [as_ (col v1) c0]) [tt] c_true g_fine c_true) [w_as f [] lo (Attr_Z "w")].
+Example ntile_zero :
+  map (fun d => accepts_q d (win (w_ntile 0) [o_by (col c0) Asc])) [PostgreSQL; MySQL; MariaDB; SQLite] = [false; false; false; false].
+Proof. check. Qed.
+Example ntile_two :
+  map (fun d => accepts_q d (win (w_ntile 2) [o_by (col c0) Asc])) [PostgreSQL; MySQL; MariaDB; SQLite] = [true; true; true; true].
+Proof. check. Qed.
+Example lag_without_order :
+  map (fun d => accepts_q d (win (W_Lag (col c0) 1 (cst NullZ)) [])) [PostgreSQL; MySQL; MariaDB] = [true; true; false].
+Proof. check. Qed.
+Example frame_start_after_end :
+  map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Rows (Following 0) Current_Row)) [o_by (col c0) Asc]))
+      [PostgreSQL; MySQL; MariaDB; SQLite] = [false; false; false; false].
+Proof. check. Qed.
+Example frame_ok :
+  map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Rows (Preceding 1) Current_Row)) [o_by (col c0) Asc]))
+      [PostgreSQL; MySQL; MariaDB; SQLite] = [true; true; true; true].
+Proof. check. Qed.

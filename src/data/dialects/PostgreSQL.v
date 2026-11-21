@@ -764,7 +764,7 @@ Definition PostgreSQL : vsem :=
           canon_numeric
           false
           (fun f => match f with F_Bare_Column | F_Fetch_Percent | F_Null_Treatment | F_From_Last | F_Rec_Aggregate
-                                  | F_Group_Aggregate | F_Order_Not_Selected => false | _ => true end)
+                                  | F_Group_Aggregate | F_Order_Not_Selected | F_Frame_Bounds | F_Ntile_Zero => false | _ => true end)
           false
           (* an escape of more than one character: [invalid escape string] *)
           (fun p l => bad_escape pg_skit p l || rx_bad pg_rx ("~" :: "~*" :: "!~" :: "!~*" :: nil)%string p l)

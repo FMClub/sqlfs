@@ -1989,6 +1989,10 @@ class QTr:
                         return ('icol', 'w%d' % k)
                 wins.append(e)
                 return ('icol', 'w%d' % (len(wins) - 1))
+            # a window function in the argument of an aggregate is an error of every engine ("aggregate function
+            # calls cannot contain window function calls"); the syntax of SqlFull cannot write it: not translated
+            if is_agg_call(e) and has_wcall(e):
+                raise Skip('window function in an aggregate')
             if not has_wcall(e):
                 return icol(e)
             if e[0] in ('subq', 'exists', 'insub', 'quant'):
