@@ -120,9 +120,9 @@ destruct e as [f | a f | f la]; simpl.
   + destruct env2 as [ | [[sa2 g2] l2] env2]; [inversion He | ].
     inversion He; subst; simpl.
     assert (IH := IHenv1 env2 H4).
-    destruct (find_eval_env T env1 (A_agg T a f)); destruct (find_eval_env T env2 (A_agg T a f));
-      try discriminate IH; trivial.
     unfold equiv_env_slice in H2; destruct H2 as [K1 K2].
+    rewrite (binds_ag_eq T _ _ _ K1).
+    destruct (binds_ag T sa2 (A_agg T a f)); [ | exact IH].
     rewrite <- (is_a_suitable_env_eq _ _ _ _ _ _ K1 H4).
     case (is_a_suitable_env T sa1 env1 (A_agg T a f)); apply refl_equal.
 - apply forallb_eq; intros x Hx.
@@ -147,16 +147,12 @@ intros e env1; induction env1 as [ | [[sa1 g1] l1] env1]; intros [ | [[sa2 g2] l
 - inversion He.
 - inversion He; subst.
   assert (IH := IHenv1 _ H4).
-  simpl.
-  destruct (find_eval_env T env1 e) as [_l1 | ];
-    destruct (find_eval_env T env2 e) as [_l2 | ]; try contradiction IH.
-  + assumption.
-  + simpl in H2.
-    assert (H1 := proj1 H2).
-    rewrite <- (is_a_suitable_env_eq T e _ _ _ _ H1 H4).
-    case (is_a_suitable_env T sa1 env1 e).
-    * constructor 2; trivial.
-    * trivial.
+  simpl in H2; assert (H1 := proj1 H2).
+  simpl; rewrite (binds_ag_eq T _ _ _ H1); destruct (binds_ag T sa2 e); [ | exact IH].
+  rewrite <- (is_a_suitable_env_eq T e _ _ _ _ H1 H4).
+  case (is_a_suitable_env T sa1 env1 e).
+  + constructor 2; trivial.
+  + trivial.
 Qed.
 
 Lemma find_eval_env_weak_weak_eq :
@@ -178,32 +174,19 @@ Lemma find_eval_env_weak_weak_eq :
     end.
 Proof.
 intros e env1; induction env1 as [ | [[sa1 g1] l1] env1]; intros env2 s g l Hg; simpl.
-- case_eq (find_eval_env T env2 e); [intros; trivial | ].
-  intro H; simpl.
-  assert (Aux : is_a_suitable_env T (labels T (default_tuple T s)) env2 e =
+- assert (Aux : is_a_suitable_env T (labels T (default_tuple T s)) env2 e =
                 is_a_suitable_env T s env2 e).
   {
     apply is_a_suitable_env_eq; [ | apply equiv_env_weak_equiv_env; apply equiv_env_refl].
     apply labels_mk_tuple.
   }
-  rewrite Aux.
-  case (is_a_suitable_env T s env2 e); trivial.
-- assert (IH := IHenv1 env2 s g l).
-  case_eq (find_eval_env T (env1 ++ (s, Group_By T g, l) :: env2) e);
-    [intros ee Hee; rewrite Hee in IH;
-     case_eq 
-       (find_eval_env 
-          T (env1 ++
-            (labels T (default_tuple T s), Group_Fine T, default_tuple T s :: nil) :: env2) e);
-    [intros ee' Hee' | intro Hee']; rewrite Hee' in IH; [trivial | contradiction IH] | ].
+  rewrite Aux, (binds_ag_eq T (labels T (default_tuple T s)) s e) by (apply labels_mk_tuple).
+  destruct (binds_ag T s e); [case (is_a_suitable_env T s env2 e); trivial | ].
+  case (find_eval_env T env2 e); trivial.
+- assert (IH := IHenv1 env2 s g l Hg).
+  destruct (binds_ag T sa1 e); [ | exact IH].
   case_eq (is_a_suitable_env T sa1 (env1 ++ (s, Group_By T g, l) :: env2) e); [ | intros; trivial].
-  intros H1 H2.
-  case_eq 
-       (find_eval_env 
-          T (env1 ++
-            (labels T (default_tuple T s), Group_Fine T, default_tuple T s :: nil) :: env2) e);
-  [intros; trivial | ].
-  intro H4.
+  intros H1.
   assert (Aux : is_a_suitable_env 
                   T sa1
                   (env1 ++ (labels T (default_tuple T s), Group_Fine T, 
@@ -387,17 +370,16 @@ destruct f as [f | ag f | f l].
     * case_eq (is_built_upon_ft T nil f); intro Hf; rewrite Hf in He; [ | discriminate He].
       injection He; intro; subst e.
       apply (is_built_upon_ft_variables_ft_sub _ _ _ Hf).
-    * case_eq (find_eval_env T env (A_agg T ag f)).
-      -- intros e2 He2.
+    * destruct (binds_ag T s1 (A_agg T ag f)) eqn:Bd.
+      2: { rename e into e2; rename He into He2.
          rewrite Fset.subset_spec; intros a Ha; simpl.
          rewrite Fset.mem_union, Bool.Bool.orb_true_iff; right.
          revert a Ha; rewrite <- Fset.subset_spec; apply IHenv with e2; [ | | assumption].
          ++ refine (le_trans _ _ _ _ Hn); apply plus_le_compat_l; simpl.
             apply le_plus_r.
          ++ simpl in We; rewrite !Bool.Bool.andb_true_iff in We.
-            apply (proj2 We).
-      -- intro He'; rewrite He' in He.
-         unfold is_a_suitable_env in He.
+            apply (proj2 We). }
+      -- unfold is_a_suitable_env in He.
          case_eq (is_built_upon_ag T
                     (map (fun a : attribute T => A_Expr T (F_Dot T a)) ({{{s1}}}) ++
                          flat_map (groups_of_env_slice T) env) (A_agg T ag f)); 
@@ -581,29 +563,17 @@ destruct x as [f | a f | fc lf]; simpl.
     [ | intros _ Abs; discriminate Abs].
   intros e He _.
   clear IHn; induction env1 as [ | [[sa1 g1] l1] env1]; simpl in He; simpl.
-  + case_eq (find_eval_env T env2 (A_agg T a f)); [intros; apply refl_equal | ].
-    intro Ke; rewrite Ke in He.
-    case_eq (is_a_suitable_env T s env2 (A_agg T a f)); intro Jf; rewrite Jf in He; 
-      [injection He; clear He; intro; subst e | discriminate He].
-    assert (Aux : is_a_suitable_env T (labels T d) env2 (A_agg T a f) = true).
-    {
-    unfold is_a_suitable_env in *; simpl in Jf; simpl.
-    rewrite (Fset.elements_spec1 _ _ _ Hd).
-    apply Jf.
-    }
-    rewrite Aux; apply refl_equal.
+  + rewrite (binds_ag_eq T (labels T d) s _ Hd).
+    assert (Aux : is_a_suitable_env T (labels T d) env2 (A_agg T a f) = is_a_suitable_env T s env2 (A_agg T a f))
+      by (apply is_a_suitable_env_eq; [exact Hd | apply equiv_env_weak_equiv_env; apply equiv_env_refl]).
+    rewrite Aux; destruct (binds_ag T s (A_agg T a f));
+      [destruct (is_a_suitable_env T s env2 (A_agg T a f)); [reflexivity | discriminate He] | rewrite He; reflexivity].
   + simpl in W; rewrite !Bool.Bool.andb_true_iff in W.
-    case_eq (find_eval_env T (env1 ++ (s, g, l) :: env2) (A_agg T a f)).
-    * intros e' He'; rewrite He' in He; injection He; clear He; intro; subst e'.
-      assert (IH := IHenv1 (proj2 W) He').
-      destruct (find_eval_env T (env1 ++ env_t T env2 d) (A_agg T a f));
-      [apply refl_equal | discriminate IH].
-    * intro Ke; rewrite Ke in He.
-      case_eq (is_a_suitable_env T sa1 (env1 ++ (s, g, l) :: env2) (A_agg T a f)); intro Kf;
-        rewrite Kf in He; [ | discriminate He].
-      injection He; clear He; intro; subst e.
-      case_eq (find_eval_env T (env1 ++ env_t T env2 d) (A_agg T a f));
-        [intros; apply refl_equal | intro Jf].
+    destruct (binds_ag T sa1 (A_agg T a f)) eqn:Bd.
+    2: { exact (IHenv1 (proj2 W) He). }
+    case_eq (is_a_suitable_env T sa1 (env1 ++ (s, g, l) :: env2) (A_agg T a f)); intro Kf;
+      rewrite Kf in He; [ | discriminate He].
+    injection He; clear He; intro; subst e.
       revert Kf; unfold is_a_suitable_env; simpl.
       rewrite !Oset.mem_bool_app.
       case_eq (Oset.mem_bool (OAggT T) (A_agg T a f)
@@ -622,9 +592,21 @@ destruct x as [f | a f | fc lf]; simpl.
               [rewrite (empty_vars_is_built_upon_ft _ _ Nf), Bool.Bool.orb_true_r; 
                apply refl_equal | ].
             rewrite Nf, Bool.Bool.orb_false_l in Wf.
-            assert (Pf := find_eval_env_none _ _ _ _ Ke); simpl in Pf.
-            case_eq (find_eval_env T env2 (A_agg T a f));
-              [intros e He; rewrite He in Pf; discriminate Pf | intro Qf; rewrite Qf in Wf].
+            destruct (binds_ag T (labels T (default_tuple T s)) (A_agg T a f)) eqn:Bs.
+            2: { (* the aggregate would be found in [env2], whose columns are disjoint from [sa1] *)
+                 exfalso.
+                 assert (Vf : variables_ag T (A_agg T a f) subS
+                                Fset.Union (A T) (map (fun x => match x with (s, _, _) => s end) env2)).
+                 { apply well_formed_ag_variables_ag_env; [exact (proj2 W') | ].
+                   simpl; rewrite Nf; exact Wf. }
+                 unfold binds_ag in Bd; rewrite existsb_exists in Bd; destruct Bd as [x [Ix Bx]].
+                 assert (Vx := Fset.in_elements_mem _ _ _ Ix).
+                 rewrite Fset.subset_spec in Vf; generalize (Vf x Vx); intro Ex.
+                 destruct W1 as [_ W3].
+                 rewrite Fset.is_empty_spec, Fset.equal_spec in W3; generalize (W3 x).
+                 rewrite Fset.mem_inter, Bx, Fset.empty_spec; simpl.
+                 rewrite map_app, Fset.mem_Union_app; simpl; rewrite Fset.mem_union, Ex, !Bool.Bool.orb_true_r.
+                 discriminate. }
             case_eq (is_a_suitable_env T (labels T (default_tuple T s)) env2 (A_agg T a f));
               intro Rf; rewrite Rf in Wf; [ | discriminate Wf].
             unfold is_a_suitable_env in Rf; simpl in Rf; rewrite Bool.Bool.orb_true_iff in Rf.

@@ -53,19 +53,26 @@ Definition groups_of_env_slice (s : env_slice T) :=
 Definition is_a_suitable_env (sa : Fset.set (A T)) (env : env T) f :=
   is_built_upon_ag T (map (fun a => A_Expr _ (F_Dot _ a)) ({{{sa}}}) ++ flat_map groups_of_env_slice env) f.
 
+(** the slice of an aggregate: as in SQL, the innermost block which binds one of the columns of its
+    argument (the aggregate is evaluated on its rows, the other columns being those of the enclosing
+    blocks); [None] when the aggregate is not built on that block and the groups of the enclosing ones *)
+Definition binds_ag (sa : Fset.set (A T)) f := existsb (fun a => a inS? sa) ({{{variables_ag T f}}}).
+
+Lemma binds_ag_eq : forall sa1 sa2 f, sa1 =S= sa2 -> binds_ag sa1 f = binds_ag sa2 f.
+Proof.
+intros sa1 sa2 f H; unfold binds_ag; induction ({{{variables_ag T f}}}) as [ | a l IHl]; [reflexivity | ].
+simpl; rewrite (Fset.mem_eq_2 _ _ _ H), IHl; reflexivity.
+Qed.
+
 Fixpoint find_eval_env (env : env T) f := 
   match env with
     | nil => if is_built_upon_ag T nil f 
              then Some nil
              else None
     | (sa1, _, _) :: env' => 
-      match find_eval_env env' f with
-        | Some _ as e => e
-        | None =>
-          if is_a_suitable_env sa1 env' f
-          then Some env
-          else None
-      end
+      if binds_ag sa1 f
+      then if is_a_suitable_env sa1 env' f then Some env else None
+      else find_eval_env env' f
   end.
 
 Definition unfold_env_slice (s : env_slice T) :=
@@ -122,13 +129,9 @@ Lemma find_eval_env_unfold :
              then Some nil
              else None
     | (sa1, _, _) :: env' => 
-      match find_eval_env env' f with
-        | Some _ as e => e
-        | None =>
-          if is_a_suitable_env sa1 env' f
-          then Some env
-          else None
-      end
+      if binds_ag sa1 f
+      then if is_a_suitable_env sa1 env' f then Some env else None
+      else find_eval_env env' f
   end.
 Proof.
 intros env f; case env; intros; apply refl_equal.
@@ -333,16 +336,12 @@ intros e env1; induction env1 as [ | [[sa1 g1] l1] env1]; intros [ | [[sa2 g2] l
 - inversion He.
 - inversion He; subst.
   assert (IH := IHenv1 _ H4).
-  simpl.
-  destruct (find_eval_env env1 e) as [_l1 | ];
-    destruct (find_eval_env env2 e) as [_l2 | ]; try contradiction IH.
-  + assumption.
-  + simpl in H2.
-    assert (H1 := proj1 H2).
-    rewrite <- (is_a_suitable_env_eq e _ _ _ _ H1 (equiv_env_weak_equiv_env _ _ _ H4)).
-    case (is_a_suitable_env sa1 env1 e).
-    * constructor 2; trivial.
-    * trivial.
+  simpl in H2; assert (H1 := proj1 H2).
+  simpl; rewrite (binds_ag_eq _ _ _ H1); destruct (binds_ag sa2 e); [ | exact IH].
+  rewrite <- (is_a_suitable_env_eq e _ _ _ _ H1 (equiv_env_weak_equiv_env _ _ _ H4)).
+  case (is_a_suitable_env sa1 env1 e).
+  + constructor 2; trivial.
+  + trivial.
 Qed.
 
 Lemma interp_aggterm_eq :
@@ -444,11 +443,20 @@ destruct f as [c | a | fc lf]; [apply refl_equal | | ]; simpl in Hf.
 Qed.
 
 Lemma find_eval_env_none :
-  forall env1 env2 f, find_eval_env (env1 ++ env2) f = None -> find_eval_env env2 f = None.
+  forall env1 env2 f, find_eval_env (env1 ++ env2) f = None ->
+    (forall sa g l, In (sa, g, l) env1 -> binds_ag sa f = false) -> find_eval_env env2 f = None.
 Proof.
-intros env1 env2 f; induction env1 as [ | [[sa1 g1] l1] env1]; simpl; intro H; [exact H | ].
-- destruct (find_eval_env (env1 ++ env2) f); [discriminate H | ].
-  apply IHenv1; apply refl_equal.
+intros env1 env2 f; induction env1 as [ | [[sa1 g1] l1] env1]; simpl; intros H B; [exact H | ].
+rewrite (B sa1 g1 l1 (or_introl eq_refl)) in H; apply IHenv1; [exact H | ].
+intros sa g l I; apply (B sa g l); right; exact I.
+Qed.
+
+Lemma find_eval_env_app_skip :
+  forall env1 env2 f, (forall sa g l, In (sa, g, l) env1 -> binds_ag sa f = false) ->
+    find_eval_env (env1 ++ env2) f = find_eval_env env2 f.
+Proof.
+intros env1 env2 f; induction env1 as [ | [[sa1 g1] l1] env1]; simpl; intro B; [reflexivity | ].
+rewrite (B sa1 g1 l1 (or_introl eq_refl)); apply IHenv1; intros sa g l I; apply (B sa g l); right; exact I.
 Qed.
 
 

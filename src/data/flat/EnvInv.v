@@ -543,12 +543,27 @@ destruct e as [f | a f | f la].
                rewrite compare_list_t; unfold compare_OLA; simpl.
                rewrite H1; apply refl_equal.
             ** apply quick_permut.
-  + simpl in We; rewrite Hf, Bool.Bool.orb_false_l in We.
-    case_eq (find_eval_env env (A_agg a f)); 
-      [intros e Kf;
-       rewrite !interp_aggterm_unfold, Hf, !(find_eval_env_unfold (T := T) (_ :: _)), Kf; 
-       apply refl_equal 
-      | intro Kf; rewrite Kf in We].
+  + assert (Vf := well_formed_ag_variables_ag_env T _ _ We' We).
+    assert (Dj : forall x, x inS (s unionS Fset.mk_set (A T) lb) ->
+                   x inS Fset.Union (A T) (map (fun x => match x with (s, _, _) => s end) env) -> False).
+    { intros x X1 X2; rewrite well_formed_e_unfold, !Bool.Bool.andb_true_iff in We''.
+      destruct We'' as [[_ D] _]; rewrite Fset.is_empty_spec, Fset.equal_spec in D.
+      generalize (D x); rewrite Fset.mem_inter, X1, X2, Fset.empty_spec; discriminate. }
+    assert (Bsl : binds_ag T (s unionS Fset.mk_set (A T) lb) (A_agg a f) = binds_ag T s (A_agg a f)).
+    { unfold binds_ag.
+      assert (K : forall x, In x ({{{variables_ag T (A_agg a f)}}}) ->
+                    (x inS? (s unionS Fset.mk_set (A T) lb)) = (x inS? s)).
+      { intros x Ix; apply Fset.in_elements_mem in Ix; rewrite Fset.mem_union.
+        destruct (x inS? s) eqn:Xs; [reflexivity | simpl].
+        rewrite Fset.subset_spec in Vf; generalize (Vf x Ix); simpl; rewrite Fset.mem_union, Xs; simpl; intro X2.
+        destruct (x inS? Fset.mk_set (A T) lb) eqn:Xl; [ | reflexivity].
+        exfalso; apply (Dj x); [rewrite Fset.mem_union, Xl, Bool.Bool.orb_true_r; reflexivity | exact X2]. }
+      revert K; generalize ({{{variables_ag T (A_agg a f)}}}); intros l0 K.
+      induction l0 as [ | x l0 IHl]; [reflexivity | ]; simpl.
+      rewrite (K x (or_introl eq_refl)), IHl; [reflexivity | intros y Iy; apply K; right; exact Iy]. }
+    simpl in We; rewrite Hf, Bool.Bool.orb_false_l in We.
+    destruct (binds_ag T s (A_agg a f)) eqn:Bs.
+    2: { rewrite !interp_aggterm_unfold, Hf, !(find_eval_env_unfold (T := T) (_ :: _)), Bsl, Bs; apply refl_equal. }
     case_eq (is_a_suitable_env s env (A_agg a f)); intro Jf; 
       [ | rewrite Jf in We; discriminate We].
     assert (Aux : is_a_suitable_env (s unionS Fset.mk_set (A T) lb) env (A_agg a f) = true).
@@ -580,34 +595,37 @@ destruct e as [f | a f | f la].
     * rewrite Oset.mem_bool_true_iff, in_map_iff in Lf.
       destruct Lf as [_b [Lf _]]; discriminate Lf.
     * case_eq (Oset.mem_bool (OAggT T) (A_agg a f) (flat_map groups_of_env_slice env)); intro Mf.
-      -- rewrite Oset.mem_bool_true_iff, in_flat_map in Mf.
-         destruct Mf as [[[sa1 g1] l1] [Hx Mf]].
+      -- (* the aggregate is a grouping term of an enclosing block: its columns are those of the
+            enclosing blocks, one of them is in [s], which they do not have *)
+         rewrite Oset.mem_bool_true_iff, in_flat_map in Mf.
+         destruct Mf as [[[sa1 g1] l1] [Hx Mf]]; apply False_rec.
+         destruct g1 as [g1 | ]; [ | simpl in Mf; rewrite in_map_iff in Mf; destruct Mf as [b1 [Mf _]]; discriminate Mf].
          destruct (in_split _ _ Hx) as [e1 [e2 He]].
-         simpl in We'; rewrite Bool.Bool.andb_true_iff in We'; destruct We' as [We' W5].
-         rewrite He in Kf, W5; apply False_rec.
-         revert Kf Mf W5.
-         clear Hx He.
-         revert e1; induction e1 as [ | [[sa2 g2] l2] e1]; simpl.
-         ++ case_eq (find_eval_env e2 (A_agg a f)); [intros; discriminate | ].
-            intro H2; case_eq (is_a_suitable_env sa1 e2 (A_agg a f)); [intros; discriminate | ].
-            intros H3 _.
-            destruct g1 as [g1 | ]; [ | rewrite in_map_iff; intros [b1 [H4 _]]; discriminate H4].
-            intros H4 H5; rewrite !Bool.Bool.andb_true_iff, forallb_forall in H5.
-            destruct H5 as [[[[W1 W2] W3] W4] W5].
-            assert (Wf := W1 _ H4); simpl in Wf; rewrite Hf, H2 in Wf; simpl in Wf.
-            case_eq (is_a_suitable_env (labels T (default_tuple sa1)) e2 (A_agg a f));
-              intro Nf; [ | rewrite Nf in Wf; discriminate Wf].
-            unfold is_a_suitable_env in H3, Nf; simpl in H3, Nf.
-            unfold default_tuple in Nf; 
-              rewrite (Fset.elements_spec1 _ _ _ (labels_mk_tuple _ _ _)) in Nf.
-            rewrite H3 in Nf; discriminate Nf.
-         ++ case_eq (find_eval_env (e1 ++ (sa1, g1, l1) :: e2) (A_agg a f)); 
-              [intros e He; unfold env_slice in *; rewrite He; intro Abs; discriminate Abs | ].
-            intros H1 H2 H3 H4.
-            apply IHe1; [assumption | apply H3 | ].
-            rewrite Bool.Bool.andb_true_iff in H4; apply (proj2 H4).
+         assert (W2 : well_formed_e env = true)
+           by (rewrite well_formed_e_unfold, !Bool.Bool.andb_true_iff in We'; apply (proj2 We')).
+         rewrite He in W2; assert (W3 := well_formed_e_tail _ _ _ W2).
+         rewrite well_formed_e_unfold, !Bool.Bool.andb_true_iff, forallb_forall in W3.
+         destruct W3 as [[[[W4 _] _] W6] W5].
+         assert (Wa := W4 _ Mf).
+         assert (We2 : well_formed_e (env_t e2 (default_tuple sa1)) = true).
+         { unfold env_t; rewrite well_formed_e_unfold, !Bool.Bool.andb_true_iff; repeat split; [ | | exact W5].
+           - simpl; rewrite Fset.equal_refl; reflexivity.
+           - rewrite <- W6; apply Fset.is_empty_eq; apply Fset.inter_eq_1; apply labels_mk_tuple. }
+         assert (Va := well_formed_ag_variables_ag_env T _ _ We2 Wa).
+         unfold binds_ag in Bs; rewrite existsb_exists in Bs; destruct Bs as [x [Ix Bx]].
+         apply (Dj x); [rewrite Fset.mem_union, Bx; reflexivity | ].
+         apply Fset.in_elements_mem in Ix.
+         rewrite Fset.subset_spec in Va; generalize (Va x Ix); unfold env_t; simpl.
+         unfold default_tuple; rewrite Fset.mem_union, (Fset.mem_eq_2 _ _ _ (labels_mk_tuple _ _ _)), Bool.Bool.orb_true_iff.
+         intros [Ex | Ex]; rewrite He, Fset.mem_Union.
+         ++ exists sa1; split; [ | exact Ex].
+            apply in_map_iff; exists (sa1, Group_By g1, l1); split; [reflexivity | apply in_or_app; right; left; reflexivity].
+         ++ rewrite Fset.mem_Union in Ex; destruct Ex as [s0 [I0 E0]].
+            exists s0; split; [ | exact E0].
+            rewrite in_map_iff in I0; destruct I0 as [sl [Esl Isl]].
+            apply in_map_iff; exists sl; split; [exact Esl | apply in_or_app; right; right; exact Isl].
       -- rewrite Mf, Bool.Bool.orb_false_l in Jf.
-         rewrite !interp_aggterm_unfold, Hf, !(find_eval_env_unfold (T := T) (_ :: _)), Kf, Aux.
+         rewrite !interp_aggterm_unfold, Hf, !(find_eval_env_unfold (T := T) (_ :: _)), Bsl, Bs, Aux.
          unfold is_a_suitable_env, is_built_upon_ag.
          rewrite Oset.mem_bool_app, Lf, Mf, Jf; rewrite Bool.Bool.orb_true_r.
          unfold unfold_env_slice; rewrite !map_map; apply Haggregate.

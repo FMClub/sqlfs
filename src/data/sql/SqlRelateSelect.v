@@ -803,13 +803,15 @@ assert (L : interp_aggregate T ag
   apply (itf_slice sa0 (Group_Fine T) (t :: nil) t nil ft (quicksort_1 _ t)). }
 cbn [interp_aggterm]; destruct (Fset.is_empty (A T) (variables_ft T ft)) eqn:E; [exact L | ].
 cbn [find_eval_env].
-replace (is_built_upon_ag T nil (A_agg T ag ft)) with false.
-2: { symmetry; cbn [is_built_upon_ag extract_funterms]; rewrite Oset.mem_bool_unfold; cbn [orb].
-     destruct (is_built_upon_ft T nil ft) eqn:B; [ | reflexivity].
-     apply is_built_upon_ft_variables_ft_sub in B; rewrite <- E; symmetry.
-     rewrite Fset.is_empty_spec, Fset.equal_spec; intro b; rewrite Fset.empty_spec.
-     rewrite Fset.subset_spec in B; destruct (b inS? variables_ft T ft) eqn:Hb; [ | reflexivity].
-     generalize (B b Hb); simpl; rewrite Fset.empty_spec; discriminate. }
+replace (binds_ag T sa0 (A_agg T ag ft)) with true.
+2: { symmetry; unfold binds_ag; cbn [variables_ag].
+     destruct ({{{variables_ft T ft}}}) as [ | b l] eqn:El.
+     - exfalso; rewrite <- not_true_iff_false in E; apply E.
+       rewrite Fset.is_empty_spec, Fset.equal_spec; intro x; rewrite Fset.empty_spec.
+       destruct (x inS? variables_ft T ft) eqn:Hx; [ | reflexivity].
+       apply Fset.mem_in_elements in Hx; rewrite El in Hx; contradiction Hx.
+     - simpl; rewrite Fset.subset_spec in Hv; rewrite (Hv b); [reflexivity | ].
+       apply Fset.in_elements_mem; rewrite El; left; reflexivity. }
 match goal with |- context [is_a_suitable_env T sa0 ?e ?f] =>
   replace (is_a_suitable_env T sa0 e f) with true; [exact L | ] end.
 symmetry; unfold is_a_suitable_env; cbn [is_built_upon_ag flat_map]; rewrite extract_dots, built_vars by exact Hv.
