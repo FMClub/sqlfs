@@ -131,7 +131,27 @@ Hypothesis unknown : Bool.b (B T).
 Hypothesis contains_nulls : tuple -> bool.
 Hypothesis contains_nulls_eq : forall t1 t2, t1 =t= t2 -> contains_nulls t1 = contains_nulls t2.
 
-Notation eval_sql_formula := (eval_sql_formula unknown contains_nulls).
+(** the columns of a query in the order of its [SELECT] list (in which [IN] compares by position): the
+    order of [sql_cols] for the queries of [Sql.v], and for the algebra the order of the projections and of
+    the translation of a natural join to [Sql.v] (the columns of the left operand, then the new columns of
+    the right one), those of the left operand of a set operation; the order of the sort elsewhere *)
+Fixpoint alg_cols (q : query) : list attribute :=
+  match q with
+  | Q_Empty_Tuple => nil
+  | Q_Table t => {{{basesort t}}}
+  | Q_Set _ q1 _ => alg_cols q1
+  | Q_NaturalJoin q1 q2 =>
+    let s1 := {{{sort q1}}} in s1 ++ filter (fun a => negb (Oset.mem_bool (OAtt T) a s1)) ({{{sort q2}}})
+  | Q_Sigma _ q => {{{sort q}}}
+  | Q_Pi (_Select_List l) _
+  | Q_Gamma (_Select_List l) _ _ _ => map (fun x => match x with Select_As _ a => a end) l
+  end.
+
+#[local] Instance cols_alg : ColsOf T query := alg_cols.
+
+Notation eval_sql_formula I := (eval_sql_formula unknown contains_nulls I (@cols_of T query cols_alg)).
+Notation eval_sql_formula_s I :=
+  (Formula.eval_sql_formula unknown contains_nulls I (@cols_of T (sql_query T relname) (@cols_sql T relname basesort))).
 Notation natural_join_bag b1 b2 := 
   (Febag.mk_bag 
      (Fecol.CBag (CTuple T))
@@ -934,6 +954,19 @@ intros sq Hn; destruct sq as [r | o sq1 sq2 | s lsq f1 g f2].
     intros [e _a] Ha; apply refl_equal.
 Qed.
 
+Lemma cols_sql_to_alg : forall sq, alg_cols (sql_query_to_alg sq) = sql_cols basesort sq.
+Proof.
+fix IH 1; intros [r | o q1 q2 | [ | [la]] lsq f1 g f2].
+- reflexivity.
+- simpl; apply IH.
+- assert (S := sort_sql_to_alg (Sql_Select Select_Star lsq f1 g f2)).
+  destruct g as [g | ]; cbn [sql_query_to_alg alg_cols sql_cols] in *.
+  + unfold id_renaming; rewrite map_map; apply List.map_id.
+  + apply Fset.elements_spec1; exact S.
+- destruct g as [g | ]; cbn [sql_query_to_alg alg_cols sql_cols];
+    rewrite !map_map; apply map_ext; intros [e a]; reflexivity.
+Qed.
+
 Lemma sort_sql_item_to_alg : 
   forall x, sort (sql_item_to_alg x) =S= sql_from_item_sort basesort x.
 Proof.
@@ -961,7 +994,7 @@ Lemma sql_query_to_alg_is_sound_etc :
   (forall env f, 
      tree_size (tree_of_sql_formula tree_of_sql_query f) <= n -> weak_well_formed_f f = true -> 
      eval_sql_formula eval_query env (sql_formula_to_alg f) =
-     eval_sql_formula eval_sql_query env f).
+     eval_sql_formula_s eval_sql_query env f).
 Proof.
 intros WI n; induction n as [ | n]; [repeat split | ].
 - intros env sq Hn; destruct sq; inversion Hn.
@@ -1066,14 +1099,14 @@ intros WI n; induction n as [ | n]; [repeat split | ].
         }
       }
       assert (IHf1 : forall env, eval_sql_formula eval_query env (sql_formula_to_alg f1) =
-                                   eval_sql_formula eval_sql_query env f1).
+                                   eval_sql_formula_s eval_sql_query env f1).
       {
         intro env'; apply (proj2 IHn); [sql_size_tac | ].
         rewrite weak_well_formed_q_unfold, 3 Bool.Bool.andb_true_iff in Wsq.
         apply (proj2 (proj1 Wsq)).
       }
       assert (IHf2 : forall env, eval_sql_formula eval_query env (sql_formula_to_alg f2) =
-                                 eval_sql_formula eval_sql_query env f2).
+                                 eval_sql_formula_s eval_sql_query env f2).
       {
         intro env'; apply (proj2 IHn); [sql_size_tac | ].
         rewrite weak_well_formed_q_unfold, 3 Bool.Bool.andb_true_iff in Wsq.
@@ -1085,7 +1118,7 @@ intros WI n; induction n as [ | n]; [repeat split | ].
                        BTupleT
                        (fun t =>
                           Bool.is_true 
-                            (B T) (eval_sql_formula eval_sql_query (env_t T env t) f1))
+                            (B T) (eval_sql_formula_s eval_sql_query (env_t T env t) f1))
                        (N_join_bag T (map (eval_sql_from_item env) lsq)))).
       {
         rewrite eval_query_unfold, Febag.nb_occ_equal; intro t.
@@ -1105,7 +1138,7 @@ intros WI n; induction n as [ | n]; [repeat split | ].
              (map (fun g0 : list tuple => projection T (env_g T env g g0) s)
                   (filter
                      (fun g0 : list tuple =>
-                        Bool.is_true (B T) (eval_sql_formula eval_sql_query (env_g T env g g0) f2))
+                        Bool.is_true (B T) (eval_sql_formula_s eval_sql_query (env_g T env g g0) f2))
                      (FlatData.make_groups T env
                         (Febag.elements BTupleT
                            (eval_query 
@@ -1197,7 +1230,7 @@ intros WI n; induction n as [ | n]; [repeat split | ].
              rewrite !Oeset.nb_occ_filter;
                [ | intros; apply f_equal; apply eval_sql_formula_eq; env_tac].
              rewrite <- env_t_env_g, IHf2.
-              case (Bool.is_true (B T) (eval_sql_formula eval_sql_query (env_t T env t) f2));
+              case (Bool.is_true (B T) (eval_sql_formula_s eval_sql_query (env_t T env t) f2));
                   [rewrite !N.mul_1_r | rewrite !N.mul_0_r; apply refl_equal].
              rewrite <- !Febag.nb_occ_elements, !Febag.nb_occ_filter;
                [apply refl_equal | intros; apply f_equal; apply eval_formula_eq; env_tac].
@@ -1210,7 +1243,7 @@ intros WI n; induction n as [ | n]; [repeat split | ].
           -- intro x.
              rewrite <- Febag.nb_occ_elements, !Febag.nb_occ_filter, Oeset.nb_occ_filter,
                <- Febag.nb_occ_elements, Febag.nb_occ_filter, <- env_t_env_g, IHf2.
-             ++ case (Bool.is_true (B T) (eval_sql_formula eval_sql_query (env_t T env x) f2));
+             ++ case (Bool.is_true (B T) (eval_sql_formula_s eval_sql_query (env_t T env x) f2));
                       [rewrite N.mul_1_r; apply refl_equal | rewrite N.mul_0_r; apply refl_equal].
              ++ intros; apply f_equal; apply eval_formula_eq; env_tac.
              ++ intros; apply f_equal; apply eval_sql_formula_eq; env_tac.
@@ -1262,26 +1295,26 @@ intros WI n; induction n as [ | n]; [repeat split | ].
          rewrite Febag.nb_occ_equal in IH; apply IH.
   + intros env f Hn Wf; destruct f as [a f1 f2 | f |  | p l | qtf p l sq | s sq | sq].
     * simpl sql_formula_to_alg.
-      rewrite 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Conj _ _ _)).
+      rewrite 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Conj _ _ _)).
       simpl in Wf; rewrite Bool.Bool.andb_true_iff in Wf; destruct Wf as [Wf1 Wf2].
       assert (IHf1 : eval_sql_formula eval_query env (sql_formula_to_alg f1) = 
-                       eval_sql_formula eval_sql_query env f1).
+                       eval_sql_formula_s eval_sql_query env f1).
       {
         apply (proj2 IHn); [sql_size_tac | assumption].
       }
       assert (IHf2 : eval_sql_formula eval_query env (sql_formula_to_alg f2) = 
-                     eval_sql_formula eval_sql_query env f2).
+                     eval_sql_formula_s eval_sql_query env f2).
       {
         apply (proj2 IHn); [sql_size_tac | assumption].
       }
       rewrite IHf1, IHf2; destruct a; apply refl_equal.
     * simpl sql_formula_to_alg.
-      rewrite 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Not _)).
+      rewrite 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Not _)).
       apply f_equal; apply (proj2 IHn); [sql_size_tac | assumption].
     * apply refl_equal.
     * apply refl_equal.
     * simpl sql_formula_to_alg.
-      rewrite 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Quant _ _ _ _ _)).
+      rewrite 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Quant _ _ _ _ _)).
       apply (Formula.interp_quant_eq (B T) (OTuple T)).
       -- apply Oeset.nb_occ_permut; intro a; apply Oeset.nb_occ_eq_2; apply Febag.elements_spec1.
          apply (proj1 IHn); [ | assumption].
@@ -1295,18 +1328,19 @@ intros WI n; induction n as [ | n]; [repeat split | ].
          intros a Ha; apply (proj2 Hx).
          apply Fset.in_elements_mem; assumption.
     * simpl sql_formula_to_alg.
-      rewrite 2 (eval_sql_formula_unfold _ _ _ _ (Sql_In _ _ _)).
+      rewrite 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_In _ _ _)).
       cbv beta iota zeta; apply (interp_quant_eq (B T) (OTuple T)).
       -- apply Oeset.nb_occ_permut.
          intro x; rewrite <- 2 Febag.nb_occ_elements; revert x; rewrite <- Febag.nb_occ_equal.
          apply (proj1 IHn); [ sql_size_tac | assumption].
       -- {
           intros x1 x2 Hx1 Hx.
+          unfold cols_of, cols_alg, cols_sql; rewrite cols_sql_to_alg.
           apply (Formula.in_match_eq T unknown contains_nulls contains_nulls_eq); 
             [apply Oeset.compare_eq_refl | apply Hx].
         }
     * simpl sql_formula_to_alg.
-      rewrite 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Exists _ _)).
+      rewrite 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Exists _ _)).
       apply if_eq; [ | intros; apply refl_equal | intros; apply refl_equal].
       rewrite 2 Febag.is_empty_spec; apply Febag.equal_eq_1.
       apply (proj1 IHn).
@@ -1934,6 +1968,36 @@ intros q Hn; destruct q as [ | r | o q1 q2 | q1 q2 | [s] q | f q | [s] g f q].
   rewrite <- map_eq; intros [ ] _; apply refl_equal.
 Qed.
 
+Lemma map_fst_combine_eq : forall (X Y : Type) (l1 : list X) (l2 : list Y), length l1 = length l2 ->
+  map (@fst _ _) (combine l1 l2) = l1.
+Proof.
+intros X Y l1; induction l1 as [ | x l1 IH]; intros [ | y l2] H; try discriminate H; [reflexivity | ].
+simpl; f_equal; apply IH; injection H; trivial.
+Qed.
+
+Lemma cols_alg_to_sql : forall q, sql_cols basesort (alg_query_to_sql q) = alg_cols q.
+Proof.
+fix IH 1; intros [ | r | o q1 q2 | q1 q2 | [s] q | f q | [s] g f q].
+- reflexivity.
+- reflexivity.
+- simpl; apply IH.
+- cbn [alg_query_to_sql sql_cols alg_cols]; rewrite !map_map, map_app.
+  set (s1 := {{{sort q1}}}); set (s2 := {{{sort q2}}}).
+  set (s1' := fresh_attrs s1 (s1 ++ s2)); set (s2' := fresh_attrs s2 (s1' ++ s1 ++ s2)).
+  f_equal.
+  + assert (L1 : length s1 = length s1') by (unfold s1'; rewrite length_fresh_attrs; reflexivity).
+    clearbody s2' s1' s1; clear s2'; revert s1' L1; induction s1 as [ | a s1 IHs]; intros [ | b s1'] L1; try discriminate L1; [reflexivity | ].
+    simpl; f_equal; apply IHs; injection L1; trivial.
+  + assert (L2 : length s2 = length s2') by (unfold s2'; rewrite length_fresh_attrs; reflexivity).
+    clearbody s1 s2'; revert s2' L2; induction s2 as [ | a s2 IHs]; intros [ | b s2'] L2; try discriminate L2; [reflexivity | ].
+    simpl; destruct (Oset.mem_bool (OAtt T) a s1); simpl; [ | f_equal]; apply IHs; injection L2; trivial.
+- cbn [alg_query_to_sql sql_cols alg_cols]; rewrite map_map; apply map_ext; intros [e a]; reflexivity.
+- cbn [alg_query_to_sql sql_cols alg_cols].
+  apply Fset.elements_spec1.
+  assert (S := sql_sort_sql_to_alg (Q_Sigma f q)); exact S.
+- cbn [alg_query_to_sql sql_cols alg_cols]; rewrite map_map; apply map_ext; intros [e a]; reflexivity.
+Qed.
+
 Ltac tuple_tac :=
   match goal with
     | |- ?x =t= ?x => apply Oeset.compare_eq_refl
@@ -2023,7 +2087,7 @@ Lemma alg_query_to_sql_is_sound_etc :
   (forall env f, 
      tree_size (tree_of_sql_formula tree_of_query f) <= n -> 
      eval_sql_formula eval_query env f =
-     eval_sql_formula eval_sql_query env (alg_formula_to_sql f)).
+     eval_sql_formula_s eval_sql_query env (alg_formula_to_sql f)).
 Proof.
 intros W n; induction n as [ | n]; split.
 - intros env q Hn; destruct q; inversion Hn.
@@ -2117,7 +2181,7 @@ intros W n; induction n as [ | n]; split.
     rewrite (filter_true
                (fun g : list tuple =>
                   Bool.is_true (B T)
-                               (eval_sql_formula eval_sql_query (env_g T env Group_Fine g)
+                               (eval_sql_formula_s eval_sql_query (env_g T env Group_Fine g)
                                                  (Sql_True (sql_query T relname)))));
       [ | intros; simpl; rewrite Bool.true_is_true; apply refl_equal].
     unfold FlatData.make_groups; rewrite map_map.
@@ -2378,7 +2442,7 @@ intros W n; induction n as [ | n]; split.
                        Oset.eq_bool (OVal T) (dot T t (apply_renaming T ss1 a))
                                     (dot T t (apply_renaming T ss2 a))) 
                     (sort q1 interS sort q2) =
-                  Bool.is_true (B T) (eval_sql_formula eval_sql_query (env_t T env t) f_join)).
+                  Bool.is_true (B T) (eval_sql_formula_s eval_sql_query (env_t T env t) f_join)).
       {
         intros t Ht; apply eq_bool_iff.
         rewrite Fset.for_all_spec, forallb_forall, Bool.true_is_true; split.
@@ -2512,7 +2576,7 @@ intros W n; induction n as [ | n]; split.
           }
           assert (H' : let f :=  Sql_Pred (sql_query T relname) Pred_Equal
                                           (A_Expr (F_Dot a) :: A_Expr (F_Dot b) :: nil) in
-                      eval_sql_formula eval_sql_query (env_t T env t) f = Bool.true (B T)). 
+                      eval_sql_formula_s eval_sql_query (env_t T env t) f = Bool.true (B T)). 
           {
             intro f; apply Hf; rewrite in_map_iff.
             eexists; split; [ | apply H]; apply refl_equal.
@@ -2596,7 +2660,7 @@ intros W n; induction n as [ | n]; split.
                                 unionS Fset.map (A T) (A T) (apply_renaming T ss2) (sort q2))); 
            intro Ht.
          ++ rewrite (Aux _ Ht).
-            case (Bool.is_true (B T) (eval_sql_formula eval_sql_query (env_t T env t) f_join));
+            case (Bool.is_true (B T) (eval_sql_formula_s eval_sql_query (env_t T env t) f_join));
               [rewrite N.mul_1_r | rewrite N.mul_0_r; apply refl_equal].
             set (k1 := map
                          (fun t0 : tuple =>
@@ -2730,7 +2794,7 @@ intros W n; induction n as [ | n]; split.
                                Oset.eq_bool (OVal T) (dot T t (apply_renaming T ss1 a))
                                             (dot T t (apply_renaming T ss2 a))) 
                             (sort q1 interS sort q2)); apply refl_equal.
-            ** case (Bool.is_true (B T) (eval_sql_formula eval_sql_query (env_t T env t) f_join));
+            ** case (Bool.is_true (B T) (eval_sql_formula_s eval_sql_query (env_t T env t) f_join));
                  [ | rewrite N.mul_0_r; apply refl_equal].
                rewrite N.mul_1_r.
                unfold N_join_bag; rewrite Febag.nb_occ_mk_bag.
@@ -3021,7 +3085,7 @@ intros W n; induction n as [ | n]; split.
       -- intros; apply f_equal; apply eval_sql_formula_eq; env_tac.
       -- intros; apply f_equal; apply eval_formula_eq; env_tac.
 - intros env f Hn; destruct f as [ | | | | | | ].
-  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Conj _ _ _)).
+  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Conj _ _ _)).
     apply f_equal2.
     * apply (proj2 IHn).
       simpl in Hn; refine (le_trans _ _ _ _ (le_S_n _ _ Hn)).
@@ -3030,14 +3094,14 @@ intros W n; induction n as [ | n]; split.
       simpl in Hn; refine (le_trans _ _ _ _ (le_S_n _ _ Hn)).
       refine (le_trans _ _ _ _ (le_plus_r _ _)).
       apply le_plus_l.
-  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Not _)).
+  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Not _)).
     apply f_equal.
     apply (proj2 IHn).
     simpl in Hn; refine (le_trans _ _ _ _ (le_S_n _ _ Hn)).
     apply le_plus_l.
   + apply refl_equal.
   + apply refl_equal. 
-  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Quant _ _ _ _ _)).
+  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Quant _ _ _ _ _)).
     cbv beta iota zeta.
     apply interp_quant_eq with (OTuple T).
     * apply Oeset.nb_occ_permut.
@@ -3053,7 +3117,7 @@ intros W n; induction n as [ | n]; split.
       rewrite <- map_eq.
       intros a Ha; apply (proj2 Hx).
       apply Fset.in_elements_mem; assumption.
-  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ (Sql_In _ _ _)).
+  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_In _ _ _)).
     cbv beta iota zeta.
     apply interp_quant_eq with (OTuple T).
     * apply Oeset.nb_occ_permut.
@@ -3065,9 +3129,10 @@ intros W n; induction n as [ | n]; split.
       refine (le_trans _ _ _ _ (le_plus_r _ _)).
       apply le_plus_l.
     * intros x1 x2 Hx1 Hx.
+      unfold cols_of, cols_alg, cols_sql; rewrite cols_alg_to_sql.
       apply (Formula.in_match_eq T unknown contains_nulls contains_nulls_eq); 
         [apply Oeset.compare_eq_refl | apply Hx].
-  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ (Sql_Exists _ _)).
+  + rewrite alg_formula_to_sql_unfold, 2 (eval_sql_formula_unfold _ _ _ _ _ (Sql_Exists _ _)).
     cbv beta iota zeta.
     apply if_eq; trivial.
     rewrite eq_bool_iff, 2 Febag.is_empty_spec.
@@ -3194,7 +3259,7 @@ Lemma eval_f_eq :
     forall t1 t2, t1 =t= t2 -> eval_f t1 = eval_f t2.
 Proof.
 intros env f eval_f t1 t2 Ht; unfold eval_f.
-refine (eval_sql_formula_eq_etc unknown _ contains_nulls_eq _ _ _ _ _ _).
+refine (eval_sql_formula_eq_etc unknown _ contains_nulls_eq _ _ _ _ _ _ _).
 - apply eval_query_eq_etc.
 - apply le_S; apply le_refl.
 - env_tac.
@@ -3509,6 +3574,8 @@ intro n; induction n as [ | n]; split.
          apply Fset.equal_refl.
 Qed.
 
+(** the subqueries of [IN] are kept as they are: their columns are compared by position, and the
+    optimisation of a subquery may change their order ([Q_NaturalJoin q Q_Empty_Tuple] is [q]) *)
 Fixpoint query_optim (q : query) :=
   match q with
   | Q_Set op q1 q2 => Q_Set op (query_optim q1) (query_optim q2)
@@ -3525,7 +3592,7 @@ Fixpoint query_optim (q : query) :=
            | Sql_True _ => Sql_True _
            | Sql_Pred _ p l => Sql_Pred _ p l
            | Sql_Quant _ qtf p l sq => Sql_Quant _ qtf p l (query_optim sq)
-           | Sql_In _ s sq => Sql_In _ s (query_optim sq)
+           | Sql_In _ s sq => Sql_In _ s sq
            | Sql_Exists _ sq => Sql_Exists _ (query_optim sq)
            end) in
     Q_Sigma (sql_formula_optim f) (query_optim q)
@@ -3538,7 +3605,7 @@ Fixpoint query_optim (q : query) :=
            | Sql_True _ => Sql_True _
            | Sql_Pred _ p l => Sql_Pred _ p l
            | Sql_Quant _ qtf p l sq => Sql_Quant _ qtf p l (query_optim sq)
-           | Sql_In _ s sq => Sql_In _ s (query_optim sq)
+           | Sql_In _ s sq => Sql_In _ s sq
            | Sql_Exists _ sq => Sql_Exists _ (query_optim sq)
            end) in
     Q_Gamma s aggs (sql_formula_optim f) (query_optim q)
@@ -3552,7 +3619,7 @@ Fixpoint sql_formula_optim f : (@Formula.sql_formula T query) :=
   | Sql_True _ => Sql_True _
   | Sql_Pred _ p l => Sql_Pred _ p l
   | Sql_Quant _ qtf p l sq => Sql_Quant _ qtf p l (query_optim sq)
-  | Sql_In _ s sq => Sql_In _ s (query_optim sq)
+  | Sql_In _ s sq => Sql_In _ s sq
   | Sql_Exists _ sq => Sql_Exists _ (query_optim sq)
   end.
 
@@ -3806,19 +3873,9 @@ Proof.
           with (map (dot T t1) ({{{labels T t1}}})); auto.
         apply map_ext_in. intros a H1. apply Fset.in_elements_mem in H1.
         now apply tuple_eq_dot_alt.
-    + (* Sql_In *)
-      change (sql_formula_optim (Sql_In query s q))
-        with (Sql_In query s (query_optim q)).
-      rewrite !eval_sql_formula_unfold.
-      apply (interp_quant_eq _ (OTuple T)).
-      * apply Oeset.nb_occ_permut. intro t. rewrite <- !Febag.nb_occ_elements.
-        revert t. apply Febag.nb_occ_eq_2. apply IHn. simpl in Hn. clear -Hn.
-        assert (H:forall x y, S (S (S (y + (x + 0) + 0))) <= S n -> x <= n)
-          by (intros; lia).
-        eauto.
-      * intros t1 t2 _ H.
-        apply (Formula.in_match_eq T unknown contains_nulls contains_nulls_eq); 
-          [apply Oeset.compare_eq_refl | apply H].
+    + (* Sql_In: the subquery of [IN] is kept, its columns are compared by position *)
+      change (sql_formula_optim (Sql_In query s q)) with (Sql_In query s q).
+      apply refl_equal.
     + (* Sql_Exists *)
       simpl. rewrite (Febag.is_empty_eq _ _ (eval_query env q)); auto.
       apply IHn. simpl in Hn. clear -Hn.

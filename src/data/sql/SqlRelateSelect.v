@@ -32,6 +32,8 @@ Hypothesis instance : relname -> Febag.bag (Fecol.CBag (Tuple.CTuple T)).
 Import Tuple.
 
 Notation BTupleT := (Fecol.CBag (CTuple T)).
+(** the order of the columns of the queries of [Sql.v] ([IN] compares by position) *)
+Notation SCOLS := (@cols_of T (sql_query T relname) (@cols_sql T relname basesort)).
 Notation sexpr := (SqlFull.sexpr T relname).
 Notation scond := (SqlFull.scond T relname).
 
@@ -117,7 +119,7 @@ Qed.
 
 Lemma f_agree : forall unknown contains_nulls (I : env T -> sql_query T relname -> Febag.bag BTupleT) ce t f c,
   f_to f = Some c ->
-  ec ce (slice_t T relname t :: nil) c = eval_sql_formula unknown contains_nulls I (env_t T nil t) f /\
+  ec ce (slice_t T relname t :: nil) c = eval_sql_formula unknown contains_nulls I SCOLS (env_t T nil t) f /\
   er ce (slice_t T relname t :: nil) c = false.
 Proof.
 intros unknown contains_nulls I ce t f; induction f as [a f1 IH1 f2 IH2 | f IH | | p l | qtf p l q | l q | q];
@@ -144,7 +146,7 @@ Qed.
 
 Lemma f_compat : forall unknown contains_nulls (I : env T -> sql_query T relname -> Febag.bag BTupleT) f c x y,
   f_to f = Some c -> x =t= y ->
-  eval_sql_formula unknown contains_nulls I (env_t T nil x) f = eval_sql_formula unknown contains_nulls I (env_t T nil y) f.
+  eval_sql_formula unknown contains_nulls I SCOLS (env_t T nil x) f = eval_sql_formula unknown contains_nulls I SCOLS (env_t T nil y) f.
 Proof.
 intros unknown contains_nulls I f; induction f as [a f1 IH1 f2 IH2 | f IH | | p l | qtf p l q | l q | q];
   intros c x y H Hxy; simpl in H; try discriminate H; cbn [eval_sql_formula].
@@ -337,7 +339,7 @@ rewrite full_select_rows.
 2: { apply (s_no_agg nil _ s s' Hs). }
 rewrite eval_sql_query_unfold; cbv zeta.
 rewrite Febag.nb_occ_equal; intro u; rewrite !Febag.nb_occ_mk_bag; apply Oeset.permut_nb_occ.
-set (W := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) (env_t T nil t) f)).
+set (W := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) SCOLS (env_t T nil t) f)).
 assert (Wc : forall x y, x =t= y -> W x = W y) by (intros x y E; unfold W; rewrite (f_compat unknown cn _ f c x y Hf E); reflexivity).
 set (PROJ := fun t => projection T (env_t T nil t) s).
 assert (Pc : forall x y, x =t= y -> PROJ x =t= PROJ y) by (intros x y E; apply projection_eq, env_t_eq_2, E).
@@ -519,7 +521,7 @@ rewrite full_select_rows_n.
 2: { intro sa; apply (s_no_agg nil sa s s' Hs). }
 rewrite eval_sql_query_unfold; cbv zeta.
 rewrite Febag.nb_occ_equal; intro u; rewrite !Febag.nb_occ_mk_bag; apply Oeset.permut_nb_occ.
-set (W := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) (env_t T nil t) f)).
+set (W := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) SCOLS (env_t T nil t) f)).
 assert (Wc : forall x y, x =t= y -> W x = W y) by (intros x y E; unfold W; rewrite (f_compat unknown cn _ f c x y Hf E); reflexivity).
 set (PROJ := fun t => projection T (env_t T nil t) s).
 assert (Pc : forall x y, x =t= y -> PROJ x =t= PROJ y) by (intros x y E; apply projection_eq, env_t_eq_2, E).
@@ -603,7 +605,7 @@ rewrite full_select_rows_g.
 2: { intro sa; apply (s_no_agg nil sa s s' Hs). }
 rewrite eval_sql_query_unfold; cbv zeta.
 rewrite Febag.nb_occ_equal; intro u; rewrite !Febag.nb_occ_mk_bag; apply Oeset.permut_nb_occ.
-set (W := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) (env_t T nil t) f)).
+set (W := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) SCOLS (env_t T nil t) f)).
 assert (Wc : forall x y, x =t= y -> W x = W y) by (intros x y E; unfold W; rewrite (f_compat unknown cn _ f c x y Hf E); reflexivity).
 set (PROJ := fun t => projection T (env_t T nil t) s).
 assert (Pc : forall x y, x =t= y -> PROJ x =t= PROJ y) by (intros x y E; apply projection_eq, env_t_eq_2, E).
@@ -939,7 +941,7 @@ Lemma hf_agree : forall unknown cn (I : env T -> sql_query T relname -> Febag.ba
      map (interp_aggterm T (env_t T nil t)) g = map (interp_aggterm T (env_t T nil u)) g) ->
   forall f c, hf_to S (extract_funterms T g) f = Some c ->
   ec nil ((labels T t1, t1 :: rest, nil) :: nil) c =
-  eval_sql_formula unknown cn I ((labels T t0, Group_By T g, k) :: nil) f.
+  eval_sql_formula unknown cn I SCOLS ((labels T t0, Group_By T g, k) :: nil) f.
 Proof.
 intros unknown cn I S g k t0 r t1 rest Hq Hr Hl Hk f; induction f as [a f1 IH1 f2 IH2 | f IH | | p l | qtf p l q | l q | q];
   intros c H; simpl in H; try discriminate H.
@@ -1111,7 +1113,7 @@ assert (GF : forall grp, In grp GL -> exists t0 r t1 rest,
 rewrite eval_sql_query_unfold; cbv beta zeta.
 rewrite Febag.nb_occ_equal; intro u; rewrite !Febag.nb_occ_mk_bag; apply Oeset.permut_nb_occ.
 set (Pg := fun k => projection T (env_g T nil (Group_By T g) k) (Select_List T (_Select_List T items))).
-set (HS := fun k => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) (env_g T nil (Group_By T g) k) h)).
+set (HS := fun k => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) SCOLS (env_g T nil (Group_By T g) k) h)).
 match goal with |- permT _ (map _ (filter _ (make_groups T nil ?E0 _))) => set (E := E0) end.
 apply Oeset.permut_trans with (map Pg (filter HS (make_groups T nil R (Group_By T g)))).
 - unfold make_groups; fold key; rewrite partition_groups; fold GL.
@@ -1138,7 +1140,7 @@ apply Oeset.permut_trans with (map Pg (filter HS (make_groups T nil R (Group_By 
       apply env_g_eq_2; apply (proj2 (compare_list_t _ _ _)); exact H. }
     apply Oeset.nb_occ_permut; intro x; apply make_groups_eq; [apply equiv_env_refl | ].
     unfold E, R.
-    set (Wp := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) (env_t T nil t) f)).
+    set (Wp := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) SCOLS (env_t T nil t) f)).
     assert (Wc : forall x y, x =t= y -> Wp x = Wp y) by (intros x1 y1 E1; unfold Wp; rewrite (f_compat unknown cn _ f c x1 y1 Hf E1); reflexivity).
     apply Oeset.permut_sym; eapply Oeset.permut_trans; [apply elements_filter_permut; exact Wc | ].
     apply Oeset.permut_sym, permut_filter_compat.
@@ -1395,7 +1397,7 @@ Lemma f_agree3 : forall unknown cn, (forall t1 t2, t1 =t= t2 -> cn t1 = cn t2) -
   (forall q q', In q (fsubs f) -> tf q = Some q' ->
      Febag.equal BTupleT (Febag.mk_bag BTupleT (eval_squery ORN O basesort instance nil F q'))
                  (eval_sql_query basesort instance unknown cn E q) = true) ->
-  ec nil F c = eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) E f /\ er nil F c = false.
+  ec nil F c = eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) SCOLS E f /\ er nil F c = false.
 Proof.
 intros unknown cn Hcn W tf f; induction f as [a f1 IH1 f2 IH2 | f IH | | p l | qtf p l q | l q | q];
   intros c E F R H Hs; simpl in H; try discriminate H.
@@ -1624,7 +1626,7 @@ rewrite full_select_rows_R.
 2: { intro sa; apply (s_no_agg nil sa s s' Hs). }
 rewrite eval_sql_query_unfold; cbv zeta.
 rewrite Febag.nb_occ_equal; intro u; rewrite !Febag.nb_occ_mk_bag; apply Oeset.permut_nb_occ.
-set (Wp := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) (env_t T E t) f)).
+set (Wp := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) SCOLS (env_t T E t) f)).
 assert (Wc : forall x y, x =t= y -> Wp x = Wp y).
 { intros x y Exy; unfold Wp; rewrite (@eval_sql_formula_eq T relname basesort instance unknown cn Hcn f (env_t T E x) (env_t T E y)); [reflexivity | ].
   apply env_t_eq_2, Exy. }
