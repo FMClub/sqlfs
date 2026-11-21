@@ -1767,6 +1767,59 @@ Definition Qc_lt_bool (a b : Qc) : bool := match Qccompare a b with Lt => true |
 Definition Qc_le_bool (a b : Qc) : bool := match Qccompare a b with Gt => false | _ => true end.
 Definition Qc_eq_bool (a b : Qc) : bool := match Qccompare a b with Eq => true | _ => false end.
 
+(** [power] of [double precision] ([dpow] of [float.c]): [NaN ^ 0] and [1 ^ NaN] are 1, the other powers of or by a
+    NaN are NaN; zero to a negative power and a negative number to a non-integer power are errors; an infinite
+    exponent gives 1 for [|x| = 1], an infinity or 0 by the side of [|x|] around 1; a power of an infinity is 1
+    for the exponent 0, an infinity or 0 by the sign of the exponent, and for [-Infinity] the sign of the result
+    is that of an odd exponent. *)
+Definition pg_dpow (conv : value -> option num) (dom bad : value) (l : list value) : value :=
+  match l with
+  | a :: b :: nil =>
+    if is_null a || is_null b then Value_F None
+    else match math_arg conv a, math_arg conv b with
+         | Some (sa, x), Some (sb, y) =>
+           let one := VF false (F_Finite, Qc_of_Z 1) in
+           let zero := VF false (F_Finite, Qc_of_Z 0) in
+           let nan := VF false (F_NaN, Qc_of_Z 0) in
+           let pinf := VF false (F_PosInf, Qc_of_Z 0) in
+           let fin (s : fspecial) := match s with F_Finite | F_NegZero => true | _ => false end in
+           let neg (s : fspecial) (q : Q) := match s with F_NegInf => true | F_PosInf | F_NaN => false | _ => Z.ltb (Qnum q) 0 end in
+           let is0 (s : fspecial) (q : Q) := fin s && Z.eqb (Qnum q) 0 in
+           let yred := Qred y in
+           let yint := fin sb && Pos.eqb (Qden yred) 1 in
+           match sa, sb with
+           | F_NaN, F_NaN => nan
+           | F_NaN, _ => if is0 sb y then one else nan
+           | _, F_NaN => if fin sa && Qeq_bool x 1 then one else nan
+           | _, _ =>
+             if is0 sa x && neg sb y then Value_Err "zero raised to a negative power is undefined"
+             else if neg sa x && fin sb && negb yint then dom
+             else
+               match sb with
+               | F_PosInf | F_NegInf =>
+                 let c := match sa with F_PosInf | F_NegInf => Gt | _ => Qcompare (Qabs x) 1 end in
+                 match c, sb with
+                 | Eq, _ => one
+                 | Gt, F_PosInf | Lt, F_NegInf => pinf
+                 | _, _ => zero
+                 end
+               | _ =>
+                 match sa with
+                 | F_PosInf => if is0 sb y then one else if neg sb y then zero else pinf
+                 | F_NegInf =>
+                   let odd := Z.odd (Qnum yred) in
+                   if is0 sb y then one
+                   else if neg sb y then (if odd then VF false (F_NegZero, Qc_of_Z 0) else zero)
+                   else if odd then VF false (F_NegInf, Qc_of_Z 0) else pinf
+                 | _ => match pow_c x y with Some r => VF false r | None => dom end
+                 end
+               end
+           end
+         | _, _ => bad
+         end
+  | _ => Value_Err "function does not exist"
+  end.
+
 Definition pg_clamp_scale (r : Z) (sc : nat) : nat := Z.to_nat (Z.min (Z.max (Z.max r (Z.of_nat sc)) 0) 1000).
 
 (** [estimate_ln_dweight]: the decimal weight of [ln x] *)
@@ -1859,10 +1912,18 @@ Definition pg_math_table (num_power : list value -> value) : list (string * (lis
   let dsqrt := dbl_fun1 c (fun q => if Z.ltb (Qnum q) 0 then None else Some (sqrt_q binary64 q))
                         (pg_dom "cannot take square root of a negative number")
                         (fun s => match s with F_NegInf => pg_dom "cannot take square root of a negative number" | _ => pg_sp_same s end) bad in
-  let dexp l := pg_exp_check (dbl_fun1 c pg_exp_dbl bad (fun s => match s with F_NegInf => VF false (F_Finite, Qc_of_Z 0) | _ => pg_sp_same s end) bad l) in
+  (* [exp] of an infinity is not an overflow: [dexp] of [float.c] returns [Infinity] and [0] *)
+  let dexp l := match l with
+                | v :: nil => match math_arg c v with
+                              | Some (F_PosInf, _) => VF false (F_PosInf, Qc_of_Z 0)
+                              | Some (F_NegInf, _) => VF false (F_Finite, Qc_of_Z 0)
+                              | _ => pg_exp_check (dbl_fun1 c pg_exp_dbl bad (fun s => match s with F_NegInf => VF false (F_Finite, Qc_of_Z 0) | _ => pg_sp_same s end) bad l)
+                              end
+                | _ => pg_exp_check (dbl_fun1 c pg_exp_dbl bad (fun s => match s with F_NegInf => VF false (F_Finite, Qc_of_Z 0) | _ => pg_sp_same s end) bad l)
+                end in
   let trig f := dbl_fun1 c (fun q => Some (f binary64 q)) bad pg_sp_range bad in
   let atrig (f : format -> Q -> option (fspecial * Qc)) := dbl_fun1 c (f binary64) (pg_dom "input is out of range") pg_sp_range bad in
-  let dpow := dbl_fun2 c pow_c (pg_dom "a negative number raised to a non-integer power yields a complex result") bad in
+  let dpow := pg_dpow c (pg_dom "a negative number raised to a non-integer power yields a complex result") bad in
   let numeric_log l := match l with
                        | b :: x :: nil =>
                          if is_null b || is_null x then Value_D None
@@ -1920,7 +1981,9 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
   (** division and modulo by zero are errors ([ERRCODE_DIVISION_BY_ZERO], [src/backend/utils/adt/int.c], [numeric.c]) *)
   let by_zero (f : list value -> value) (l : list value) :=
       match l with
-      | _ :: b :: nil => 
+      | a :: b :: nil => 
+        (* a NaN divided by zero is NaN ([float8_div]) *)
+        if match a with Value_F (Some (_, k)) => Nat.eqb (Nat.div (Nat.modulo k 10) 2) 4 | _ => false end then f l else
         match num_of_value b with
         | Some (Num_Z z) => if Z.eqb z 0 then Value_Err "division by zero" else f l
         | Some (Num_Q q) => if Qc_is_zero q then Value_Err "division by zero" else f l
