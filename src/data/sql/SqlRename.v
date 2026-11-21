@@ -10,9 +10,11 @@ Require Import List Bool Sorting.
 Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData SqlFull.
 Import Tuple.
 
-Section Tuples.
+Section Sec.
 
 Hypothesis T : Tuple.Rcd.
+Hypothesis relname : Type.
+Hypothesis ORN : Oset.Rcd relname.
 Hypothesis rho : attribute T -> attribute T.
 Hypothesis rhoi : attribute T -> attribute T.
 Hypothesis Hrr : forall a, rhoi (rho a) = a.
@@ -229,4 +231,185 @@ Proof. intros X Y f g P l1 l2 H K; induction H; constructor; auto. Qed.
 Lemma RL_app : forall l1 l2 l1' l2', RL l1 l2 -> RL l1' l2' -> RL (l1 ++ l1') (l2 ++ l2').
 Proof. intros; apply Forall2_app; assumption. Qed.
 
-End Tuples.
+(** * The renaming of the queries *)
+
+Notation sexpr := (sexpr T relname).
+Notation scond := (scond T relname).
+Notation squery := (squery T relname).
+Notation sspec := (sspec T relname).
+Notation sfrom := (sfrom T relname).
+
+Definition r_ren (r : SqlFull.renaming T) : SqlFull.renaming T :=
+  match r with
+  | Ren_List _ l => Ren_List T (map (fun x => (rho (fst x), rho (snd x))) l)
+  | _ => Ren_Star T
+  end.
+
+Fixpoint r_e (e : sexpr) : sexpr :=
+  match e with
+  | E_Const _ _ v => E_Const T relname v
+  | E_Col _ _ a => E_Col T relname (rho a)
+  | E_Fun f l => E_Fun f (map r_e l)
+  | E_Agg ag sq e c => E_Agg ag sq (r_e e) (r_c c)
+  | E_AggX ag sq e sep lo c =>
+    E_AggX ag sq (r_e e) (match sep with Some s => Some (r_e s) | None => None end)
+           (map (fun o => match o with O_By e d n => O_By (r_e e) d n end) lo) (r_c c)
+  | E_Case c e1 e2 => E_Case (r_c c) (r_e e1) (r_e e2)
+  | E_Cond c => E_Cond (r_c c)
+  | E_Sub q => E_Sub (r_q q)
+  | E_Grouping x => E_Grouping (r_e x)
+  end
+
+with r_c (c : scond) : scond :=
+  match c with
+  | C_Conj a c1 c2 => C_Conj a (r_c c1) (r_c c2)
+  | C_Not c => C_Not (r_c c)
+  | C_True _ _ => C_True T relname
+  | C_Pred p l => C_Pred p (map r_e l)
+  | C_Expr e => C_Expr (r_e e)
+  | C_Quant qtf p l q la => C_Quant qtf p (map r_e l) (r_q q) (map rho la)
+  | C_In l q la => C_In (map r_e l) (r_q q) (map rho la)
+  | C_Exists q => C_Exists (r_q q)
+  end
+
+with r_q (q : squery) : squery :=
+  match q with
+  | SQ_Table _ r => SQ_Table T r
+  | SQ_Set o sq q1 q2 => SQ_Set o sq (r_q q1) (r_q q2)
+  | SQ_Select sp => SQ_Select (r_s sp)
+  | SQ_Order q lo off lim => SQ_Order (r_q q) (map (fun o => match o with O_By e d n => O_By (r_e e) d n end) lo) off lim
+  | SQ_Fetch q lo off ties pct n =>
+    SQ_Fetch (r_q q) (map (fun o => match o with O_By e d n => O_By (r_e e) d n end) lo) off ties pct n
+  | SQ_Window q lw =>
+    SQ_Window (r_q q)
+      (map (fun w => match w with
+                     | W_As f lp lo a =>
+                       W_As ((fix r_w (f : swfun T relname) : swfun T relname :=
+                                match f with
+                                | W_Agg ag sq e fr => W_Agg ag sq (r_e e) fr
+                                | W_Lag e n d => W_Lag (r_e e) n (r_e d)
+                                | W_Lead e n d => W_Lead (r_e e) n (r_e d)
+                                | W_First_Value e fr => W_First_Value (r_e e) fr
+                                | W_Last_Value e fr => W_Last_Value (r_e e) fr
+                                | W_Nth_Value e n fr => W_Nth_Value (r_e e) n fr
+                                | W_Opts f' ign last => W_Opts (r_w f') ign last
+                                | f => f
+                                end) f)
+                            (map r_e lp) (map (fun o => match o with O_By e d n => O_By (r_e e) d n end) lo) (rho a)
+                     end) lw)
+  | SQ_With r q1 q2 => SQ_With r (r_q q1) (r_q q2)
+  | SQ_WithRec sq r q1 q2 q3 => SQ_WithRec sq r (r_q q1) (r_q q2) (r_q q3)
+  end
+
+with r_s (sp : sspec) : sspec :=
+  match sp with
+  | Select sq s lf w g h =>
+    Select sq
+      (match s with
+       | S_Star _ _ => S_Star T relname
+       | S_List l => S_List (map (fun it => match it with S_As e a => S_As (r_e e) (rho a) end) l)
+       end)
+      (map r_f lf) (r_c w)
+      (match g with
+       | G_Fine _ _ => G_Fine T relname
+       | G_By l => G_By (map r_e l)
+       | G_Sets ss => G_Sets (map (map r_e) ss)
+       | G_Rollup l => G_Rollup (map r_e l)
+       | G_Cube l => G_Cube (map r_e l)
+       end) (r_c h)
+  end
+
+with r_f (f : sfrom) : sfrom :=
+  match f with
+  | Fr_Query q r => Fr_Query (r_q q) (r_ren r)
+  | Fr_Join jt lat f1 f2 c => Fr_Join jt lat (r_f f1) (r_f f2) (r_c c)
+  | Fr_Fun name args ord atts => Fr_Fun name (map r_e args) ord (map rho atts)
+  end.
+
+(** * Static functions of the renamed queries *)
+
+Hypothesis basesort basesort' : relname -> Fset.set (A T).
+Hypothesis Hbs : forall r, basesort' r =S= rs (basesort r).
+
+Notation rq := r_q.
+Notation rsp := r_s.
+Notation rf := r_f.
+Notation re := r_e.
+Notation rc := r_c.
+Notation sq_sort' := (squery_sort ORN basesort').
+Notation sq_sort := (squery_sort ORN basesort).
+
+Lemma rs_Union : forall l, rs (Fset.Union (A T) l) =S= Fset.Union (A T) (map rs l).
+Proof.
+intro l; rewrite Fset.equal_spec; intro b; rewrite mem_rs'.
+induction l as [ | s l IH]; cbn [map].
+- rewrite !Fset.Union_unfold, !Fset.empty_spec; reflexivity.
+- rewrite (Fset.Union_unfold _ (s :: l)), (Fset.Union_unfold _ (rs s :: map rs l)), !Fset.mem_union, IH, mem_rs'; reflexivity.
+Qed.
+
+Lemma Union_eq_F2 : forall l1 l2, Forall2 (fun s1 s2 => s1 =S= s2) l1 l2 -> Fset.Union (A T) l1 =S= Fset.Union (A T) l2.
+Proof.
+intros l1 l2 H; induction H as [ | s1 s2 l1 l2 E H IH]; [apply Fset.equal_refl | ].
+rewrite (Fset.Union_unfold _ (s1 :: l1)), (Fset.Union_unfold _ (s2 :: l2)); apply Fset.union_eq; assumption.
+Qed.
+
+(** the sorts of the [WITH] relations *)
+Definition Rsort (ce' ce : SqlFull.cte_env T relname) :=
+  Forall2 (fun x' x => fst x' = fst x /\ fst (snd x') =S= rs (fst (snd x))) ce' ce.
+
+Lemma Rsort_find : forall ce' ce r, Rsort ce' ce ->
+  match Oset.find ORN r ce', Oset.find ORN r ce with
+  | Some (s', _), Some (s, _) => s' =S= rs s
+  | None, None => True
+  | _, _ => False
+  end.
+Proof.
+intros ce' ce r H; induction H as [ | [r' [s' l']] [r0 [s l]] ce' ce [E1 E2] H IH]; [exact I | ].
+simpl in E1, E2; subst r'; cbn [Oset.find Mem.find fst].
+unfold Oset.find in IH; destruct (Oset.eq_bool ORN r r0); [exact E2 | exact IH].
+Qed.
+
+Lemma Rsort_cons : forall ce' ce r s' s l' l, Rsort ce' ce -> s' =S= rs s -> Rsort ((r, (s', l')) :: ce') ((r, (s, l)) :: ce).
+Proof. intros; constructor; [split; [reflexivity | assumption] | assumption]. Qed.
+
+
+
+Lemma sort_rename : forall q ce' ce, Rsort ce' ce -> sq_sort' ce' (rq q) =S= rs (sq_sort ce q)
+with sort_rename_s : forall sp ce' ce, Rsort ce' ce -> sspec_sort ORN basesort' ce' (rsp sp) =S= rs (sspec_sort ORN basesort ce sp)
+with sort_rename_f : forall f ce' ce, Rsort ce' ce -> sfrom_sort ORN basesort' ce' (rf f) =S= rs (sfrom_sort ORN basesort ce f).
+Proof.
+- intros [r | o sq q1 q2 | sp | q lo off lim | q lo off ties pct n | q lw | r q1 q2 | sq r q1 q2 q3] ce' ce H; cbn [r_q squery_sort].
+  + generalize (Rsort_find _ _ r H); destruct (Oset.find ORN r ce') as [[s' l'] | ]; destruct (Oset.find ORN r ce) as [[s l] | ];
+      intro K; try contradiction K; [exact K | apply Hbs].
+  + apply sort_rename; exact H.
+  + apply sort_rename_s; exact H.
+  + apply sort_rename; exact H.
+  + apply sort_rename; exact H.
+  + rewrite (Fset.equal_eq_2 _ _ _ _ (rs_union _ _)); apply Fset.union_eq; [apply sort_rename; exact H | ].
+    rewrite (Fset.equal_eq_2 _ _ _ _ (rs_mk_set _)), map_map, map_map.
+    apply Fset.equal_refl_alt; f_equal; apply map_ext; intros [f lp lo a]; reflexivity.
+  + apply sort_rename; apply Rsort_cons; [exact H | apply sort_rename; exact H].
+  + apply sort_rename; apply Rsort_cons; [exact H | apply sort_rename; exact H].
+- intros [sq s lf w g h] ce' ce H; destruct s as [ | l]; cbn [r_s sspec_sort].
+  + rewrite (Fset.equal_eq_2 _ _ _ _ (rs_Union _)), map_map, map_map; apply Union_eq_F2.
+    induction lf as [ | f lf IH]; constructor; [apply sort_rename_f; exact H | exact IH].
+  + rewrite (Fset.equal_eq_2 _ _ _ _ (rs_mk_set _)), !map_map.
+    apply Fset.equal_refl_alt; f_equal; apply map_ext; intros [e a]; reflexivity.
+- intros [q r | jt lat f1 f2 c | name args ord atts] ce' ce H; cbn [r_f sfrom_sort].
+  + destruct r as [ | l]; cbn [r_ren sfrom_sort]; [apply sort_rename; exact H | ].
+    rewrite (Fset.equal_eq_2 _ _ _ _ (rs_mk_set _)), !map_map; apply Fset.equal_refl.
+  + rewrite (Fset.equal_eq_2 _ _ _ _ (rs_union _ _)); apply Fset.union_eq; apply sort_rename_f; exact H.
+  + rewrite (Fset.equal_eq_2 _ _ _ _ (rs_mk_set _)); apply Fset.equal_refl.
+Qed.
+
+Lemma eqb_rename : forall x y : SqlFull.sexpr T relname, sexpr_eqb (re x) (re y) = sexpr_eqb x y.
+Proof.
+fix IH 1; intros [v | a | f l | ag sq e c | ag sq e sep lo c | c e1 e2 | c | q | x'] y;
+  destruct y as [v' | a' | f' l' | ag' sq' e' c' | ag' sq' e' sep' lo' c' | c' e1' e2' | c' | q' | y']; try reflexivity.
+- cbn [r_e sexpr_eqb]; apply rho_eqb.
+- cbn [r_e sexpr_eqb]; f_equal.
+  revert l'; induction l as [ | x l IHl]; intros [ | y l']; try reflexivity.
+  cbn [map]; rewrite IH, IHl; reflexivity.
+Qed.
+
+End Sec.
