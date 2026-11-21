@@ -53,6 +53,7 @@ data/sql/SqlRelate.v
 data/sql/SqlRelateSelect.v
 data/sql/SqlRelateAlg.v
 data/sql/SqlPositional.v
+data/sql/SqlRename.v
 data/proof_of_concept/TuplesImpl.v
 data/proof_of_concept/IEEE.v
 data/proof_of_concept/Temporal.v

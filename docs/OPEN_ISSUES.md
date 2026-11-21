@@ -225,3 +225,22 @@ known gap and its status; it is updated by every pull request which touches one 
 | 22 | Static typing and well-formedness of queries (I5) | open |
 | 23 | Mathematical functions: correct rounding, `numeric` scales of PostgreSQL, bit operators | resolved (TODO 2.1, `docs/functions/math.md`); `rand()`/`random()` without seed excluded (nondeterministic) |
 | 24 | String functions of each dialect | resolved (TODO 2.2, `docs/functions/strings.md`); Unicode case folding (`upper`, `lower`, `ILIKE` beyond ASCII) open: needs generated case-mapping tables |
+
+## I10 — Scope of TODO 6.3 (positional semantics) — RESOLVED
+
+TODO 6.3 asks to migrate the tuples of `SqlFull.v` to positions and keep a named view for the old lemmas. What exists
+(`src/data/sql/SqlPositional.v`) is the converse: a positional semantics of a smaller language (tables, selections,
+`SELECT *` over products, `UNION ALL`) compiled to the named semantics, with the theorem that the compiled rows read by
+position are the positional rows (`positional_rows`). A real migration changes the tuple type of `SqlFull.v`
+(`Tuple.Rcd` has sets of labels, which cannot hold two columns of one name), so that every definition and proof
+built on it (congruence, sorts, scoping, refinement, the relation to `Sql.v`) has to be redone. Question for the
+maintainers: is the compiled positional view an acceptable resolution, should it be extended to the whole `SqlFull.v`
+syntax (subqueries, grouping, joins, windows, `WITH`), or is the full migration required?
+
+Decision (maintainer): keep the tuples of `SqlFull.v` named and prove, for the whole syntax, that the evaluation does
+not depend on the names. Done in `src/data/sql/SqlRename.v` (`eval_rename`): the rows of a query renamed by an
+order-preserving bijection of the attributes, over the renamed database, are the renamed rows of the query. The
+compiled positional language of `SqlPositional.v` stays as the example of the front end's naming.
+
+Related, for TODO 6.1: `IN (subquery)` and grouped blocks inside formulas needed two fixes of `Sql.v` (A7, A8 in
+`docs/SQL_COVERAGE.md`); both are fixed and the relation covers them (`sql_full_agree3`).

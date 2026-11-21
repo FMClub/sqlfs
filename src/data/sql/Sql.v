@@ -667,7 +667,22 @@ Hypothesis unknown : Bool.b (B T).
 Hypothesis contains_nulls : tuple -> bool.
 Hypothesis contains_nulls_eq : forall t1 t2, t1 =t= t2 -> contains_nulls t1 = contains_nulls t2.
 
-Notation eval_sql_formula := (eval_sql_formula (T := T) (dom := sql_query) unknown contains_nulls).
+(** the columns of a query in the order of its [SELECT] list (those of the left operand for a set operation, the order
+    of the sort for [SELECT *] and for the tables, whose columns are a set): [IN] compares by position *)
+Fixpoint sql_cols (sq : sql_query) : list attribute :=
+  match sq with
+  | Sql_Select (Select_List (_Select_List la)) _ _ _ _ => List.map (@snd _ _) (List.map select_as_as_pair la)
+  | Sql_Set _ sq1 _ => sql_cols sq1
+  | _ => {{{sql_sort sq}}}
+  end.
+
+(** the order of the columns of a query, by the type of the queries (those of [Sql.v] here, those of the
+    algebra in [SqlAlgebra.v]) *)
+Class ColsOf (D : Type) := cols_of : D -> list attribute.
+#[global] Instance cols_sql : ColsOf sql_query := sql_cols.
+
+Notation eval_sql_formula I :=
+  (eval_sql_formula (T := T) (dom := sql_query) unknown contains_nulls I cols_of).
 
 Fixpoint eval_sql_query env (sq : sql_query) {struct sq} : bagT :=
   match sq with

@@ -151,7 +151,16 @@ Hypothesis unknown : Bool.b (B T).
 Hypothesis contains_nulls : tuple -> bool.
 Hypothesis contains_nulls_eq : forall t1 t2, t1 =t= t2 -> contains_nulls t1 = contains_nulls t2.
 
-Notation eval_sql_formula := (eval_sql_formula (T := T) (dom := sql_query_ext) unknown contains_nulls).
+(** the columns of a query in the order of its [SELECT] list ([IN] compares by position), as [sql_cols] *)
+Fixpoint sql_ext_cols (sq : sql_query_ext) : list attribute :=
+  match sq with
+  | Sql_Select_Ext (Select_List (_Select_List la)) _ _ _ _ _ => List.map (@snd _ _) (List.map select_as_as_pair la)
+  | Sql_Set_Ext _ sq1 _ => sql_ext_cols sq1
+  | _ => {{{sql_ext_sort sq}}}
+  end.
+
+Notation eval_sql_formula I :=
+  (eval_sql_formula (T := T) (dom := sql_query_ext) unknown contains_nulls I sql_ext_cols).
 
 Notation make_groups := 
   (fun env b => @make_groups T env (Febag.elements (Fecol.CBag (CTuple T)) b)).

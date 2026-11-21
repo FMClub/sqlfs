@@ -223,8 +223,21 @@ destruct e as [f | a f | f la].
       clear IHn.
       induction env1 as [ | [[sa1 g1] ll1] env1].
       - simpl.
-        case_eq (find_eval_env T env2 (A_agg T a f)); [intros; left; apply refl_equal | ].
-        intro H1; unfold is_a_suitable_env.
+        assert (Bl : binds_ag T (labels T (mk_tuple T s1 (dot T t))) (A_agg T a f) =
+                     binds_ag T (labels T t) (A_agg T a f)).
+        { rewrite (binds_ag_eq T _ _ _ (labels_mk_tuple _ _ _)), (binds_ag_eq T _ _ _ Ht1).
+          unfold binds_ag.
+          assert (K : forall x, In x ({{{variables_ag T (A_agg T a f)}}}) ->
+                        (x inS? s1) = (x inS? (s1 unionS s2))).
+          { intros x Ix; apply Fset.in_elements_mem in Ix; rewrite Fset.mem_union.
+            destruct (x inS? s1) eqn:X1; [reflexivity | simpl].
+            destruct (x inS? s2) eqn:X2; [ | reflexivity].
+            rewrite <- X1, (He x); [reflexivity | rewrite Fset.mem_inter, X2, Ix; reflexivity]. }
+          revert K; generalize ({{{variables_ag T (A_agg T a f)}}}); intros l0 K.
+          induction l0 as [ | x l0 IHl]; [reflexivity | ]; simpl.
+          rewrite (K x (or_introl eq_refl)), IHl; [reflexivity | intros y Iy; apply K; right; exact Iy]. }
+        rewrite Bl; destruct (binds_ag T (labels T t) (A_agg T a f)); [ | left; apply refl_equal].
+        unfold is_a_suitable_env.
         rewrite (Fset.elements_spec1 _ _ _ Ht1).
         rewrite (Fset.elements_spec1 _ _ _ (labels_mk_tuple _ _ _)).
         assert (Aux : is_built_upon_ag T
@@ -254,11 +267,11 @@ destruct e as [f | a f | f la].
           apply IHenv1.
           simpl in We; rewrite Bool.Bool.andb_true_iff in We; apply (proj2 We).
         }
-        simpl; destruct IH as [IH | IH].
-        + rewrite IH.
-          case_eq (find_eval_env T (env1 ++ env_t T env2 t) (A_agg T a f)); 
-            [intros; left; apply refl_equal | intro H].
-          assert (Aux : is_a_suitable_env T
+        simpl; destruct (binds_ag T sa1 (A_agg T a f)).
+        2: { destruct IH as [IH | IH]; [left; exact IH | ].
+             destruct IH as [env1' [env1'' [IH1 [IH2 IH3]]]]; rewrite IH2, IH3; right.
+             exists ((sa1, g1, ll1) :: env1'), env1''; split; [rewrite IH1; apply refl_equal | split; apply refl_equal]. }
+        + assert (Aux : is_a_suitable_env T
                           sa1 (env1 ++ env_t T env2 (mk_tuple T s1 (dot T t))) (A_agg T a f) = 
                         is_a_suitable_env T sa1 (env1 ++ env_t T env2 t) (A_agg T a f)).
           {
@@ -285,10 +298,6 @@ destruct e as [f | a f | f la].
             [ | left; apply refl_equal].
           right; exists nil; exists ((sa1, g1, ll1) :: env1).
           split; [ | split]; apply refl_equal.
-        + destruct IH as [env1' [env1'' [IH1 [IH2 IH3]]]]; rewrite IH2, IH3; right.
-          eexists; eexists; split; [ | split; apply refl_equal].
-          rewrite IH1, app_comm_cons; apply f_equal2; [ | apply refl_equal].
-          apply refl_equal.
     }
     destruct Aux as [Aux | [env1' [env1'' [Aux1 [Aux2 Aux3]]]]].
     * rewrite Aux; apply refl_equal.

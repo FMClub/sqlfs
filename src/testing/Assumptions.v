@@ -2,7 +2,7 @@
 
     Each result is closed under the global context (no axiom): CI checks the output of this file
     ([tools/check_hygiene.py] fails on [Axioms:]). *)
-Require Import SqlFullFacts FreshAttr Versions Oracles SqlRelate SqlGroupFacts SqlScoping SqlSorts SqlRelateSelect SqlRelateAlg SqlPositional.
+Require Import SqlFullFacts FreshAttr Versions Oracles SqlRelate SqlGroupFacts SqlScoping SqlSorts SqlRelateSelect SqlRelateAlg SqlPositional SqlRename.
 Print Assumptions SqlFullFacts.order_by_nothing.
 Print Assumptions SqlFullFacts.inner_join_spec.
 Print Assumptions SqlFullFacts.inner_join_where.
@@ -57,3 +57,4 @@ Print Assumptions SqlPositional.positional_agree.
 Print Assumptions SqlPositional.positional_rows.
 Print Assumptions SqlRelateSelect.select_agree_grp.
 Print Assumptions SqlRelateSelect.sql_full_agree3.
+Print Assumptions SqlRename.eval_rename.
