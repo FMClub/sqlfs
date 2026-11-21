@@ -50,6 +50,7 @@ data/sql/SqlCongruence.v
 data/sql/SqlSorts.v
 data/sql/SqlScopeQuery.v
 data/sql/SqlRelate.v
+data/sql/SqlRelateSelect.v
 data/proof_of_concept/TuplesImpl.v
 data/proof_of_concept/IEEE.v
 data/proof_of_concept/Temporal.v
