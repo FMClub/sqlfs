@@ -57,15 +57,16 @@ Theorem sql_full_alg3 :
   (forall t u, Oeset.eq_bool (OTuple T) (canon_tuple O t) (canon_tuple O u) = Oeset.eq_bool (OTuple T) t u) ->
   (forall atts rows, unify_rows O atts rows = rows) ->
   forall unknown (cn : tuple T -> bool), (forall t1 t2, t1 =t= t2 -> cn t1 = cn t2) ->
+  in_ok T O unknown cn ->
   well_sorted_sql_table T basesort instance ->
   forall (q : sql_query T relname) (q' : squery T relname),
-    to_full3 T relname basesort true q = Some q' ->
+    to_full3 T relname basesort q = Some q' ->
     weak_well_formed_q basesort q = true ->
     Febag.mk_bag (Fecol.CBag (CTuple T)) (eval_squery ORN O basesort instance nil nil q') =BE=
     eval_query basesort instance unknown cn nil (sql_query_to_alg basesort q).
 Proof.
-intros T relname ORN O basesort instance H1 H2 H3 H4 H5 H6 H7 A1 A2 A3 H9 H10 unknown cn Hcn W q q' Hq Hw.
+intros T relname ORN O basesort instance H1 H2 H3 H4 H5 H6 H7 A1 A2 A3 H9 H10 unknown cn Hcn Hin W q q' Hq Hw.
 apply Febag.equal_trans with (eval_sql_query basesort instance unknown cn nil q).
-- apply (sql_full_agree3 T relname ORN O basesort instance H1 H2 H3 H4 H5 H6 H7 A1 A2 A3 H9 H10 unknown cn Hcn W true q q' Hq nil nil (Rnil T relname) (fun _ => eq_refl)).
+- apply (sql_full_agree3 T relname ORN O basesort instance H1 H2 H3 H4 H5 H6 H7 A1 A2 A3 H9 H10 unknown cn Hcn Hin W q q' Hq nil nil (Rnil T relname)).
 - apply Febag.equal_sym; exact (@sql_query_to_alg_is_sound T relname basesort instance unknown cn Hcn W nil q Hw).
 Qed.
