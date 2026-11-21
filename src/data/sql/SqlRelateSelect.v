@@ -366,6 +366,183 @@ apply (Oeset.permut_trans (l2 := map PROJ (filter W (map (fun x => join_tuple T 
   + apply elements_mk_bag_permut.
 Qed.
 
+(** * Products of several [FROM] items *)
+
+Notation JT := (join_tuple T).
+Notation ET := (empty_tuple T).
+
+Lemma join_eq_l : forall x1 x2 x, x1 =t= x2 -> JT x1 x =t= JT x2 x.
+Proof. intros; apply join_tuple_eq; [assumption | apply Oeset.compare_eq_refl]. Qed.
+
+Lemma join_eq_r : forall x x1 x2, x1 =t= x2 -> JT x x1 =t= JT x x2.
+Proof. intros; apply join_tuple_eq; [apply Oeset.compare_eq_refl | assumption]. Qed.
+
+Definition F2t := Forall2 (fun x y : tuple T => x =t= y).
+
+Lemma F2t_permut : forall l1 l2, F2t l1 l2 -> permT l1 l2.
+Proof. intros l1 l2 H; induction H; [apply Oeset.permut_refl | apply Oeset.permut_cons; assumption]. Qed.
+
+Lemma F2t_flat_map : forall (X Y : Type) (f : X -> list (tuple T)) (g : Y -> list (tuple T)) l1 l2,
+  Forall2 (fun x y => F2t (f x) (g y)) l1 l2 -> F2t (flat_map f l1) (flat_map g l2).
+Proof.
+intros X Y f g l1 l2 H; induction H as [ | x y l1 l2 Hxy H IH]; [constructor | simpl].
+induction Hxy; simpl; [exact IH | constructor; assumption].
+Qed.
+
+Lemma F2t_refl : forall l, F2t l l.
+Proof. intro l; induction l; constructor; [apply Oeset.compare_eq_refl | assumption]. Qed.
+
+Lemma F2t_map : forall (X : Type) (f g : X -> tuple T) l, (forall x, f x =t= g x) -> F2t (map f l) (map g l).
+Proof. intros X f g l H; induction l; constructor; auto. Qed.
+
+Lemma F2t_app : forall l1 l2 l1' l2', F2t l1 l2 -> F2t l1' l2' -> F2t (l1 ++ l1') (l2 ++ l2').
+Proof. intros l1 l2 l1' l2' H K; induction H; simpl; [exact K | constructor; assumption]. Qed.
+
+Lemma F2t_trans : forall l1 l2 l3, F2t l1 l2 -> F2t l2 l3 -> F2t l1 l3.
+Proof.
+intros l1 l2 l3 H; revert l3; induction H as [ | x y l1 l2 Hxy H IH]; intros l3 K; inversion K; subst; constructor.
+- eapply Oeset.compare_eq_trans; eassumption.
+- apply IH; assumption.
+Qed.
+
+Lemma cross_app : forall l1 l2 M, cross_product T (l1 ++ l2) M = cross_product T l1 M ++ cross_product T l2 M.
+Proof. intros; unfold cross_product; apply flat_map_app. Qed.
+
+Lemma cross_assoc_one : forall a l M,
+  F2t (cross_product T (map (JT a) l) M) (map (JT a) (flat_map (fun x => map (JT x) M) l)).
+Proof.
+intros a l M; induction l as [ | x l IH]; [constructor | ]; cbn [map flat_map]; unfold cross_product in *; cbn [flat_map].
+rewrite map_app; apply F2t_app; [ | exact IH].
+rewrite map_map; apply F2t_map; intro m; apply Oeset.compare_eq_sym, join_tuple_assoc.
+Qed.
+
+Lemma filter_true_id : forall (X : Type) (l : list X), filter (fun _ => true) l = l.
+Proof. intros X l; induction l as [ | x l IH]; [reflexivity | simpl; rewrite IH; reflexivity]. Qed.
+
+(** the product of [SqlFull.v] (on the left) and the one of [Sql.v] (on the right) list the same combinations *)
+Lemma prod_F2 : forall Ls acc,
+  F2t (fold_left (fun l1 l2 => cross_product T l1 l2) Ls acc) (cross_product T acc (N_join_list (tuple T) JT ET Ls)).
+Proof.
+intro Ls; induction Ls as [ | l Ls IH]; intro acc; simpl.
+- unfold cross_product; induction acc as [ | a acc IHa]; [constructor | simpl].
+  constructor; [apply Oeset.compare_eq_sym, join_tuple_empty_2 | exact IHa].
+- eapply F2t_trans; [apply IH | ].
+  rewrite brute_left_join_list_unfold, theta_join_list_unfold; unfold d_join_list.
+  set (M := N_join_list (tuple T) JT ET Ls); clearbody M.
+  rewrite (flat_map_ext _ (fun x1 => map (JT x1) M)) by (intro; rewrite filter_true_id; reflexivity).
+  induction acc as [ | a acc IHa]; [constructor | ].
+  change (cross_product T (a :: acc) l) with (map (JT a) l ++ cross_product T acc l).
+  rewrite cross_app; unfold cross_product at 3; cbn [flat_map]; fold (cross_product T acc).
+  apply F2t_app; [apply cross_assoc_one | exact IHa].
+Qed.
+
+Lemma prod_permut : forall Ls, permT (fold_left (fun l1 l2 => cross_product T l1 l2) Ls (ET :: nil)) (N_join_list (tuple T) JT ET Ls).
+Proof.
+intro Ls; apply F2t_permut; eapply F2t_trans; [apply prod_F2 | ].
+unfold cross_product; cbn [flat_map]; rewrite app_nil_r.
+induction (N_join_list (tuple T) JT ET Ls) as [ | x l IH]; constructor; [apply join_tuple_empty_1 | exact IH].
+Qed.
+
+(** the product of [Sql.v] respects the permutations of its operands *)
+Lemma N_join_permut : forall Ls Ls', Forall2 permT Ls Ls' ->
+  permT (N_join_list (tuple T) JT ET Ls) (N_join_list (tuple T) JT ET Ls').
+Proof.
+intros Ls Ls' H; induction H as [ | l l' Ls Ls' Hl H IH]; [apply Oeset.permut_refl | ].
+cbn [N_join_list]; rewrite !brute_left_join_list_unfold.
+apply (theta_join_list_permut_eq (tuple T) (OTuple T) JT join_eq_l join_eq_r); [intros; reflexivity | exact Hl | exact IH].
+Qed.
+
+(** * Selections over several [FROM] items *)
+
+Lemma fold_keep : forall Ls acc,
+  fold_left (fun l1 l2 => keep_errors O (cross_product T l1 l2) (l1 ++ l2)) Ls acc =
+  fold_left (fun l1 l2 => cross_product T l1 l2) Ls acc.
+Proof. intro Ls; induction Ls as [ | l Ls IH]; intro acc; [reflexivity | simpl; rewrite keep_errors_id; apply IH]. Qed.
+
+Lemma ef_star : forall q', eval_sfrom ORN O basesort instance nil nil (Fr_Query q' (Ren_Star T)) = eq0 q'.
+Proof.
+intro q'; change (eval_sfrom ORN O basesort instance nil nil (Fr_Query q' (Ren_Star T))) with
+  (map (fun t => let t' := SqlFull.rename_tuple O (Ren_Star T) t in
+                 if row_error O t && negb (row_error O t') then err_row O t' else t') (eq0 q')).
+cbv zeta; cbn [SqlFull.rename_tuple]; rewrite <- (List.map_id (eq0 q')) at 2.
+apply map_ext; intro t; rewrite row_error_false; reflexivity.
+Qed.
+
+Notation PROD qs' := (fold_left (fun l1 l2 => cross_product T l1 l2) (map eq0 qs') (ET :: nil)).
+
+Lemma where_eq_n : forall qs' c, (forall t, er nil (slice_t T relname t :: nil) c = false) ->
+  where_rows ORN O basesort instance nil nil (map (fun q' => Fr_Query q' (Ren_Star T)) qs') c =
+  filter (fun t => is_true3 T (ec nil (slice_t T relname t :: nil) c)) (PROD qs').
+Proof.
+intros qs' c Hc; unfold where_rows; rewrite fold_keep, flat_filter by exact Hc; f_equal; f_equal.
+rewrite map_map; apply map_ext; intro q'; apply ef_star.
+Qed.
+
+Lemma full_select_rows_n : forall qs' s' c, (forall t, er nil (slice_t T relname t :: nil) c = false) ->
+  (forall sa, sselect_has_agg ORN basesort nil sa s' = false) ->
+  eq0 (SQ_Select (Select Set_All s' (map (fun q' => Fr_Query q' (Ren_Star T)) qs') c (G_Fine T relname) (C_True T relname))) =
+  map (row_of nil s') (filter (fun t => is_true3 T (ec nil (slice_t T relname t :: nil) c)) (PROD qs')).
+Proof.
+intros qs' s' c Hc Ha.
+change (eq0 (SQ_Select _)) with (map (@fst _ _) (eval_sspec ORN O basesort instance nil nil
+           (Select Set_All s' (map (fun q' => Fr_Query q' (Ren_Star T)) qs') c (G_Fine T relname) (C_True T relname)) nil)).
+rewrite eval_select; cbv zeta.
+replace (implicit_group ORN basesort nil _ s' (C_True T relname) nil) with false
+  by (unfold implicit_group; rewrite Ha; reflexivity).
+rewrite gp_eq by reflexivity.
+rewrite where_eq_n by exact Hc.
+apply sr_eq.
+Qed.
+
+Theorem select_agree_n : forall unknown cn qs qs' s s' f c,
+  Forall2 (fun q q' => Febag.equal BTupleT (Febag.mk_bag BTupleT (eq0 q'))
+                                   (eval_sql_query basesort instance unknown cn nil q) = true) qs qs' ->
+  s_to s = Some s' -> f_to f = Some c ->
+  Febag.equal BTupleT
+    (Febag.mk_bag BTupleT (eq0 (SQ_Select (Select Set_All s' (map (fun q' => Fr_Query q' (Ren_Star T)) qs') c
+                                                  (G_Fine T relname) (C_True T relname)))))
+    (eval_sql_query basesort instance unknown cn nil
+       (Sql_Select s (map (fun q => From_Item q (Att_Ren_Star T)) qs) f (Group_Fine T) (Sql_True T (sql_query T relname)))) = true.
+Proof.
+intros unknown cn qs qs' s s' f c Hq Hs Hf.
+rewrite full_select_rows_n.
+2: { intro t; exact (proj2 (f_agree unknown cn (eval_sql_query basesort instance unknown cn) nil t f c Hf)). }
+2: { intro sa; apply (s_no_agg nil sa s s' Hs). }
+rewrite eval_sql_query_unfold; cbv zeta.
+rewrite Febag.nb_occ_equal; intro u; rewrite !Febag.nb_occ_mk_bag; apply Oeset.permut_nb_occ.
+set (W := fun t => Bool.is_true (B T) (eval_sql_formula unknown cn (eval_sql_query basesort instance unknown cn) (env_t T nil t) f)).
+assert (Wc : forall x y, x =t= y -> W x = W y) by (intros x y E; unfold W; rewrite (f_compat unknown cn _ f c x y Hf E); reflexivity).
+set (PROJ := fun t => projection T (env_t T nil t) s).
+assert (Pc : forall x y, x =t= y -> PROJ x =t= PROJ y) by (intros x y E; apply projection_eq, env_t_eq_2, E).
+apply (Oeset.permut_trans (l2 := map PROJ (filter W (PROD qs')))).
+- generalize (PROD qs'); intro L; induction L as [ | t L IH]; [apply Oeset.permut_refl | ].
+  assert (E : is_true3 T (ec nil (slice_t T relname t :: nil) c) = W t)
+    by (unfold W; rewrite (proj1 (f_agree unknown cn (eval_sql_query basesort instance unknown cn) nil t f c Hf)); reflexivity).
+  cbn [map filter]; rewrite E; destruct (W t); [ | exact IH].
+  cbn [map]; apply Oeset.permut_cons; [apply row_agree; exact Hs | exact IH].
+- apply Oeset.permut_sym.
+  match goal with |- permT (map ?F (filter ?P (make_groups T nil ?E0 (Group_Fine T)))) _ =>
+    assert (EQ : forall L, map F (filter P (make_groups T nil L (Group_Fine T))) = map PROJ L);
+    [ intro L; unfold make_groups; cbn [eval_sql_formula]; rewrite Bool.true_is_true_alt; clear;
+      induction L as [ | t L IH]; [reflexivity | ];
+      cbn [map filter]; rewrite IH;
+      f_equal; unfold PROJ, env_g, env_t; rewrite quicksort_1; reflexivity
+    | rewrite EQ ] end.
+  apply permut_map_compat; [ | exact Pc].
+  eapply Oeset.permut_trans; [apply elements_filter_permut; exact Wc | ].
+  apply permut_filter_compat; [ | exact Wc].
+  unfold N_join_bag; eapply Oeset.permut_trans; [apply elements_mk_bag_permut | ].
+  apply Oeset.permut_sym; eapply Oeset.permut_trans; [apply prod_permut | ].
+  apply N_join_permut; rewrite !map_map.
+  induction Hq as [ | q q' qs qs' Hqq' Hq IH]; [constructor | constructor; [ | exact IH]].
+  cbn [eval_sql_from_item]; rewrite Febag.map_unfold.
+  apply Oeset.permut_sym; eapply Oeset.permut_trans; [apply elements_mk_bag_permut | ].
+  rewrite (map_ext _ (fun t => t)) by (intro t; cbn [att_renaming_item_to_from_item projection env_t]; rewrite quicksort_1; reflexivity).
+  rewrite List.map_id; apply Oeset.permut_trans with (Febag.elements BTupleT (Febag.mk_bag BTupleT (eq0 q'))).
+  + apply bag_equal_permut; rewrite Febag.nb_occ_equal in Hqq' |- *; intro x; symmetry; apply Hqq'.
+  + apply elements_mk_bag_permut.
+Qed.
+
 (** * Queries made of tables, set operations and such selections *)
 
 Fixpoint to_full2 (q : sql_query T relname) : option (squery T relname) :=
@@ -373,9 +550,16 @@ Fixpoint to_full2 (q : sql_query T relname) : option (squery T relname) :=
   | Sql_Table _ r => Some (SQ_Table T r)
   | Sql_Set o q1 q2 =>
     match to_full2 q1, to_full2 q2 with Some a, Some b => Some (SQ_Set o Set_All a b) | _, _ => None end
-  | Sql_Select s (From_Item q1 (Att_Ren_Star _) :: nil) f (Group_Fine _) (Sql_True _ _) =>
-    match to_full2 q1, s_to s, f_to f with
-    | Some a, Some s', Some c => Some (SQ_Select (Select Set_All s' (Fr_Query a (Ren_Star T) :: nil) c (G_Fine T relname) (C_True T relname)))
+  | Sql_Select s lf f (Group_Fine _) (Sql_True _ _) =>
+    match (fix go (lf : list (sql_from_item T relname)) : option (list (squery T relname)) :=
+             match lf with
+             | nil => Some nil
+             | From_Item q1 (Att_Ren_Star _) :: r =>
+               match to_full2 q1, go r with Some a, Some r' => Some (a :: r') | _, _ => None end
+             | _ :: _ => None
+             end) lf, s_to s, f_to f with
+    | Some qs', Some s', Some c =>
+      Some (SQ_Select (Select Set_All s' (map (fun q' => Fr_Query q' (Ren_Star T)) qs') c (G_Fine T relname) (C_True T relname)))
     | _, _, _ => None
     end
   | _ => None
@@ -386,8 +570,9 @@ Fixpoint well_sorted2 (q : sql_query T relname) : bool :=
   | Sql_Table _ _ => true
   | Sql_Set _ q1 q2 =>
     Fset.equal (A T) (sql_sort basesort q1) (sql_sort basesort q2) && well_sorted2 q1 && well_sorted2 q2
-  | Sql_Select _ (From_Item q1 _ :: nil) _ _ _ => well_sorted2 q1
-  | _ => true
+  | Sql_Select _ lf _ _ _ =>
+    (fix go (lf : list (sql_from_item T relname)) : bool :=
+       match lf with nil => true | From_Item q1 _ :: r => well_sorted2 q1 && go r end) lf
   end.
 
 Lemma lopt_sort : forall (l : list (select T)) l',
@@ -405,13 +590,20 @@ fix IH 1; intros q q' H; destruct q as [r | o q1 q2 | s lf f g h]; simpl in H.
 - injection H; intros <-; reflexivity.
 - destruct (to_full2 q1) as [a | ] eqn:E1; [ | discriminate H]; destruct (to_full2 q2) as [b | ]; [ | discriminate H].
   injection H; intros <-; exact (IH q1 a E1).
-- destruct lf as [ | [q1 [ | la]] [ | x lf]]; try discriminate H; destruct g; try discriminate H;
-    destruct h; try discriminate H.
-  destruct (to_full2 q1) as [a | ] eqn:E1; [ | discriminate H]; destruct (s_to s) as [s' | ] eqn:Es; [ | discriminate H].
-  destruct (f_to f) as [c | ]; [ | discriminate H]; injection H; intros <-.
+- destruct g; try discriminate H; destruct h; try discriminate H.
+  match type of H with (match ?G with _ => _ end) = _ => destruct G as [qs' | ] eqn:Eg end; [ | discriminate H].
+  destruct (s_to s) as [s' | ] eqn:Es; [ | discriminate H].
+  destruct (f_to f) as [c | ]; [ | discriminate H]; injection H; intros <-; clear H.
   destruct s as [ | [l]]; simpl in Es.
-  + injection Es; intros <-; cbn [squery_sort sspec_sort sfrom_sort sql_sort sql_from_item_sort map].
-    fold (@squery_sort T relname ORN basesort) (sql_sort basesort); rewrite (IH q1 a E1); reflexivity.
+  + injection Es; intros <-; cbn [squery_sort sspec_sort sql_sort].
+    fold (@sfrom_sort T relname ORN basesort) (sql_from_item_sort basesort); f_equal.
+    revert qs' Eg; induction lf as [ | [q1 [ | la]] lf IHl]; intros qs' Eg; cbv beta iota fix in Eg.
+    * injection Eg; intros <-; reflexivity.
+    * destruct (to_full2 q1) as [a | ] eqn:E1; [ | discriminate Eg].
+      match type of Eg with (match ?G with _ => _ end) = _ => destruct G as [r' | ] eqn:Er end; [ | discriminate Eg].
+      injection Eg; intros <-; cbn [map sfrom_sort sql_from_item_sort]; fold (@squery_sort T relname ORN basesort) (sql_sort basesort).
+      rewrite (IH q1 a E1); f_equal; exact (IHl r' eq_refl).
+    * discriminate Eg.
   + destruct (lopt _ l) as [l' | ] eqn:El; [ | discriminate Es]; injection Es; intros <-.
     cbn [squery_sort sspec_sort sql_sort]; rewrite (lopt_sort l l' El); reflexivity.
 Qed.
@@ -449,11 +641,22 @@ intros unknown cn; fix IH 1; intros q q' H W; destruct q as [r | o q1 q2 | s lf 
   unfold Febag.interp_set_op; destruct o;
     rewrite ?Febag.nb_occ_union_max, ?Febag.nb_occ_union, ?Febag.nb_occ_inter, ?Febag.nb_occ_diff;
     rewrite <- (K1 t), <- (K2 t), !Febag.nb_occ_mk_bag; reflexivity.
-- destruct lf as [ | [q1 [ | la]] [ | x lf]]; try discriminate H; destruct g; try discriminate H;
-    destruct h; try discriminate H.
-  destruct (to_full2 q1) as [a | ] eqn:E1; [ | discriminate H]; destruct (s_to s) as [s' | ] eqn:Es; [ | discriminate H].
-  destruct (f_to f) as [c | ] eqn:Ef; [ | discriminate H]; injection H; intros <-.
-  simpl in W; apply select_agree; [exact (IH q1 a E1 W) | exact Es | exact Ef].
+- destruct g; try discriminate H; destruct h; try discriminate H.
+  match type of H with (match ?G with _ => _ end) = _ => destruct G as [qs' | ] eqn:Eg end; [ | discriminate H].
+  destruct (s_to s) as [s' | ] eqn:Es; [ | discriminate H].
+  destruct (f_to f) as [c | ] eqn:Ef; [ | discriminate H]; injection H; intros <-; clear H.
+  assert (K : exists qs, lf = map (fun q => From_Item q (Att_Ren_Star T)) qs /\
+              Forall2 (fun q q' => Febag.equal BTupleT (Febag.mk_bag BTupleT (eq0 q'))
+                                               (eval_sql_query basesort instance unknown cn nil q) = true) qs qs').
+  { simpl in W; revert qs' Eg W; induction lf as [ | [q1 [ | la]] lf IHl]; intros qs' Eg W; cbv beta iota fix in Eg.
+    - injection Eg; intros <-; exists nil; split; constructor.
+    - destruct (to_full2 q1) as [a | ] eqn:E1; [ | discriminate Eg].
+      match type of Eg with (match ?G with _ => _ end) = _ => destruct G as [r' | ] eqn:Er end; [ | discriminate Eg].
+      injection Eg; intros <-; apply andb_true_iff in W; destruct W as [W1 W2].
+      destruct (IHl r' eq_refl W2) as [qs [E2 F2]]; exists (q1 :: qs); split; [simpl; rewrite E2; reflexivity | ].
+      constructor; [exact (IH q1 a E1 W1) | exact F2].
+    - discriminate Eg. }
+  destruct K as [qs [-> F]]; apply select_agree_n; assumption.
 Qed.
 
 End Agree.
