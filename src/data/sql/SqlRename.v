@@ -6,8 +6,9 @@
     ([eval_rename]). The front end names the columns of each item of a [FROM] clause and of each derived table
     by their positions, so that the named semantics of [SqlFull.v] is a positional semantics in which two
     columns never share a name; this theorem says that the choice of the names does not matter. *)
-Require Import List Bool Sorting.
-Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData SqlFull SqlInduction.
+Require Import List Bool Sorting ZArith NArith QArith.
+Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData SqlFull SqlInduction
+        SqlFullFacts SqlGroupFacts SqlCongruence SqlScopeQuery Bool3 Formula.
 Import Tuple.
 
 Section Sec.
@@ -769,5 +770,269 @@ Proof.
 refine (ind_c T relname He_ Hc_ Ht_ Ht_ Ht_ h_const h_col h_fun h_agg h_aggx h_case h_cond h_sub h_grouping h_conj h_not
   h_true h_pred h_expr h_quant h_in h_exists _ _ _ _ _ _ _ _ _ _ _ _); intros; exact I.
 Qed.
+
+
+(** * The evaluation of the renamed queries *)
+
+Hypothesis O : dialect T.
+(** the renaming preserves the affinities of the attributes, and the attribute of the failed rows *)
+Hypothesis Haff : forall a, attr_affinity O (rho a) = attr_affinity O a.
+Hypothesis Herr : rho (err_attr O) = err_attr O.
+Hypothesis instance instance' : relname -> Febag.bag (Fecol.CBag (Tuple.CTuple T)).
+(** the renamed database: the rows of each table are renamed, in the same order *)
+Hypothesis Hinst : forall r, RL (Febag.elements _ (instance' r)) (Febag.elements _ (instance r)).
+
+(** ** Lists *)
+
+Lemma F2_eq_map : forall (X Y Z : Type) (P : X -> Y -> Prop) (f : X -> Z) (g : Y -> Z) l1 l2,
+  Forall2 P l1 l2 -> (forall x y, P x y -> f x = g y) -> map f l1 = map g l2.
+Proof. intros X Y Z P f g l1 l2 H K; induction H; simpl; [reflexivity | rewrite (K _ _ H), IHForall2; reflexivity]. Qed.
+
+Lemma F2_existsb : forall (X Y : Type) (P : X -> Y -> Prop) (f : X -> bool) (g : Y -> bool) l1 l2,
+  Forall2 P l1 l2 -> (forall x y, P x y -> f x = g y) -> existsb f l1 = existsb g l2.
+Proof. intros X Y P f g l1 l2 H K; induction H; simpl; [reflexivity | rewrite (K _ _ H), IHForall2; reflexivity]. Qed.
+
+Lemma F2_flat_map : forall (X Y X' Y' : Type) (P : X -> Y -> Prop) (Q : X' -> Y' -> Prop) f g l1 l2,
+  Forall2 P l1 l2 -> (forall x y, P x y -> Forall2 Q (f x) (g y)) -> Forall2 Q (flat_map f l1) (flat_map g l2).
+Proof. intros X Y X' Y' P Q f g l1 l2 H K; induction H; simpl; [constructor | apply Forall2_app; auto]. Qed.
+
+Lemma F2_quant : forall (X Y : Type) (P : X -> Y -> Prop) qtf f g l1 l2,
+  Forall2 P l1 l2 -> (forall x y, P x y -> f x = g y) -> interp_quant (B T) qtf f l1 = interp_quant (B T) qtf g l2.
+Proof.
+intros X Y P qtf f g l1 l2 H K; destruct qtf; simpl;
+  induction H; simpl; [reflexivity | rewrite (K _ _ H), IHForall2; reflexivity | reflexivity | rewrite (K _ _ H), IHForall2; reflexivity].
+Qed.
+
+Lemma F2_fold_left : forall (X Y X' Y' : Type) (P : X -> Y -> Prop) (Q : X' -> Y' -> Prop) f g l1 l2 a1 a2,
+  Forall2 Q l1 l2 -> P a1 a2 -> (forall a1 a2 x1 x2, P a1 a2 -> Q x1 x2 -> P (f a1 x1) (g a2 x2)) ->
+  P (fold_left f l1 a1) (fold_left g l2 a2).
+Proof. intros X Y X' Y' P Q f g l1 l2 a1 a2 H; revert a1 a2; induction H; intros a1 a2 Ha K; simpl; auto. Qed.
+
+Lemma existsb_map' : forall (X Y : Type) (f : X -> Y) (p : Y -> bool) l, existsb p (map f l) = existsb (fun x => p (f x)) l.
+Proof. intros X Y f p l; induction l as [ | x l IH]; simpl; [reflexivity | rewrite IH; reflexivity]. Qed.
+
+Lemma existsb_ext' : forall (X : Type) (f g : X -> bool) l, (forall x, f x = g x) -> existsb f l = existsb g l.
+Proof. intros X f g l H; induction l as [ | x l IH]; simpl; [reflexivity | rewrite H, IH; reflexivity]. Qed.
+
+Lemma existsb_eqb_re : forall e l, existsb (sexpr_eqb (re e)) (map re l) = existsb (sexpr_eqb e) l.
+Proof. intros e l; rewrite existsb_map'; apply existsb_ext'; intro x; apply eqb_rename. Qed.
+
+(** ** Tuples *)
+
+Lemma null_of_rho : forall a, null_of T (rho a) = null_of T a.
+Proof. intro a; unfold null_of; rewrite Hty; reflexivity. Qed.
+
+Lemma store_rho : forall a v, store O (rho a) v = store O a v.
+Proof. intros a v; unfold store; rewrite null_of_rho; reflexivity. Qed.
+
+Lemma RS_union : forall s1' s1 s2' s2, s1' =S= rs s1 -> s2' =S= rs s2 -> (s1' unionS s2') =S= rs (s1 unionS s2).
+Proof.
+intros s1' s1 s2' s2 H1 H2; rewrite Fset.equal_spec; intro b.
+rewrite Fset.mem_union, mem_rs', Fset.mem_union, (Fset.mem_eq_2 _ _ _ H1), (Fset.mem_eq_2 _ _ _ H2), !mem_rs'; reflexivity.
+Qed.
+
+Lemma RS_err : Fset.singleton (A T) (err_attr O) =S= rs (Fset.singleton (A T) (err_attr O)).
+Proof.
+rewrite Fset.equal_spec; intro b; rewrite mem_rs', !Fset.singleton_spec.
+rewrite <- (Hrr' b) at 1; rewrite <- Herr at 1; rewrite rho_eqb; reflexivity.
+Qed.
+
+Lemma row_error_RT : forall t' t, RT t' t -> row_error O t' = row_error O t.
+Proof.
+intros t' t H; unfold row_error; rewrite (elements_labels_RT _ _ H), existsb_map'.
+apply existsb_ext'; intro a; rewrite (RT_dot_all _ _ _ H); reflexivity.
+Qed.
+
+Lemma err_row_RT : forall t' t, RT t' t -> RT (err_row O t') (err_row O t).
+Proof. intros t' t H; unfold err_row; apply RT_mk_tuple; [apply RS_union; [apply RT_labels; exact H | apply RS_err] | reflexivity]. Qed.
+
+Lemma null_tuple_RT : forall s' s, s' =S= rs s -> RT (null_tuple T s') (null_tuple T s).
+Proof. intros s' s H; unfold null_tuple; apply RT_mk_tuple; [exact H | intros; apply null_of_rho]. Qed.
+
+Lemma canon_RT : forall t' t, RT t' t -> RT (canon_tuple O t') (canon_tuple O t).
+Proof.
+intros t' t H; unfold canon_tuple; apply RT_mk_tuple; [apply RT_labels; exact H | ].
+intros a _; rewrite (RT_dot_all _ _ _ H); reflexivity.
+Qed.
+
+Lemma keep_errors_R : forall r' r all' all, RL r' r -> RL all' all -> RL (keep_errors O r' all') (keep_errors O r all).
+Proof.
+intros r' r all' all H K; unfold keep_errors.
+rewrite (F2_existsb _ _ _ _ _ _ _ H row_error_RT); destruct (existsb (row_error O) r); [exact H | ].
+apply RL_app; [exact H | ]; apply (F2_map2 _ _ _ _ _ RT); [ | apply err_row_RT].
+apply F2_filter; [exact K | apply row_error_RT].
+Qed.
+
+Lemma tuple_count_R : forall t' t l' l, RT t' t -> RL l' l -> tuple_count O t' l' = tuple_count O t l.
+Proof.
+intros t' t l' l H K; unfold tuple_count; apply (F2_length _ _ RT); apply F2_filter; [exact K | ].
+intros x y Hxy; apply RT_eq_bool; apply canon_RT; assumption.
+Qed.
+
+Lemma tuple_mem_R : forall t' t l' l, RT t' t -> RL l' l -> tuple_mem O t' l' = tuple_mem O t l.
+Proof.
+intros t' t l' l H K; unfold tuple_mem.
+induction K as [ | x' x l' l Hx K IH]; [reflexivity | ]; simpl; rewrite IH; f_equal.
+apply RT_eq_bool; apply canon_RT; assumption.
+Qed.
+
+Lemma F2_dedup_rec : forall (X Y : Type) (P : X -> Y -> Prop) (f : X -> tuple T) (g : Y -> tuple T),
+  (forall x y, P x y -> RT (f x) (g y)) -> forall l1 l2 s1 s2, Forall2 P l1 l2 -> RL s1 s2 ->
+  Forall2 P (dedup_rec O f s1 l1) (dedup_rec O g s2 l2).
+Proof.
+intros X Y P f g K l1 l2 s1 s2 H; revert s1 s2; induction H as [ | x y l1 l2 Hxy H IH]; intros s1 s2 Hs; simpl; [constructor | ].
+rewrite (tuple_mem_R _ _ _ _ (K _ _ Hxy) Hs); destruct (tuple_mem O (g y) s2); [apply IH; exact Hs | ].
+constructor; [exact Hxy | apply IH; constructor; [apply K; exact Hxy | exact Hs]].
+Qed.
+
+Lemma F2_dedup_on : forall (X Y : Type) (P : X -> Y -> Prop) (f : X -> tuple T) (g : Y -> tuple T),
+  (forall x y, P x y -> RT (f x) (g y)) -> forall l1 l2, Forall2 P l1 l2 -> Forall2 P (dedup_on O f l1) (dedup_on O g l2).
+Proof. intros; rewrite !dedup_on_rec; apply F2_dedup_rec; [assumption | assumption | constructor]. Qed.
+
+Lemma RL_dedup' : forall l' l, RL l' l -> RL (dedup O l') (dedup O l).
+Proof. intros l' l H; unfold dedup; apply F2_dedup_on; [intros; assumption | exact H]. Qed.
+
+Lemma RL_filter_occ : forall k1 k2, (forall i t' t, RT t' t -> k1 i t' = k2 i t) ->
+  forall l' l b' b, RL l' l -> RL b' b -> RL (filter_occ O k1 b' l') (filter_occ O k2 b l).
+Proof.
+intros k1 k2 K l' l b' b H; revert b' b; induction H as [ | x' x l' l Hx H IH]; intros b' b Hb; simpl; [constructor | ].
+apply RL_app; [ | apply IH; constructor; assumption].
+rewrite (tuple_count_R _ _ _ _ Hx Hb), (K _ _ _ Hx); destruct (k2 (tuple_count O x b) x); constructor; [exact Hx | constructor].
+Qed.
+
+Lemma set_op_R : forall o sq l1' l1 l2' l2, RL l1' l1 -> RL l2' l2 ->
+  RL (eval_set_op O o sq l1' l2') (eval_set_op O o sq l1 l2).
+Proof.
+intros o sq l1' l1 l2' l2 H1 H2; destruct sq; destruct o; unfold eval_set_op;
+  try (apply RL_dedup'; apply RL_app; assumption).
+- apply RL_app; assumption.
+- apply RL_app; [exact H1 | ]; apply RL_filter_occ; [ | exact H2 | constructor].
+  intros i t' t H; rewrite (tuple_count_R _ _ _ _ H H1); reflexivity.
+- apply RL_filter_occ; [ | exact H1 | constructor]; intros i t' t H; rewrite (tuple_count_R _ _ _ _ H H2); reflexivity.
+- apply RL_filter_occ; [ | exact H1 | constructor]; intros i t' t H; rewrite (tuple_count_R _ _ _ _ H H2); reflexivity.
+- apply F2_filter; [apply RL_dedup'; exact H1 | intros x y Hxy; rewrite (tuple_mem_R _ _ _ _ Hxy H2); reflexivity].
+- apply F2_filter; [apply RL_dedup'; exact H1 | intros x y Hxy; rewrite (tuple_mem_R _ _ _ _ Hxy H2); reflexivity].
+Qed.
+
+Lemma F2_combine_seq : forall (X Y : Type) (P : X -> Y -> Prop) n l1 l2, Forall2 P l1 l2 ->
+  Forall2 (fun x y => fst x = fst y /\ P (snd x) (snd y)) (combine (seq n (List.length l1)) l1) (combine (seq n (List.length l2)) l2).
+Proof.
+intros X Y P n l1 l2 H; revert n; induction H as [ | x y l1 l2 Hxy H IH]; intro n; simpl; constructor; [split; trivial | apply IH].
+Qed.
+
+Lemma unify_rows_R : forall atts l' l, RL l' l -> RL (unify_rows O (map rho atts) l') (unify_rows O atts l).
+Proof.
+intros atts l' l H; unfold unify_rows.
+apply (F2_map2 _ _ _ _ _ _ _ _ _ _ (F2_combine_seq _ _ _ 0 _ _ H)).
+intros [i t'] [j t] [E Ht]; simpl in E, Ht; subst j; apply RT_mk_tuple; [apply RT_labels; exact Ht | ].
+intros a _; rewrite (RT_dot_all _ _ _ Ht).
+induction atts as [ | b atts IH]; [reflexivity | ]; simpl; rewrite rho_eqb.
+destruct (Oset.eq_bool (OAtt T) b a); [ | exact IH].
+rewrite (F2_eq_map _ _ _ _ (fun t => dot T t (rho b)) (fun t => dot T t b) _ _ H); [reflexivity | ].
+intros; apply RT_dot_all; assumption.
+Qed.
+
+(** grouping *)
+Lemma F2_group_insert : forall (X Y : Type) (P : X -> Y -> Prop) k x y gs1 gs2, P x y ->
+  Forall2 (fun p q => fst p = fst q /\ Forall2 P (snd p) (snd q)) gs1 gs2 ->
+  Forall2 (fun p q => fst p = fst q /\ Forall2 P (snd p) (snd q)) (group_insert O k x gs1) (group_insert O k y gs2).
+Proof.
+intros X Y P k x y gs1 gs2 Hxy H; induction H as [ | [k1 g1] [k2 g2] gs1 gs2 [E Hg] H IH]; simpl in *.
+- constructor; [split; [reflexivity | constructor; [exact Hxy | constructor]] | constructor].
+- subst k2; destruct (key_eqb O k k1).
+  + constructor; [split; [reflexivity | apply Forall2_app; [exact Hg | constructor; [exact Hxy | constructor]]] | exact H].
+  + constructor; [split; [reflexivity | exact Hg] | exact IH].
+Qed.
+
+Lemma F2_group_on : forall (X Y : Type) (P : X -> Y -> Prop) k1 k2 l1 l2, Forall2 P l1 l2 ->
+  (forall x y, P x y -> k1 x = k2 y) -> Forall2 (Forall2 P) (group_on O k1 l1) (group_on O k2 l2).
+Proof.
+intros X Y P k1 k2 l1 l2 H K; rewrite !group_on_spec; unfold group_on_list.
+apply (F2_map2 _ _ _ _ _ (fun p q => fst p = fst q /\ Forall2 P (snd p) (snd q))); [ | intros x y [_ Hxy]; exact Hxy].
+apply (F2_fold_left _ _ _ _ _ P _ _ _ _ _ _ H); [constructor | ].
+intros a1 a2 x1 x2 Ha Hx; rewrite (K _ _ Hx); apply F2_group_insert; assumption.
+Qed.
+
+(** ** Environments *)
+
+Definition RSl (s' s : SqlFull.slice T relname) :=
+  fst (fst s') =S= rs (fst (fst s)) /\ RL (snd (fst s')) (snd (fst s)) /\ snd s' = map re (snd s).
+
+Definition REnv := Forall2 RSl.
+
+Definition RCE (ce' ce : SqlFull.cte_env T relname) :=
+  Forall2 (fun x' x => fst x' = fst x /\ fst (snd x') =S= rs (fst (snd x)) /\ RL (snd (snd x')) (snd (snd x))) ce' ce.
+
+Lemma RCE_Rsort : forall ce' ce, RCE ce' ce -> Rsort ce' ce.
+Proof. intros ce' ce H; unfold Rsort; induction H as [ | x' x ce' ce [E1 [E2 _]] H IH]; constructor; tauto. Qed.
+
+Lemma RCE_find : forall ce' ce r, RCE ce' ce ->
+  match Oset.find ORN r ce', Oset.find ORN r ce with
+  | Some (_, l'), Some (_, l) => RL l' l
+  | None, None => True
+  | _, _ => False
+  end.
+Proof.
+intros ce' ce r H; induction H as [ | [r' [s' l']] [r0 [s l]] ce' ce [E1 [E2 E3]] H IH]; [exact I | ].
+simpl in E1, E2, E3; subst r'; cbn [Oset.find Mem.find fst].
+unfold Oset.find in IH; destruct (Oset.eq_bool ORN r r0); [exact E3 | exact IH].
+Qed.
+
+Lemma RCE_cons : forall ce' ce r s' s l' l, RCE ce' ce -> s' =S= rs s -> RL l' l ->
+  RCE ((r, (s', l')) :: ce') ((r, (s, l)) :: ce).
+Proof. intros; constructor; [simpl; tauto | assumption]. Qed.
+
+Lemma REnv_t : forall t' t env' env, RT t' t -> REnv env' env -> REnv (slice_t T relname t' :: env') (slice_t T relname t :: env).
+Proof.
+intros t' t env' env Ht H; constructor; [ | exact H].
+split; [apply RT_labels; exact Ht | split; [constructor; [exact Ht | constructor] | reflexivity]].
+Qed.
+
+Lemma REnv_gs : forall sa' sa g' g hid env' env, sa' =S= rs sa -> RL g' g -> REnv env' env ->
+  REnv (slice_gs sa' g' (map re hid) :: env') (slice_gs sa g hid :: env).
+Proof.
+intros sa' sa g' g hid env' env Hs Hg H; constructor; [ | exact H].
+split; [ | split; [exact Hg | reflexivity]].
+destruct Hg as [ | t' t g' g Ht _]; simpl; [exact Hs | apply RT_labels; exact Ht].
+Qed.
+
+Lemma lookup_R : forall env' env a, REnv env' env -> lookup env' (rho a) = lookup env a.
+Proof.
+intros env' env a H; induction H as [ | [[sa' g'] h'] [[sa g] h] env' env [S1 [S2 S3]] H IH]; simpl in *.
+- apply null_of_rho.
+- rewrite (Fset.mem_eq_2 _ _ _ S1), mem_rs; destruct (a inS? sa); [ | exact IH].
+  destruct S2 as [ | t' t g' g Ht _]; [apply null_of_rho | apply RT_dot_all; exact Ht].
+Qed.
+
+Lemma is_hidden_R : forall env' env e, REnv env' env -> is_hidden env' (re e) = is_hidden env e.
+Proof.
+intros env' env e H; destruct H as [ | [[sa' g'] h'] [[sa g] h] env' env [_ [_ S3]] _]; [reflexivity | ].
+simpl in S3; subst h'; unfold is_hidden; destruct h as [ | x h]; [reflexivity | ].
+exact (existsb_eqb_re e (x :: h)).
+Qed.
+
+Lemma grouping_R : forall env' env x, REnv env' env ->
+  match env' with (_, _, hid) :: _ => if existsb (sexpr_eqb (re x)) hid then 1%Z else 0%Z | nil => 0%Z end =
+  match env with (_, _, hid) :: _ => if existsb (sexpr_eqb x) hid then 1%Z else 0%Z | nil => 0%Z end.
+Proof.
+intros env' env x H; destruct H as [ | [[sa' g'] h'] [[sa g] h] env' env [_ [_ S3]] _]; [reflexivity | ].
+simpl in S3; subst h'; rewrite existsb_eqb_re; reflexivity.
+Qed.
+
+Lemma agg_env_rec_R : forall cols env' env, REnv env' env -> REnv (agg_env_rec (map rho cols) env') (agg_env_rec cols env).
+Proof.
+intros cols env' env H; induction H as [ | [[sa' g'] h'] [[sa g] h] env' env [S1 [S2 S3]] H IH]; [constructor | ].
+simpl in *; rewrite (existsb_map_rho (fun a => a inS? sa)) by (intro a; rewrite (Fset.mem_eq_2 _ _ _ S1), mem_rs; reflexivity).
+destruct (existsb _ cols); [constructor; [split; [exact S1 | split; assumption] | exact H] | exact IH].
+Qed.
+
+Lemma agg_env_R : forall cols env' env, REnv env' env -> REnv (agg_env (map rho cols) env') (agg_env cols env).
+Proof.
+intros cols env' env H; unfold agg_env; assert (K := agg_env_rec_R cols env' env H).
+destruct K; [exact H | constructor; assumption].
+Qed.
+
+Lemma first_error_eq : forall l, first_error O l = first_error O l.
+Proof. reflexivity. Qed.
 
 End Sec.
