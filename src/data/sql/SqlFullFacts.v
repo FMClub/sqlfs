@@ -545,7 +545,7 @@ change ((if is_hidden env (E_Fun f (e :: l)) then null O
          else match first_error O (if lazy_symbol O f then firstn 1 (map (eval_sexpr ce env) (e :: l)) 
                                    else map (eval_sexpr ce env) (e :: l)) with
               | Some err => err
-              | None => interp_symbol T f (map (eval_sexpr ce env) (e :: l))
+              | None => interp_fun O f (map (eval_sexpr ce env) (e :: l))
               end) = eval_sexpr ce env e).
 rewrite Hh; unfold first_error; case (lazy_symbol O f); simpl; rewrite He; apply refl_equal.
 Qed.
@@ -561,11 +561,11 @@ Lemma eval_agg_group :
     existsb (row_error O) g = false ->
     (forall t, In t g -> is_error O (dot T t a) = false) ->
     eval_sexpr ce ((sa, g, nil) :: env) (E_Agg ag Set_All (E_Col T relname a) (C_True T relname)) =
-    interp_aggregate T ag (map (fun t => dot T t a) g).
+    interp_agg O ag (map (fun t => dot T t a) g).
 Proof.
 intros ce env sa g ag a Ha Hg Hv.
 change (match agg_env (a :: nil) ((sa, g, nil) :: env) with
-        | nil => interp_aggregate T ag nil
+        | nil => interp_agg O ag nil
         | (sa', g', _) :: env' =>
           if existsb (row_error O) g' || existsb (fun t => false) g'
           then error O "error"%string
@@ -574,9 +574,9 @@ change (match agg_env (a :: nil) ((sa, g, nil) :: env) with
                             (filter (fun t => is_true3 T (Bool.true (B T))) g') in
             match first_error O vals with
             | Some err => err
-            | None => interp_aggregate T ag vals
+            | None => interp_agg O ag vals
             end
-        end = interp_aggregate T ag (map (fun t => dot T t a) g)).
+        end = interp_agg O ag (map (fun t => dot T t a) g)).
 unfold agg_env; simpl; rewrite Ha; simpl.
 rewrite Hg, existsb_const_false; simpl.
 rewrite filter_true; [ | intro t; unfold is_true3; rewrite Bool.true_is_true; apply refl_equal].

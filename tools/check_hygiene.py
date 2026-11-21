@@ -48,7 +48,7 @@ def main():
                     errors.append('%s: the core imports the dialect modules %s' % (f, ', '.join(sorted(used))))
         # a dialect imports no other dialect, except the MySQL family, whose members are instances of
         # [mysql_vs] (MySQL.v), and the files which are about all the dialects
-        if f.startswith('data/dialects/') and Path(f).stem in dialects and Path(f).stem not in ('Versions', 'ResultText'):
+        if f.startswith('data/dialects/') and Path(f).stem in dialects and Path(f).stem not in ('Versions', 'ResultText', 'Refinement'):
             for imp in re.findall(r'Require\s+(?:Import|Export)?\s*([^.]*)\.', t):
                 used = (set(imp.split()) & DIALECT_NAMES) - {Path(f).stem}
                 if used - {'MySQL'} or ('MySQL' in used and 'mysql_vs' not in t):

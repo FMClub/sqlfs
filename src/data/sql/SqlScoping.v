@@ -62,7 +62,7 @@ Lemma ev_fun : forall ce env f l, eval_sexpr ce env (E_Fun f l) =
   if is_hidden env (E_Fun f l) then null O
   else let vs := map (eval_sexpr ce env) l in
        match first_error O (if lazy_symbol O f then firstn 1 vs else vs) with
-       | Some err => err | None => interp_symbol T f vs end.
+       | Some err => err | None => interp_fun O f vs end.
 Proof. reflexivity. Qed.
 Lemma ev_case : forall ce env c e1 e2, eval_sexpr ce env (E_Case c e1 e2) =
   if is_hidden env (E_Case c e1 e2) then null O
@@ -89,7 +89,7 @@ Lemma ec_not : forall ce env c,
   eval_scond ce env (C_Not c) = Bool.negb (B T) (eval_scond ce env c) /\ scond_raises ce env (C_Not c) = scond_raises ce env c.
 Proof. split; reflexivity. Qed.
 Lemma ec_pred : forall ce env p l,
-  eval_scond ce env (C_Pred p l) = interp_predicate T p (cmp_coerce O p (map (sexpr_affinity O) l) (map (eval_sexpr ce env) l)) /\
+  eval_scond ce env (C_Pred p l) = interp_pred O p (cmp_coerce O p (map (sexpr_affinity O) l) (map (eval_sexpr ce env) l)) /\
   scond_raises ce env (C_Pred p l) = (existsb (is_error O) (map (eval_sexpr ce env) l) || pred_error O p (map (eval_sexpr ce env) l)).
 Proof. split; reflexivity. Qed.
 Lemma ec_expr : forall ce env e,
