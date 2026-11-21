@@ -159,6 +159,18 @@ def conditions_of_a_block_with_grouping_sets():
 
 
 @test
+def backslash_in_a_string():
+    """Iteration 18: a backslash is an escape in the strings of the MySQL family and in E'...' of PostgreSQL, and
+    a character in the other strings of PostgreSQL."""
+    out = translate('PostgreSQL', {'a': "select 'a' ~ '(a)\\1';\n?column?\nf\n",
+                                   'b': "select E'x\\'y';\n?column?\nx'y\n"})
+    assert '(str "(a)\\1")' in case(out['a'], 'a:0'), out['a']
+    assert '(str "x\'y")' in case(out['b'], 'b:0'), out['b']
+    out = translate('TiDB', {'a': "select 'a\\\\1';\na\\1\na\\1\n"})['a']
+    assert '(str "a\\1")' in case(out, 'a:0'), out
+
+
+@test
 def window_in_an_aggregate():
     """TODO 8.25: a window function in the argument of an aggregate cannot be written in SqlFull: no case."""
     out = translate('MariaDB', {'a': (

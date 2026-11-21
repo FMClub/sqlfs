@@ -809,16 +809,19 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   the continuous integration.
 - **8.25 Static errors which the cases expecting an error show** (iteration 14): the queries which the engines reject
   and the model accepts.
-  **Status: PARTIAL** (iterations 14 and 17). Done: an aggregate in a grouping expression (`F_Group_Aggregate`, no dialect
+  **Status: PARTIAL** (iterations 14, 17 and 18). Done: an aggregate in a grouping expression (`F_Group_Aggregate`, no dialect
   has it); a `SELECT DISTINCT` ordered by an expression which is not selected (`F_Order_Not_Selected`:
   rejected by PostgreSQL, Oracle mode and `ONLY_FULL_GROUP_BY`; accepted by SQLite, MariaDB, OceanBase's MySQL
   mode); tests in `src/testing/Test_Arity.v`; `docs/DIALECT_TABLES.md` regenerated. Iteration 17: a window frame
   whose start is after its end by its form (`F_Frame_Bounds`) and `NTILE (0)` (`F_Ntile_Zero`), which no dialect
   has; `LAG` / `LEAD` over a window without `ORDER BY` (`F_Shift_No_Order`, rejected by MariaDB); a window function
   in the argument of an aggregate cannot be written in `SqlFull.v`: the translator does not translate it. The
-  cases of MariaDB which expect these errors pass. Open: a window ordered by an alias of the same block, the
-  invalid regular expressions of MySQL (`a**`, `a{37,17}`, references to groups which do not exist), a duplicate
-  name of `WITH` up to the case.
+  cases of MariaDB which expect these errors pass. Iteration 18: the invalid regular expressions (`a**`,
+  `a{37,17}`, in ICU a reference to a group which does not exist and a lookbehind without a bounded length);
+  with them the scoped options `(?-i:…)`, `(?i)` inside an expression, atomic groups, comments, `\10` and the
+  groups of a lookahead: MySQL `regular_expressions_func` goes from 39 failing cases to 4 (`(?x)`, a set
+  operation of ICU). Open: a window ordered by an alias of the same block, a duplicate name of `WITH` up to the
+  case.
 - **8.26 Result files of the same name** (iteration 14): 39 result files of TiDB have the name of another one in
   another directory; their cases were written to the same file, so that only the last one was checked.
   **Status: DONE** (iteration 14). Such files are named after their directory too (`executor_integration`); 12 more

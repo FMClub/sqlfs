@@ -245,3 +245,37 @@ Definition pg_regex_cases : list bool := [
 
 Example pg_regex_out : forallb (fun b => b) pg_regex_cases = true.
 Proof. check. Qed.
+
+(** The syntax errors and the scoped options of ICU (MySQL [regular_expressions_func.result]; TODO 8.25): a
+    quantifier on a quantified atom, a bound whose maximum is less than its minimum, a back reference to a
+    group which does not exist (a group opened later is allowed), a lookbehind without a bounded length;
+    [\10] is the tenth group; [(?-i)] and [(?i)] up to the end of the group; the groups of a lookahead are
+    kept; atomic groups and comments. *)
+Definition my_rx (t p : string) := pred "regexp" [s t; s p].
+Definition icu_cases : list bool := [
+  fails_c MySQL (my_rx "-" "a**");
+  fails_c MySQL (my_rx "-" "a{37,17}");
+  fails_c MySQL (my_rx "-" "\1");
+  fails_c MySQL (my_rx "-" "(a)|\2");
+  fails_c MySQL (my_rx "-" "(?<=x+)y");
+  negb (fails_c MySQL (my_rx "aaxabxbaxbbx" "((\3|b)\2(a)x)+"));
+  Bool.eqb (holds MySQL (my_rx "aa" "((((((((((a))))))))))\10")) true;
+  Bool.eqb (holds MySQL (my_rx "Ab" "(?i)(?-i:a)b")) false;
+  Bool.eqb (holds MySQL (my_rx "aB" "(?i)((?-i)a)b")) true;
+  Bool.eqb (holds MySQL (my_rx "abCd" "(?-i)ab(?i)cd")) true;
+  Bool.eqb (holds MySQL (my_rx "AbCd" "(?-i)ab(?i)cd")) false;
+  Bool.eqb (holds MySQL (my_rx "aC" "(?-i)a(?i)b|c")) true;
+  Bool.eqb (holds MySQL (my_rx "abc" "^(?:b|a(?=(.)))*\1")) true;
+  Bool.eqb (holds MySQL (my_rx "aaab" "(?>a+)b")) true;
+  Bool.eqb (holds MySQL (my_rx "aaa" "(?>a+)a")) false;
+  Bool.eqb (holds MySQL (my_rx "aaa" "a++a")) false;
+  Bool.eqb (holds MySQL (my_rx "aaac" "^a(?#xxx){3}c")) true;
+  (* the other engines *)
+  fails_c MariaDB (my_rx "-" "a{37,17}");
+  fails_c TiDB (my_rx "-" "a**");
+  fails_c PostgreSQL (pred "~" [s "-"; s "a**"]);
+  fails_c PostgreSQL (pred "~" [s "-"; s "a{3,2}"])
+].
+
+Example icu_syntax : forallb (fun b => b) icu_cases = true.
+Proof. check. Qed.

@@ -59,14 +59,20 @@ def tokenize(s):
             if j < 0:
                 raise Skip('comment')
             i = j + 2
-        elif c in "'\"":
-            q = c
+        elif c in "'\"" or (ENGINE == 'postgresql' and c in 'eE' and s.startswith("'", i + 1)
+                             and not (i > 0 and (s[i - 1].isalnum() or s[i - 1] == '_'))):
+            # a backslash is an escape in the MySQL family and in the E'...' strings of PostgreSQL; in the
+            # other strings of PostgreSQL, SQLite and Oracle it is a character
+            esc = ENGINE == 'mysql' or c in 'eE'
+            if c in 'eE':
+                i += 1
+            q = s[i]
             j = i + 1
             buf = []
             while True:
                 if j >= n:
                     raise Skip('unterminated string')
-                if s[j] == '\\' and j + 1 < n:
+                if esc and s[j] == '\\' and j + 1 < n:
                     e = s[j + 1]
                     m = {'n': '\n', 't': '\t', '0': '\0', '\\': '\\', "'": "'", '"': '"', 'r': '\r', 'b': '\b', '%': '\\%', '_': '\\_'}
                     buf.append(m.get(e, e))
