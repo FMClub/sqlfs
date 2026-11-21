@@ -442,111 +442,257 @@ Ltac prep :=
            let H' := fresh "IHs" in pose proof (fun e a Hy => H e a Hy (ok_flat_map _ _ _ K _ Hy)) as H'; clear H
          end.
 
+Definition Pe_ (e : sexpr T relname) := ok (sexpr_uses e) -> forall ce env, ev2 ce env e = ev1 ce env e.
+Definition Pc_ (c : scond T relname) :=
+  ok (scond_uses c) -> (forall ce env, ec2 ce env c = ec1 ce env c) /\ (forall ce env, er2 ce env c = er1 ce env c).
+Definition Pq_ (q : squery T relname) := ok (squery_uses q) -> forall ce env, eq2 ce env q = eq1 ce env q.
+Definition Ps_ (sp : sspec T relname) := ok (sspec_uses sp) -> forall ce env ex, es2 ce env sp ex = es1 ce env sp ex.
+Definition Pf_ (f : sfrom T relname) := ok (sfrom_uses f) -> forall ce env, ef2 ce env f = ef1 ce env f.
+
+Ltac open_case := unfold Pe_, Pc_, Pq_, Ps_, Pf_, LE, LO; cbv beta.
+
+Lemma c_const : forall v, Pe_ (E_Const T relname v).
+Proof.
+open_case.
+prep; unf; same_helpers; reflexivity.
+Qed.
+
+Lemma c_col : forall a, Pe_ (E_Col T relname a).
+Proof.
+open_case.
+prep; unf; same_helpers; reflexivity.
+Qed.
+
+Lemma c_fun : forall f l, LE T relname Pe_ l -> Pe_ (E_Fun f l).
+Proof.
+open_case.
+prep.
+assert (M : forall ce env, map (ev2 ce env) l = map (ev1 ce env) l)
+  by (intros; apply map_ext_in; intros; apply IHl; assumption).
+unf; same_helpers; rewrite M.
+destruct (is_hidden env (E_Fun f l)); [reflexivity | ].
+destruct (first_error O1 _); [reflexivity | ].
+agr.
+Qed.
+
+Lemma c_agg : forall ag sq e c, Pe_ e -> Pc_ c -> Pe_ (E_Agg ag sq e c).
+Proof.
+open_case.
+prep; unf; same_helpers; destruct (is_hidden env _); [reflexivity | ].
+destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr].
+Qed.
+
+Lemma c_aggx : forall ag sq e sep lo c, Pe_ e -> (forall s, sep = Some s -> Pe_ s) -> LO T relname Pe_ lo -> Pc_ c -> Pe_ (E_AggX ag sq e sep lo c).
+Proof.
+open_case.
+intros ag sq e sep lo c He Hs Ho Hc H ce env.
+destruct sep as [s0 | ]; [specialize (Hs s0 eq_refl) | clear Hs]; prep.
+all: unf; same_helpers; destruct (is_hidden env _); [reflexivity | ].
+all: destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr].
+Qed.
+
+Lemma c_case : forall c e1 e2, Pc_ c -> Pe_ e1 -> Pe_ e2 -> Pe_ (E_Case c e1 e2).
+Proof.
+open_case.
+prep; unf; same_helpers; rw_ih; reflexivity.
+Qed.
+
+Lemma c_cond : forall c, Pc_ c -> Pe_ (E_Cond c).
+Proof.
+open_case.
+prep; unf; same_helpers; rw_ih; reflexivity.
+Qed.
+
+Lemma c_sub : forall q, Pq_ q -> Pe_ (E_Sub q).
+Proof.
+open_case.
+prep; unf; same_helpers; rw_ih; reflexivity.
+Qed.
+
+Lemma c_grouping : forall x, Pe_ x -> Pe_ (E_Grouping x).
+Proof.
+open_case.
+prep; unf; same_helpers; reflexivity.
+Qed.
+
+Lemma c_conj : forall a c1 c2, Pc_ c1 -> Pc_ c2 -> Pc_ (C_Conj a c1 c2).
+Proof.
+open_case.
+prep; split; intros; unf; cong.
+Qed.
+
+Lemma c_not : forall c, Pc_ c -> Pc_ (C_Not c).
+Proof.
+open_case.
+prep; split; intros; unf; cong.
+Qed.
+
+Lemma c_true : Pc_ (C_True T relname).
+Proof.
+open_case.
+split; intros; reflexivity.
+Qed.
+
+Lemma c_pred : forall p l, LE T relname Pe_ l -> Pc_ (C_Pred p l).
+Proof.
+open_case.
+prep; split; intros; unf; cong.
+Qed.
+
+Lemma c_expr : forall e, Pe_ e -> Pc_ (C_Expr e).
+Proof.
+open_case.
+prep; split; intros; unf; cong.
+Qed.
+
+Lemma c_quant : forall qtf p l q la, LE T relname Pe_ l -> Pq_ q -> Pc_ (C_Quant qtf p l q la).
+Proof.
+open_case.
+prep; split; intros; unf; cong.
+Qed.
+
+Lemma c_in : forall l q la, LE T relname Pe_ l -> Pq_ q -> Pc_ (C_In l q la).
+Proof.
+open_case.
+prep; split; intros; unf; cong.
+Qed.
+
+Lemma c_exists : forall q, Pq_ q -> Pc_ (C_Exists q).
+Proof.
+open_case.
+prep; split; intros; unf; cong.
+Qed.
+
+Lemma c_table : forall r, Pq_ (SQ_Table T r).
+Proof.
+open_case.
+intros; reflexivity.
+Qed.
+
+Lemma c_set : forall o sq q1 q2, Pq_ q1 -> Pq_ q2 -> Pq_ (SQ_Set o sq q1 q2).
+Proof.
+open_case.
+prep; unf; cong.
+Qed.
+
+Lemma c_select : forall sp, Ps_ sp -> Pq_ (SQ_Select sp).
+Proof.
+open_case.
+prep; unf; rw_ih; reflexivity.
+Qed.
+
+Lemma c_order : forall q lo off lim, Pq_ q -> (forall sp, q = SQ_Select sp -> Ps_ sp) -> LO T relname Pe_ lo -> Pq_ (SQ_Order q lo off lim).
+Proof.
+open_case.
+intros q lo off lim Hq Hsp Ho H ce env; prep.
+assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
+{ clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
+  split_ok; rewrite (Hsp s eq_refl ltac:(assumption)); reflexivity. }
+rewrite !eval_order, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
+Qed.
+
+Lemma c_fetch : forall q lo off ties pct n, Pq_ q -> (forall sp, q = SQ_Select sp -> Ps_ sp) -> LO T relname Pe_ lo -> Pq_ (SQ_Fetch q lo off ties pct n).
+Proof.
+open_case.
+intros q lo off ties pct n Hq Hsp Ho H ce env; prep.
+assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
+{ clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
+  split_ok; rewrite (Hsp s eq_refl ltac:(assumption)); reflexivity. }
+rewrite !eval_fetch, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
+Qed.
+
+Lemma c_window : forall q lw, Pq_ q -> (forall f lp lo a, In (W_As f lp lo a) lw -> LE T relname Pe_ lp /\ LO T relname Pe_ lo /\ LE T relname Pe_ (wexprs T relname f)) -> Pq_ (SQ_Window q lw).
+Proof.
+open_case.
+intros q lw Hq Hw H ce env; prep; rewrite !eval_windows; rw_ih.
+assert (W : forall w, In w lw -> forall ce env, wfun O2 ce env w = wfun O1 ce env w).
+{ intros [f lp lo a] Iw.
+  match goal with K : ok (flat_map _ lw) |- _ => assert (K' := ok_flat_map _ _ _ K _ Iw) end.
+  destruct (Hw f lp lo a Iw) as [Hp [Ho Hf]]; clear Hw; cbv beta in K'; split_ok.
+  assert (IHp : forall y, In y lp -> forall ce env, ev2 ce env y = ev1 ce env y)
+    by (intros y Hy; apply Hp; [exact Hy | ]; match goal with K : ok (flat_map _ lp) |- _ => exact (ok_flat_map _ _ _ K y Hy) end).
+  match goal with K : ok (flat_map ?U lo), K2 : ok (flat_map ?V lo) |- _ =>
+    assert (IHo : forall e d n, In (O_By e d n) lo -> forall ce env, ev2 ce env e = ev1 ce env e)
+      by (intros e d n Hy; apply (Ho e d n Hy); first [exact (ok_flat_map _ _ _ K _ Hy) | exact (ok_flat_map _ _ _ K2 _ Hy)])
+  end.
+  match goal with HF : ok ?x |- _ => match x with context [f] => rename HF into HFf end end.
+  assert (Ha : fagg f) by (clear - HFf; revert HFf; induction f; cbn; intros; split_ok; auto).
+  assert (He : forall y, In y (wexprs T relname f) -> forall ce env, ev2 ce env y = ev1 ce env y).
+  { intros y Hy; apply Hf; [exact Hy | ]; clear - HFf Hy; revert HFf y Hy; induction f; intros HFf y Hy;
+      cbn in HFf, Hy; split_ok; try contradiction;
+      repeat (destruct Hy as [<- | Hy]; [assumption | ]); try contradiction; auto. }
+  apply wfun_cong; assumption. }
+f_equal; apply map_ext_in; intros w Hw'; apply W; exact Hw'.
+Qed.
+
+Lemma c_with : forall r q1 q2, Pq_ q1 -> Pq_ q2 -> Pq_ (SQ_With r q1 q2).
+Proof.
+open_case.
+prep; unf; cong.
+Qed.
+
+Lemma c_withrec : forall sq r q1 q2 q3, Pq_ q1 -> Pq_ q2 -> Pq_ q3 -> Pq_ (SQ_WithRec sq r q1 q2 q3).
+Proof.
+open_case.
+prep; unf; rw_ih.
+assert (S : forall r sa, (fun work => eq2 ((r, (sa, work)) :: ce) env q2) = (fun work => eq1 ((r, (sa, work)) :: ce) env q2))
+  by (intros; extensionality work; rw_ih; reflexivity).
+rewrite S; same_helpers; reflexivity.
+Qed.
+
+Lemma c_spec : forall sq s lf w g h,
+  match s with S_Star _ _ => True | S_List l => forall e a, In (S_As e a) l -> Pe_ e end ->
+  (forall f, In f lf -> Pf_ f) -> Pc_ w ->
+  match g with
+  | G_Fine _ _ => True
+  | G_By l | G_Rollup l | G_Cube l => LE T relname Pe_ l
+  | G_Sets ss => forall l, In l ss -> LE T relname Pe_ l
+  end -> Pc_ h -> Ps_ (Select sq s lf w g h).
+Proof.
+open_case.
+intros sq s lf w g h Hs Hf Hw Hg Hh H ce env ex; split_ok.
+specialize (Hw ltac:(assumption)); specialize (Hh ltac:(assumption)); destruct Hw as [Ec Rc]; destruct Hh as [Ec0 Rc0].
+assert (IHf : forall y, In y lf -> forall ce env, ef2 ce env y = ef1 ce env y)
+  by (intros y Hy; apply Hf; [exact Hy | ]; match goal with K : ok (flat_map _ lf) |- _ => exact (ok_flat_map _ _ _ K y Hy) end).
+assert (Hs' : sih s).
+{ destruct s as [ | l]; [exact I | ]; split_ok; intros e a Hy; apply (Hs e a Hy).
+  match goal with K : ok (flat_map _ l) |- _ => exact (ok_flat_map _ _ _ K _ Hy) end. }
+assert (Hg' : gih g).
+{ destruct g as [ | l | ss | l | l]; split_ok; try exact I.
+  1, 3, 4: intros y Hy; apply (Hg y Hy); match goal with K : ok (flat_map _ ?L), Hy : In y ?L |- _ => exact (ok_flat_map _ _ _ K y Hy) end.
+  match goal with K : ok ?x |- _ => match x with context [@sexpr_uses T relname] => match x with context [ss] => idtac end end;
+    rename K into KS end.
+  intros l Hl y Hy; apply (Hg l Hl y Hy); clear - KS Hl Hy.
+  induction ss as [ | l0 ss IH]; [destruct Hl | ]; cbn in KS; apply ok_app in KS; destruct KS as [K1 K2].
+  destruct Hl as [<- | Hl]; [exact (ok_flat_map _ _ _ K1 y Hy) | exact (IH K2 Hl)]. }
+rewrite !eval_select; cbv zeta.
+rewrite (where_rows_cong lf w IHf Ec Rc), (gkeys_cong g Hg'), (row_vals_cong g Hg'), (select_rest_cong s h Hs' Ec0 Rc0).
+same_helpers; reflexivity.
+Qed.
+
+Lemma c_fquery : forall q rho, Pq_ q -> Pf_ (Fr_Query q rho).
+Proof.
+open_case.
+prep; unf; cong.
+Qed.
+
+Lemma c_fjoin : forall jt lat f1 f2 c, Pf_ f1 -> Pf_ f2 -> Pc_ c -> Pf_ (Fr_Join jt lat f1 f2 c).
+Proof.
+open_case.
+prep; unf; cong.
+Qed.
+
+Lemma c_ffun : forall name args ord atts, LE T relname Pe_ args -> Pf_ (Fr_Fun name args ord atts).
+Proof.
+open_case.
+prep; unf; cong.
+Qed.
+
 Lemma cong_all : forall q, ok (squery_uses q) -> forall ce env, eq2 ce env q = eq1 ce env q.
 Proof.
-apply (ind_q T relname
-  (fun e => ok (sexpr_uses e) -> forall ce env, ev2 ce env e = ev1 ce env e)
-  (fun c => ok (scond_uses c) -> (forall ce env, ec2 ce env c = ec1 ce env c) /\ (forall ce env, er2 ce env c = er1 ce env c))
-  (fun q => ok (squery_uses q) -> forall ce env, eq2 ce env q = eq1 ce env q)
-  (fun sp => ok (sspec_uses sp) -> forall ce env ex, es2 ce env sp ex = es1 ce env sp ex)
-  (fun f => ok (sfrom_uses f) -> forall ce env, ef2 ce env f = ef1 ce env f)); unfold LE, LO; cbv beta.
-(* E_Const, E_Col *)
-- prep; unf; same_helpers; reflexivity.
-- prep; unf; same_helpers; reflexivity.
-(* E_Fun *)
-- prep.
-  assert (M : forall ce env, map (ev2 ce env) l = map (ev1 ce env) l)
-    by (intros; apply map_ext_in; intros; apply IHl; assumption).
-  unf; same_helpers; rewrite M.
-  destruct (is_hidden env (E_Fun f l)); [reflexivity | ].
-  destruct (first_error O1 _); [reflexivity | ].
-  agr.
-(* E_Agg *)
-- prep; unf; same_helpers; destruct (is_hidden env _); [reflexivity | ].
-  destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr].
-(* E_AggX *)
-- intros ag sq e sep lo c He Hs Ho Hc H ce env.
-  destruct sep as [s0 | ]; [specialize (Hs s0 eq_refl) | clear Hs]; prep.
-  all: unf; same_helpers; destruct (is_hidden env _); [reflexivity | ].
-  all: destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr].
-(* E_Case, E_Cond, E_Sub, E_Grouping *)
-- prep; unf; same_helpers; rw_ih; reflexivity.
-- prep; unf; same_helpers; rw_ih; reflexivity.
-- prep; unf; same_helpers; rw_ih; reflexivity.
-- prep; unf; same_helpers; reflexivity.
-(* the conditions *)
-- prep; split; intros; unf; cong.
-- prep; split; intros; unf; cong.
-- split; intros; reflexivity.
-- prep; split; intros; unf; cong.
-- prep; split; intros; unf; cong.
-- prep; split; intros; unf; cong.
-- prep; split; intros; unf; cong.
-- prep; split; intros; unf; cong.
-(* SQ_Table, SQ_Set, SQ_Select *)
-- intros; reflexivity.
-- prep; unf; cong.
-- prep; unf; rw_ih; reflexivity.
-(* SQ_Order, SQ_Fetch *)
-- intros q lo off lim Hq Hsp Ho H ce env; prep.
-  assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
-  { clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
-    split_ok; rewrite (Hsp s eq_refl ltac:(assumption)); reflexivity. }
-  rewrite !eval_order, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
-- intros q lo off ties pct n Hq Hsp Ho H ce env; prep.
-  assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
-  { clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
-    split_ok; rewrite (Hsp s eq_refl ltac:(assumption)); reflexivity. }
-  rewrite !eval_fetch, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
-(* SQ_Window *)
-- intros q lw Hq Hw H ce env; prep; rewrite !eval_windows; rw_ih.
-  assert (W : forall w, In w lw -> forall ce env, wfun O2 ce env w = wfun O1 ce env w).
-  { intros [f lp lo a] Iw.
-    match goal with K : ok (flat_map _ lw) |- _ => assert (K' := ok_flat_map _ _ _ K _ Iw) end.
-    destruct (Hw f lp lo a Iw) as [Hp [Ho Hf]]; clear Hw; cbv beta in K'; split_ok.
-    assert (IHp : forall y, In y lp -> forall ce env, ev2 ce env y = ev1 ce env y)
-      by (intros y Hy; apply Hp; [exact Hy | ]; match goal with K : ok (flat_map _ lp) |- _ => exact (ok_flat_map _ _ _ K y Hy) end).
-    match goal with K : ok (flat_map ?U lo), K2 : ok (flat_map ?V lo) |- _ =>
-      assert (IHo : forall e d n, In (O_By e d n) lo -> forall ce env, ev2 ce env e = ev1 ce env e)
-        by (intros e d n Hy; apply (Ho e d n Hy); first [exact (ok_flat_map _ _ _ K _ Hy) | exact (ok_flat_map _ _ _ K2 _ Hy)])
-    end.
-    match goal with HF : ok ?x |- _ => match x with context [f] => rename HF into HFf end end.
-    assert (Ha : fagg f) by (clear - HFf; revert HFf; induction f; cbn; intros; split_ok; auto).
-    assert (He : forall y, In y (wexprs T relname f) -> forall ce env, ev2 ce env y = ev1 ce env y).
-    { intros y Hy; apply Hf; [exact Hy | ]; clear - HFf Hy; revert HFf y Hy; induction f; intros HFf y Hy;
-        cbn in HFf, Hy; split_ok; try contradiction;
-        repeat (destruct Hy as [<- | Hy]; [assumption | ]); try contradiction; auto. }
-    apply wfun_cong; assumption. }
-  f_equal; apply map_ext_in; intros w Hw'; apply W; exact Hw'.
-(* SQ_With, SQ_WithRec *)
-- prep; unf; cong.
-- prep; unf; rw_ih.
-  assert (S : forall r sa, (fun work => eq2 ((r, (sa, work)) :: ce) env q2) = (fun work => eq1 ((r, (sa, work)) :: ce) env q2))
-    by (intros; extensionality work; rw_ih; reflexivity).
-  rewrite S; same_helpers; reflexivity.
-(* Select *)
-- intros sq s lf w g h Hs Hf Hw Hg Hh H ce env ex; split_ok.
-  specialize (Hw ltac:(assumption)); specialize (Hh ltac:(assumption)); destruct Hw as [Ec Rc]; destruct Hh as [Ec0 Rc0].
-  assert (IHf : forall y, In y lf -> forall ce env, ef2 ce env y = ef1 ce env y)
-    by (intros y Hy; apply Hf; [exact Hy | ]; match goal with K : ok (flat_map _ lf) |- _ => exact (ok_flat_map _ _ _ K y Hy) end).
-  assert (Hs' : sih s).
-  { destruct s as [ | l]; [exact I | ]; split_ok; intros e a Hy; apply (Hs e a Hy).
-    match goal with K : ok (flat_map _ l) |- _ => exact (ok_flat_map _ _ _ K _ Hy) end. }
-  assert (Hg' : gih g).
-  { destruct g as [ | l | ss | l | l]; split_ok; try exact I.
-    1, 3, 4: intros y Hy; apply (Hg y Hy); match goal with K : ok (flat_map _ ?L), Hy : In y ?L |- _ => exact (ok_flat_map _ _ _ K y Hy) end.
-    match goal with K : ok ?x |- _ => match x with context [@sexpr_uses T relname] => match x with context [ss] => idtac end end;
-      rename K into KS end.
-    intros l Hl y Hy; apply (Hg l Hl y Hy); clear - KS Hl Hy.
-    induction ss as [ | l0 ss IH]; [destruct Hl | ]; cbn in KS; apply ok_app in KS; destruct KS as [K1 K2].
-    destruct Hl as [<- | Hl]; [exact (ok_flat_map _ _ _ K1 y Hy) | exact (IH K2 Hl)]. }
-  rewrite !eval_select; cbv zeta.
-  rewrite (where_rows_cong lf w IHf Ec Rc), (gkeys_cong g Hg'), (row_vals_cong g Hg'), (select_rest_cong s h Hs' Ec0 Rc0).
-  same_helpers; reflexivity.
-(* the FROM items *)
-- prep; unf; cong.
-- prep; unf; cong.
-- prep; unf; cong.
+exact (ind_q T relname Pe_ Pc_ Pq_ Ps_ Pf_ c_const c_col c_fun c_agg c_aggx c_case c_cond c_sub c_grouping
+         c_conj c_not c_true c_pred c_expr c_quant c_in c_exists c_table c_set c_select c_order c_fetch c_window
+         c_with c_withrec c_spec c_fquery c_fjoin c_ffun).
 Qed.
 
 (** * The congruence
