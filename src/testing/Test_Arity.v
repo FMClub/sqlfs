@@ -67,3 +67,31 @@ Example round_ok : accepts MySQL (fn "round" [int 1; int 2]) = true.
 Proof. check. Qed.
 Example round_too_many : accepts MySQL (fn "round" [int 1; int 2; int 3]) = false.
 Proof. check. Qed.
+
+(** Static errors which the dialects share or differ on (the cases of the suites which expect an error; TODO 8.25):
+    an aggregate in [GROUP BY] is rejected by every dialect; a [SELECT DISTINCT] ordered by an expression which
+    is not selected is rejected by PostgreSQL, by Oracle mode and by [ONLY_FULL_GROUP_BY] (MySQL, TiDB), and
+    accepted by SQLite, MariaDB and OceanBase's MySQL mode *)
+Require Import TiDB.
+
+Definition accepts_q (d : vsem) (q : squery) : bool :=
+  accepted_by (dialect_of d) (vs_supports d) (to_dialect d q).
+Notation v1 := (Attr_Z "v1").
+Notation v2 := (Attr_Z "v2").
+Definition tt := from_as (values_ [c0; Attr_Z "c1"] [[int 1; int 2]]) [(c0, v1); (Attr_Z "c1", v2)].
+Definition group_by_agg := select_full Set_All (s_list [as_ (int 1) c0]) [tt] c_true (g_by [agg "sum" (col v1)]) c_true.
+Definition distinct_order (key : sexpr) :=
+  order_by (select_full Set_Distinct (s_list [as_ (col v1) c0]) [tt] c_true g_fine c_true) [o_by key Asc].
+
+Example group_agg_rejected :
+  map (fun d => accepts_q d group_by_agg) [PostgreSQL; MySQL; SQLite; MariaDB; OceanBaseMySQL; OceanBaseOracle; TiDB] =
+  [false; false; false; false; false; false; false].
+Proof. check. Qed.
+Example distinct_order_not_selected :
+  map (fun d => accepts_q d (distinct_order (col v2))) [PostgreSQL; MySQL; TiDB; OceanBaseOracle; SQLite; MariaDB; OceanBaseMySQL] =
+  [false; false; false; false; true; true; true].
+Proof. check. Qed.
+(** the selected expression itself, or its output name, is accepted *)
+Example distinct_order_selected :
+  accepts_q PostgreSQL (distinct_order (col v1)) = true /\ accepts_q PostgreSQL (distinct_order (col c0)) = true.
+Proof. split; check. Qed.

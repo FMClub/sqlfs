@@ -805,4 +805,22 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   failing cases (8.9, 8.14, 8.17, 8.19).
   **Status: DONE** (iteration 13). `tools/spec/test_sql2coq.py`: 9 regression tests on small result files, run by
   the continuous integration.
+- **8.25 Static errors which the cases expecting an error show** (iteration 14): the queries which the engines reject
+  and the model accepts.
+  **Status: PARTIAL** (iteration 14). Done: an aggregate in a grouping expression (`F_Group_Aggregate`, no dialect
+  has it); a `SELECT DISTINCT` ordered by an expression which is not selected (`F_Order_Not_Selected`:
+  rejected by PostgreSQL, Oracle mode and `ONLY_FULL_GROUP_BY`; accepted by SQLite, MariaDB, OceanBase's MySQL
+  mode); tests in `src/testing/Test_Arity.v`; `docs/DIALECT_TABLES.md` regenerated. Open: a window function in the
+  argument of an aggregate (the translator moves it to a block of its own: it must skip the query), `LAG` / `LEAD`
+  without `ORDER BY` and `NTILE (0)` in MariaDB, a frame whose start is after its end, the overflow of `BIGINT`
+  (8.21), a window ordered by an alias of the same block.
+- **8.26 Result files of the same name** (iteration 14): 39 result files of TiDB have the name of another one in
+  another directory; their cases were written to the same file, so that only the last one was checked.
+  **Status: DONE** (iteration 14). Such files are named after their directory too (`executor_integration`); 12 more
+  files of cases are checked. A test in `tools/spec/test_sql2coq.py`.
+- **8.27 `TRIM ([LEADING | BOTH | TRAILING] FROM s)` without the characters to remove** (iteration 14): an error
+  in the model (TiDB `executor/issues`).
+- **8.28 Replay of the scripts** (iteration 14): the failing cases of TiDB which come from statements the
+  translator does not follow (`EXPLAIN ANALYZE` of an `INSERT`, cascading foreign keys, temporary tables shadowing a
+  table, `LAST_INSERT_ID ()`, batch DML): the tables they change must be marked unreliable.
 

@@ -19,3 +19,4 @@ next item. One entry per iteration, newest last.
 | 11 | TODO 8.19, 8.23 | `DAYNAME (d)` as a number; `INTERVAL` of the MySQL family (`get_interval_value`); TiDB `time`: 38 → 1 failing | all the suites to be run again with the new cases (8.9) |
 | 12 | TODO 8.11 (dates) | infinite dates and timestamps, special date inputs; PostgreSQL: 53 failing of 514 | — |
 | 13 | TODO 8.24: tests of the translator | `tools/spec/test_sql2coq.py` (9 tests), in the continuous integration | — |
+| 14 | TODO 8.25 (part), 8.26 | acceptance: aggregates in `GROUP BY`, `SELECT DISTINCT` ordered by an unselected expression; result files of the same name no longer overwrite each other (TiDB: 12 more files checked) | TODO 8.27 (`TRIM` forms), 8.28 (replay of the scripts) |

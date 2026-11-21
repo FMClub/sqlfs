@@ -42,7 +42,7 @@ Definition ob_my_supports (f : feature) : bool :=
   match f with
   | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order | F_Intersect_All | F_Except_All
   | F_Fetch_Ties | F_Fetch_Percent
-  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate => false
   | _ => true
   end.
 
@@ -511,6 +511,8 @@ Definition ora_aggregate_table : list (string * (list value -> value)) :=
 Definition ora_supports (f : feature) : bool :=
   match f with
   | F_Intersect_All | F_Except_All | F_Frame_Groups | F_Filter_Agg | F_Cond_Value | F_Frame_Exclusion | F_Rec_Aggregate => false
+  (* ORA-00934: group function is not allowed here; ORA-01791: not a SELECTed expression *)
+  | F_Group_Aggregate | F_Order_Not_Selected => false
   (* ORA-00979: not a GROUP BY expression *)
   | F_Bare_Column => false
   | _ => true

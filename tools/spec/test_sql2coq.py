@@ -158,6 +158,24 @@ def conditions_of_a_block_with_grouping_sets():
     assert 'c_expr (e_cond' not in case(out, 'a:0'), out
 
 
+@test
+def result_files_of_the_same_name():
+    """TODO 8.26: two result files of the same name in different directories give two files of cases."""
+    with tempfile.TemporaryDirectory() as d:
+        paths = []
+        for sub, n in (('executor', 1), ('planner', 2)):
+            os.makedirs(os.path.join(d, sub))
+            p = os.path.join(d, sub, 'integration.result')
+            with open(p, 'w') as f:
+                f.write("select %d;\n%d\n%d\n" % (n, n, n))
+            paths.append(p)
+        out = os.path.join(d, 'out')
+        subprocess.run([sys.executable, TOOL, '--dialect', 'TiDB', '--lenient', '--outdir', out] + paths,
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        assert sorted(os.listdir(out)) == ['Spec_executor_integration.v', 'Spec_planner_integration.v'], os.listdir(out)
+        assert 'mk_case "executor_integration:0"' in open(os.path.join(out, 'Spec_executor_integration.v')).read()
+
+
 def main():
     failed = 0
     for t in TESTS:

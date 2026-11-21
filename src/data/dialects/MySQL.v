@@ -1026,7 +1026,7 @@ Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
   (* no [EXCLUDE] in frames; [RESPECT NULLS] and [FROM FIRST] only *)
-  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate => false
   (* [ONLY_FULL_GROUP_BY] is in the default [sql_mode]; functional dependencies are not modelled *)
   | F_Fetch_Ties | F_Fetch_Percent => false
   (* only [WITH ROLLUP] *)
@@ -1229,7 +1229,9 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           my_order
           canon_my
           true
-          (fun f => match f with F_Bare_Column => negb (ms_only_full_group_by ss) | _ => supports f end)
+          (* [ONLY_FULL_GROUP_BY] also rejects a [SELECT DISTINCT] ordered by an expression which is not selected
+             ([ER_FIELD_IN_ORDER_NOT_SELECT]) *)
+          (fun f => match f with F_Bare_Column | F_Order_Not_Selected => negb (ms_only_full_group_by ss) | _ => supports f end)
           false
           (* [Illegal mix of collations]: a comparison of two strings with different explicit collations *)
           (fun p l => match l with

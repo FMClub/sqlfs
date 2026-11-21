@@ -196,7 +196,12 @@ Inductive feature : Type :=
   (** [NTH_VALUE (...) FROM LAST] *)
   | F_From_Last
   (** an aggregate or a [GROUP BY] in the recursive term of a recursive [WITH]: no engine has it *)
-  | F_Rec_Aggregate.
+  | F_Rec_Aggregate
+  (** an aggregate in a grouping expression ([GROUP BY sum (a)]): no engine has it *)
+  | F_Group_Aggregate
+  (** [SELECT DISTINCT ... ORDER BY e] where [e] is not one of the selected expressions (an error of PostgreSQL,
+      of Oracle, and of the MySQL family with [ONLY_FULL_GROUP_BY]; SQLite takes the value of a row) *)
+  | F_Order_Not_Selected.
 
 Record dialect : Type :=
   mk_dialect
@@ -600,6 +605,24 @@ Fixpoint frame_bound_is_groups (f : frame) : list use :=
   | _ => nil
   end.
 
+(** the keys of an [ORDER BY] over a [SELECT DISTINCT] block which are not selected: a key is selected when it is
+    the name of an output column or one of the selected expressions *)
+Definition order_not_selected (q : squery) (lo : list sorder) : list use :=
+  match q with
+  | SQ_Select (Select Set_Distinct s _ _ _ _) =>
+    let selected (e : sexpr) :=
+        match s with
+        | S_Star => match e with E_Col _ => true | _ => false end
+        | S_List l =>
+          existsb (fun it => match it with
+                             | S_As e' a => sexpr_eqb e e' || match e with E_Col b => Oset.eq_bool (OAtt T) a b | _ => false end
+                             end) l
+        end in
+    if forallb (fun o => match o with O_By e _ _ => selected e end) lo then nil
+    else U_Feature F_Order_Not_Selected :: nil
+  | _ => nil
+  end.
+
 Fixpoint sexpr_uses (e : sexpr) {struct e} : list use :=
   match e with
   | E_Const _ | E_Col _ => nil
@@ -646,12 +669,12 @@ with squery_uses (q : squery) {struct q} : list use :=
   | SQ_Select sp => sspec_uses sp
   | SQ_Order q lo _ _ => 
     squery_uses q ++ flat_map nulls_features lo ++ 
-    flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo
+    flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo ++ order_not_selected q lo
   | SQ_Fetch q lo _ ties percent _ => 
     squery_uses q ++ flat_map nulls_features lo ++ 
     flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo ++
     (if ties then (U_Feature F_Fetch_Ties) :: nil else nil) ++
-    (if percent then (U_Feature F_Fetch_Percent) :: nil else nil)
+    (if percent then (U_Feature F_Fetch_Percent) :: nil else nil) ++ order_not_selected q lo
   | SQ_Window q lw => 
     (U_Feature F_Window) :: squery_uses q ++
     flat_map (fun w => 
@@ -699,7 +722,8 @@ with sspec_uses (sp : sspec) {struct sp} : list use :=
                        match ss with nil => nil | l :: r => flat_map sexpr_uses l ++ go r end) ss
      end) ++ 
     scond_uses h ++
-    (if block_has_bare_column s g h then (U_Feature F_Bare_Column) :: nil else nil)
+    (if block_has_bare_column s g h then (U_Feature F_Bare_Column) :: nil else nil) ++
+    (if existsb has_agg_syn (group_exprs g) then (U_Feature F_Group_Aggregate) :: nil else nil)
   end
 
 with sfrom_uses (f : sfrom) {struct f} : list use :=

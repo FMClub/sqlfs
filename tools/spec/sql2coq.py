@@ -2710,6 +2710,10 @@ LENIENT = False
 USER_FUNCS = set()
 
 
+# the names of the cases of the result files whose base name is not unique among the files of a run
+BASE_NAMES = {}
+
+
 def process(path, out, stats):
     USER_FUNCS.clear()
     VIEWS.clear()
@@ -2722,7 +2726,7 @@ def process(path, out, stats):
         lines.pop()  # the end of the last line, not an empty line
     tables = {}
     blocks = split_blocks(lines)
-    base = path.split('/')[-1].replace('.result', '')
+    base = BASE_NAMES.get(path, path.split('/')[-1].replace('.result', ''))
     cases = []
     # the statements which a loop or an eval of the test script runs are not in the result file
     # the test script: OceanBase r/mysql/x.result -> t/x.test; TiDB and MySQL r/x.result -> t/x.test;
@@ -3055,6 +3059,16 @@ def main():
     global SERVER_VERSION
     SERVER_VERSION = {'MariaDB': 110400, 'TiDB': 80011, 'OceanBaseMySQL': 50725, 'PolarDB': 80018}.get(dialect, 80400)
     stats = {'selects': 0, 'translated': 0, 'no_result': 0, 'skipped_files': 0, 'skip': {}}
+    # two result files of the same name in different directories (TiDB: executor/integration.result,
+    # planner/core/integration.result) would write the same Spec file: they are named after their directory too
+    names = {}
+    for path in args:
+        names.setdefault(os.path.basename(path), []).append(path)
+    for same in names.values():
+        if len(same) > 1:
+            for path in same:
+                BASE_NAMES[path] = (os.path.basename(os.path.dirname(os.path.abspath(path))) + '_' +
+                                    os.path.basename(path).replace('.result', ''))
     for path in args:
         out = []
         process(path, out, stats)
