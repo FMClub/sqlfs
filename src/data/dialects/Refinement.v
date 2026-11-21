@@ -11,8 +11,9 @@
     rows to every query which does not call [VERSION ()] ([percona_refines_mysql]), and only to those
     (the counterexample is in [Test_Refinement.v]). Acceptance is the same for both ([percona_accepts]). *)
 Require Import List String Bool.
-Require Import FlatData SqlFull SqlCongruence Values GenericInstance Dialects MySQL Percona.
+Require Import FlatData SqlFull SqlCongruence Values GenericInstance Dialects SystemFuns ValueKit MySQL Percona.
 Import ListNotations.
+Import NullValues.
 Open Scope string_scope.
 
 (** the fields of the records of evaluation which are not interpretations of names *)
@@ -77,29 +78,37 @@ Lemma assoc_other : forall (X : Type) s (v1 v2 : X) l, s <> "version" ->
   string_assoc X s (("version", v1) :: l) = string_assoc X s (("version", v2) :: l).
 Proof. intros X s v1 v2 l H; simpl; apply String.eqb_neq in H; rewrite H; reflexivity. Qed.
 
+Lemma aliases_other : forall vP vM Y s, s <> "version" ->
+  string_assoc _ s (with_my_aliases (("version", vP) :: Y)) = string_assoc _ s (with_my_aliases (("version", vM) :: Y)).
+Proof.
+intros vP vM Y s Hs; unfold with_my_aliases.
+assert (K : forall k, k <> "version" ->
+          string_assoc _ k (("version", vP) :: Y) = string_assoc _ k (("version", vM) :: Y))
+  by (intros k Hk; apply assoc_other; exact Hk).
+rewrite !string_assoc_app, (K s Hs).
+destruct (string_assoc _ s (("version", vM) :: Y)); [reflexivity | ].
+rewrite (K "cast_datetime") by discriminate.
+assert (A : flat_map (fun p => match string_assoc _ (snd p) (("version", vP) :: Y) with
+                               | Some f => (fst p, f) :: nil | None => nil end) my_aliases =
+            flat_map (fun p => match string_assoc _ (snd p) (("version", vM) :: Y) with
+                               | Some f => (fst p, f) :: nil | None => nil end) my_aliases).
+{ assert (AV := aliases_not_version); induction my_aliases as [ | [a t] al IH]; [reflexivity | ].
+  cbn [flat_map forallb snd fst] in AV |- *; apply andb_true_iff in AV; destruct AV as [A1 A2].
+  rewrite (K t) by (intro E; subst; discriminate).
+  rewrite (IH A2); reflexivity. }
+rewrite A; reflexivity.
+Qed.
+
 Lemma percona_symb : forall s, s <> "version" -> vs_symb Percona s = vs_symb MySQL s.
 Proof.
 intros s Hs; destruct percona_sys as [vP [vM [X [EP EM]]]].
-unfold Percona, MySQL, mysql_vs; cbn [vs_symb]; unfold table_of_list, with_my_aliases.
-rewrite EP, EM.
-set (C := my_closeout_funs ++ my_symbol_table).
-cbn [app].
-assert (K : forall k, k <> "version" ->
-          string_assoc _ k (("version", vP) :: X ++ C) = string_assoc _ k (("version", vM) :: X ++ C)).
-{ intros k Hk; apply assoc_other; exact Hk. }
-rewrite !string_assoc_app with (l1 := ("version", _) :: X ++ C).
-rewrite (K s Hs).
-destruct (string_assoc _ s (("version", vM) :: X ++ C)); [reflexivity | ].
-f_equal; [ | rewrite (K "cast_datetime") by discriminate; reflexivity].
-assert (AV := aliases_not_version); induction my_aliases as [ | [a t] al IH]; [reflexivity | ].
-simpl in AV |- *; apply andb_true_iff in AV; destruct AV as [A1 A2].
-rewrite (K t) by (intro E; subst; discriminate).
-rewrite (IH A2); reflexivity.
+unfold Percona, MySQL, mysql_vs; cbn [vs_symb]; unfold table_of_list.
+rewrite EP, EM; rewrite <- !app_comm_cons; apply aliases_other; exact Hs.
 Qed.
 
 (** the queries which call [VERSION ()] *)
 Definition calls_version {rel : Type} (q : squery TNull rel) : bool :=
-  existsb (fun u => match u with U_Symbol _ (Symbol _ "version") _ => true | _ => false end)
+  existsb (fun u : use (TD MySQL) => match u with U_Symbol _ (Symbol _ "version") _ => true | _ => false end)
           (squery_uses (to_dialect MySQL q)).
 
 Theorem percona_refines_mysql :
@@ -109,15 +118,19 @@ Theorem percona_refines_mysql :
     eval_squery ORN (dialect_of MySQL) basesort instance ce env (to_dialect MySQL q).
 Proof.
 intros rel ORN basesort instance q V; apply dialect_refinement; [exact percona_core | ].
-intros u Hu; destruct u as [f | f n | name | p | a]; cbn [agree_d agree]; try reflexivity; [exact I | ].
-destruct f as [s | v]; intros l _; [ | reflexivity].
-assert (Hs : s <> "version").
-{ intro E; subst s; unfold calls_version in V.
-  assert (W : existsb (fun u => match u with U_Symbol _ (Symbol _ "version") _ => true | _ => false end)
-                (squery_uses (to_dialect MySQL q)) = true)
-    by (apply existsb_exists; exists (U_Symbol _ (Symbol _ "version") n); split; [exact Hu | reflexivity]).
-  rewrite W in V; discriminate. }
-unfold vs_interp_symbol; rewrite (percona_symb s Hs); reflexivity.
+intros u Hu; destruct u as [f | f n | name | p | a]; unfold agree_d; cbn [agree].
+- exact I.
+- destruct f as [s | v]; intros l _; [ | reflexivity].
+  assert (Hs : s <> "version").
+  { intro E; subst s; unfold calls_version in V.
+    assert (W : existsb (fun u : use (TD MySQL) => match u with U_Symbol _ (Symbol _ "version") _ => true | _ => false end)
+                  (squery_uses (to_dialect MySQL q)) = true)
+      by (apply existsb_exists; eexists; split; [exact Hu | reflexivity]).
+    rewrite W in V; discriminate. }
+  unfold vs_interp_symbol; rewrite (percona_symb s Hs); reflexivity.
+- reflexivity.
+- intros; reflexivity.
+- intros; reflexivity.
 Qed.
 
 (** Percona accepts the queries which MySQL accepts, and conversely: the arities and the constructs are
