@@ -1,7 +1,7 @@
 (** * Renaming the attributes (TODO 6.3, issue I4)
 
     The evaluation of [SqlFull.v] does not depend on the names of the attributes: for a bijection [rho] of
-    the attributes which preserves their order, their types and their affinities, and fixes the attribute of
+    the attributes which preserves their types and their affinities, and fixes the attribute of
     the failed rows, the rows of the renamed query over the renamed database are the renamed rows of the query,
     in the same order ([eval_rename]), for the whole syntax. The front end names the columns of each item of a
     [FROM] clause and of each derived table by their positions, so that the named semantics of [SqlFull.v] is a
@@ -30,14 +30,15 @@ Hypothesis rho : attribute T -> attribute T.
 Hypothesis rhoi : attribute T -> attribute T.
 Hypothesis Hrr : forall a, rhoi (rho a) = a.
 Hypothesis Hrr' : forall b, rho (rhoi b) = b.
-Hypothesis Hord : forall a b, Oset.compare (OAtt T) (rho a) (rho b) = Oset.compare (OAtt T) a b.
 Hypothesis Hty : forall a, type_of_attribute T (rho a) = type_of_attribute T a.
 
 Lemma rho_inj : forall a b, rho a = rho b -> a = b.
 Proof. intros a b H; rewrite <- (Hrr a), <- (Hrr b), H; reflexivity. Qed.
 
 Lemma rho_eqb : forall a b, Oset.eq_bool (OAtt T) (rho a) (rho b) = Oset.eq_bool (OAtt T) a b.
-Proof. intros a b; unfold Oset.eq_bool; rewrite Hord; reflexivity. Qed.
+Proof.
+intros a b; apply eq_true_iff_eq; rewrite !Oset.eq_bool_true_iff; split; [apply rho_inj | intro H; rewrite H; reflexivity].
+Qed.
 
 (** the renamed sets *)
 Definition rs (s : Fset.set (A T)) := Fset.mk_set (A T) (map rho ({{{s}}})).
@@ -73,48 +74,48 @@ Qed.
 Lemma rs_empty : rs (Fset.empty (A T)) =S= Fset.empty (A T).
 Proof. rewrite Fset.equal_spec; intro b; rewrite mem_rs', !Fset.empty_spec; reflexivity. Qed.
 
-(** the elements of a renamed set, in order *)
-Lemma sorted_map_rho : forall l, Sorted (fun x y => Oset.compare (OAtt T) x y = Lt) l ->
-  Sorted (fun x y => Oset.compare (OAtt T) x y = Lt) (map rho l).
-Proof.
-intros l H; induction H as [ | x l H IH Hx]; simpl; constructor; [exact IH | ].
-destruct Hx as [ | y l Hy]; constructor; rewrite Hord; exact Hy.
-Qed.
-
-Lemma sorted_same : forall l1 l2,
-  Sorted (fun x y => Oset.compare (OAtt T) x y = Lt) l1 -> Sorted (fun x y => Oset.compare (OAtt T) x y = Lt) l2 ->
-  (forall x, In x l1 <-> In x l2) -> l1 = l2.
-Proof.
-assert (Tr : Relations_1.Transitive (fun x y : attribute T => Oset.compare (OAtt T) x y = Lt))
-  by (intros x y z; apply Oset.compare_lt_trans).
-intros l1 l2 S1 S2; apply Sorted_StronglySorted in S1; [ | exact Tr]; apply Sorted_StronglySorted in S2; [ | exact Tr].
-revert l2 S2; induction S1 as [ | x l1 S1 IH F1]; intros l2 S2 H.
-- destruct l2 as [ | y l2]; [reflexivity | destruct (proj2 (H y) (or_introl eq_refl))].
-- destruct S2 as [ | y l2 S2 F2]; [destruct (proj1 (H x) (or_introl eq_refl)) | ].
-  assert (Exy : x = y).
-  { destruct (proj1 (H x) (or_introl eq_refl)) as [E | I]; [exact (eq_sym E) | ].
-    destruct (proj2 (H y) (or_introl eq_refl)) as [E | J]; [exact E | ].
-    rewrite Forall_forall in F1, F2; generalize (F1 y J) (F2 x I); intros A1 A2.
-    rewrite Oset.compare_lt_gt, A2 in A1; discriminate A1. }
-  subst y; f_equal; apply IH; [exact S2 | ].
-  intro z; split; intro Iz.
-  + destruct (proj1 (H z) (or_intror Iz)) as [E | J]; [ | exact J].
-    subst z; rewrite Forall_forall in F1; generalize (F1 x Iz); rewrite Oset.compare_eq_refl; discriminate.
-  + destruct (proj2 (H z) (or_intror Iz)) as [E | J]; [ | exact J].
-    subst z; rewrite Forall_forall in F2; generalize (F2 x Iz); rewrite Oset.compare_eq_refl; discriminate.
-Qed.
-
+(** the elements of a renamed set are the renamed elements, in another order *)
 Lemma in_elements_iff : forall (s : Fset.set (A T)) (x : attribute T), In x ({{{s}}}) <-> x inS s.
 Proof.
 intros s x; split; intro H; [apply Fset.in_elements_mem; exact H | apply Fset.mem_in_elements; exact H].
 Qed.
 
-Lemma elements_rs : forall s, {{{rs s}}} = map rho ({{{s}}}).
+Lemma elements_NoDup : forall s : Fset.set (A T), NoDup ({{{s}}}).
 Proof.
-intro s; apply sorted_same.
-- apply Fset.elements_spec3.
-- apply sorted_map_rho; apply Fset.elements_spec3.
-- intro x; rewrite in_elements_iff; unfold rs; rewrite Fset.mem_mk_set, Oset.mem_bool_true_iff; tauto.
+intro s; assert (S := Fset.elements_spec3 _ s).
+apply Sorted_StronglySorted in S; [ | intros x y z; apply Oset.compare_lt_trans].
+induction S as [ | x l S IH F]; constructor; [ | exact IH].
+intro I; rewrite Forall_forall in F; generalize (F x I); rewrite Oset.compare_eq_refl; discriminate.
+Qed.
+
+Lemma NoDup_map_inj : forall (f : attribute T -> attribute T) l, (forall a b, f a = f b -> a = b) -> NoDup l -> NoDup (map f l).
+Proof.
+intros f l Hf H; induction H as [ | x l Hx H IH]; simpl; constructor; [ | exact IH].
+intro I; rewrite in_map_iff in I; destruct I as [y [E Iy]]; apply Hx; rewrite <- (Hf _ _ E); exact Iy.
+Qed.
+
+Lemma rhoi_inj : forall a b, rhoi a = rhoi b -> a = b.
+Proof. intros a b H; rewrite <- (Hrr' a), <- (Hrr' b), H; reflexivity. Qed.
+
+Lemma elements_length : forall s' s, s' =S= rs s -> length ({{{s'}}}) = length ({{{s}}}).
+Proof.
+intros s' s H; apply PeanoNat.Nat.le_antisymm.
+- rewrite <- (map_length rhoi); apply NoDup_incl_length; [apply NoDup_map_inj; [exact rhoi_inj | apply elements_NoDup] | ].
+  intros x Hx; rewrite in_map_iff in Hx; destruct Hx as [y [E Hy]]; subst x.
+  rewrite in_elements_iff in *; rewrite (Fset.mem_eq_2 _ _ _ H), mem_rs' in Hy; exact Hy.
+- rewrite <- (map_length rho); apply NoDup_incl_length; [apply NoDup_map_inj; [exact rho_inj | apply elements_NoDup] | ].
+  intros x Hx; rewrite in_map_iff in Hx; destruct Hx as [y [E Hy]]; subst x.
+  rewrite in_elements_iff in *; rewrite (Fset.mem_eq_2 _ _ _ H), mem_rs; exact Hy.
+Qed.
+
+Lemma existsb_elements : forall s' s (p' p : attribute T -> bool), s' =S= rs s -> (forall a, p' (rho a) = p a) ->
+  existsb p' ({{{s'}}}) = existsb p ({{{s}}}).
+Proof.
+intros s' s p' p H K; apply eq_true_iff_eq; rewrite !existsb_exists; split; intros [x [Hx Px]].
+- exists (rhoi x); rewrite in_elements_iff in *; rewrite (Fset.mem_eq_2 _ _ _ H), mem_rs' in Hx.
+  split; [exact Hx | rewrite <- K, Hrr'; exact Px].
+- exists (rho x); rewrite in_elements_iff in *; rewrite (Fset.mem_eq_2 _ _ _ H), mem_rs.
+  split; [exact Hx | rewrite K; exact Px].
 Qed.
 
 (** the renamed tuples *)
@@ -229,9 +230,6 @@ destruct (Oeset.compare (OTuple T) t1' t2'); destruct (Oeset.compare (OTuple T) 
   try reflexivity; [discriminate (A eq_refl) | discriminate (A eq_refl) | discriminate (B eq_refl) | discriminate (B eq_refl)].
 Qed.
 
-Lemma elements_labels_RT : forall t' t, RT t' t -> {{{labels T t'}}} = map rho ({{{labels T t}}}).
-Proof. intros t' t H; rewrite <- elements_rs; apply (Fset.elements_spec1 _ _ _ (RT_labels _ _ H)). Qed.
-
 (** lists of related tuples *)
 Definition RL := Forall2 RT.
 
@@ -241,6 +239,21 @@ Proof. intros X Y f g P l1 l2 H K; induction H; constructor; auto. Qed.
 
 Lemma RL_app : forall l1 l2 l1' l2', RL l1 l2 -> RL l1' l2' -> RL (l1 ++ l1') (l2 ++ l2').
 Proof. intros; apply Forall2_app; assumption. Qed.
+
+(** the relation as a boolean, to check a renamed database by computation *)
+Fixpoint RLb (l' l : list (tuple T)) : bool :=
+  match l', l with
+  | nil, nil => true
+  | t' :: l', t :: l => Oeset.eq_bool (OTuple T) t' (rt t) && RLb l' l
+  | _, _ => false
+  end.
+
+Lemma RLb_RL : forall l' l, RLb l' l = true -> RL l' l.
+Proof.
+intro l'; induction l' as [ | t' l' IH]; intros [ | t l] H; try discriminate H; [constructor | ].
+simpl in H; rewrite andb_true_iff in H; destruct H as [H1 H2]; constructor; [ | apply IH; exact H2].
+unfold RT; unfold Oeset.eq_bool in H1; destruct (Oeset.compare (OTuple T) t' (rt t)); trivial; discriminate H1.
+Qed.
 
 (** * The renaming of the queries *)
 
@@ -531,7 +544,7 @@ intros sq s lf w g h Hs Hf Hw Hg Hh; kcols.
 assert (Hb : Fset.Union (A T) (map (sfrom_sort ORN basesort' ce') (map rf lf)) =S=
              rs (Fset.Union (A T) (map (sfrom_sort ORN basesort ce) lf))).
 { rewrite (Fset.equal_eq_2 _ _ _ _ (rs_Union _)), map_map, map_map; apply Union_eq_F2.
-  clear - H Hbs Hrr Hrr' Hord; induction lf as [ | f lf IH]; constructor; [apply sort_rename_f; exact H | exact IH]. }
+  clear - H Hbs Hrr Hrr'; induction lf as [ | f lf IH]; constructor; [apply sort_rename_f; exact H | exact IH]. }
 match goal with |- filter _ ?L' = map rho (filter _ ?L) => replace L' with (map rho L) end.
 - apply filter_map_rho; intro a; rewrite (Fset.mem_eq_2 _ _ _ Hb), mem_rs; reflexivity.
 - rewrite !map_app; f_equal; [ | f_equal; [ | f_equal; [ | f_equal]]].
@@ -702,7 +715,7 @@ intros sq s lf w g h Hs' _ Hw _ Hh ce' ce sa' sa H Hs; unfold spf; cbn [r_s sque
 assert (Hb : Fset.Union (A T) (map (sfrom_sort ORN basesort' ce') (map rf lf)) =S=
              rs (Fset.Union (A T) (map (sfrom_sort ORN basesort ce) lf))).
 { rewrite (Fset.equal_eq_2 _ _ _ _ (rs_Union _)), map_map, map_map; apply Union_eq_F2.
-  clear - H Hbs Hrr Hrr' Hord; induction lf as [ | f lf IH]; constructor; [apply sort_rename_f; exact H | exact IH]. }
+  clear - H Hbs Hrr Hrr'; induction lf as [ | f lf IH]; constructor; [apply sort_rename_f; exact H | exact IH]. }
 rewrite (Hh _ _ _ _ _ _ H Hs Hb), (Hw _ _ _ _ _ _ H Hs Hb); f_equal; f_equal.
 destruct s as [ | l]; [reflexivity | ].
 rewrite map_map; apply existsb_F; intros [e a] I; cbn beta iota; apply (Hs' e a I); [assumption | assumption | rewrite <- (map_map rf); exact Hb].
@@ -849,8 +862,8 @@ Qed.
 
 Lemma row_error_RT : forall t' t, RT t' t -> row_error O t' = row_error O t.
 Proof.
-intros t' t H; unfold row_error; rewrite (elements_labels_RT _ _ H), existsb_map'.
-apply existsb_ext'; intro a; rewrite (RT_dot_all _ _ _ H); reflexivity.
+intros t' t H; unfold row_error; apply existsb_elements; [apply RT_labels; exact H | ].
+intro a; rewrite (RT_dot_all _ _ _ H); reflexivity.
 Qed.
 
 Lemma err_row_RT : forall t' t, RT t' t -> RT (err_row O t') (err_row O t).
@@ -930,15 +943,24 @@ Proof.
 intros X Y P n l1 l2 H; revert n; induction H as [ | x y l1 l2 Hxy H IH]; intro n; simpl; constructor; [split; trivial | apply IH].
 Qed.
 
-Lemma unify_rows_R : forall atts l' l, RL l' l -> RL (unify_rows O (map rho atts) l') (unify_rows O atts l).
+Lemma find_col : forall (U : attribute T -> list (value T)) atts x,
+  find (fun c : attribute T * list (value T) => Oset.eq_bool (OAtt T) (fst c) x) (map (fun a => (a, U a)) atts) =
+  if Oset.mem_bool (OAtt T) x atts then Some (x, U x) else None.
 Proof.
-intros atts l' l H; unfold unify_rows.
+intros U atts x; induction atts as [ | b atts IH]; [reflexivity | ]; simpl.
+rewrite (Oset.eq_bool_sym (OAtt T) x b); case_eq (Oset.eq_bool (OAtt T) b x); intro E; [ | exact IH].
+rewrite Oset.eq_bool_true_iff in E; subst b; reflexivity.
+Qed.
+
+Lemma unify_rows_R : forall s' s l' l, s' =S= rs s -> RL l' l -> RL (unify_rows O ({{{s'}}}) l') (unify_rows O ({{{s}}}) l).
+Proof.
+intros s' s l' l Hs H; unfold unify_rows.
 apply (F2_map2 _ _ _ _ _ _ _ _ _ _ (F2_combine_seq _ _ _ 0 _ _ H)).
 intros [i t'] [j t] [E Ht]; simpl in E, Ht; subst j; apply RT_mk_tuple; [apply RT_labels; exact Ht | ].
 intros a _; rewrite (RT_dot_all _ _ _ Ht).
-induction atts as [ | b atts IH]; [reflexivity | ]; simpl; rewrite rho_eqb.
-destruct (Oset.eq_bool (OAtt T) b a); [ | exact IH].
-rewrite (F2_eq_map _ _ _ _ (fun t => dot T t (rho b)) (fun t => dot T t b) _ _ H); [reflexivity | ].
+rewrite (find_col (fun a => unify_column O (map (fun t => dot T t a) l'))), (find_col (fun a => unify_column O (map (fun t => dot T t a) l))).
+rewrite <- !Fset.mem_elements, (Fset.mem_eq_2 _ _ _ Hs), mem_rs; destruct (a inS? s); [ | reflexivity].
+rewrite (F2_eq_map _ _ _ _ (fun t => dot T t (rho a)) (fun t => dot T t a) _ _ H); [reflexivity | ].
 intros; apply RT_dot_all; assumption.
 Qed.
 
@@ -1186,10 +1208,13 @@ open_e; intros q IH ce' ce env' env Hc He; hid (E_Sub q).
 generalize (IH ce' ce env' env Hc He); intro K.
 rewrite (F2_existsb _ _ _ _ _ _ _ K row_error_RT); destruct (existsb (row_error O) (eq_ ce env q)); [reflexivity | ].
 destruct K as [ | t' t l' l Ht K]; [reflexivity | ].
-rewrite (elements_labels_RT _ _ Ht).
-assert (V : match map rho ({{{labels T t}}}) with a :: nil => dot T t' a | _ => null O end =
+assert (V : match {{{labels T t'}}} with a :: nil => dot T t' a | _ => null O end =
             match {{{labels T t}}} with a :: nil => dot T t a | _ => null O end).
-{ destruct ({{{labels T t}}}) as [ | a [ | b k]]; simpl; trivial; apply RT_dot_all; exact Ht. }
+{ assert (L := elements_length _ _ (RT_labels _ _ Ht)).
+  assert (M : forall a', In a' ({{{labels T t'}}}) -> In (rhoi a') ({{{labels T t}}})).
+  { intros a' Ha; rewrite in_elements_iff in *; rewrite <- (Hrr' a'), (RT_mem _ _ _ Ht) in Ha; exact Ha. }
+  destruct ({{{labels T t'}}}) as [ | a' [ | b' k']]; destruct ({{{labels T t}}}) as [ | a [ | b k]]; try discriminate L; trivial.
+  destruct (M a' (or_introl eq_refl)) as [E | []]; rewrite (RT_dot' _ _ _ Ht), E; reflexivity. }
 destruct K; rewrite V; reflexivity.
 Qed.
 
@@ -1258,9 +1283,6 @@ intros s1' s1 s2' s2 H1 H2; apply eq_true_iff_eq; rewrite !Fset.equal_spec; spli
 - rewrite (Fset.mem_eq_2 _ _ _ H1), (Fset.mem_eq_2 _ _ _ H2), !mem_rs'; apply H.
 Qed.
 
-Lemma RS_elements : forall s' s, s' =S= rs s -> {{{s'}}} = map rho ({{{s}}}).
-Proof. intros s' s H; rewrite <- elements_rs; apply (Fset.elements_spec1 _ _ _ H). Qed.
-
 Lemma q_table : forall r, Eqr (SQ_Table T r).
 Proof.
 open_e; intros r ce' ce env' env Hc He; unf.
@@ -1274,9 +1296,8 @@ open_e; intros o sq q1 q2 IH1 IH2 ce' ce env' env Hc He; unf.
 assert (R0 := RCE_Rsort _ _ Hc).
 rewrite (RS_equal _ _ _ _ (sort_rename q1 ce' ce R0) (sort_rename q2 ce' ce R0)).
 destruct (Fset.equal (A T) (sq_sort ce q1) (sq_sort ce q2)); [ | constructor].
-rewrite (RS_elements _ _ (sort_rename q1 ce' ce R0)).
 assert (K1 := IH1 ce' ce env' env Hc He); assert (K2 := IH2 ce' ce env' env Hc He).
-apply unify_rows_R, keep_errors_R; [apply set_op_R; assumption | apply RL_app; assumption].
+apply unify_rows_R; [apply sort_rename; exact R0 | ]; apply keep_errors_R; [apply set_op_R; assumption | apply RL_app; assumption].
 Qed.
 
 Lemma RP_fst : forall l' l, Forall2 RP l' l -> RL (map (@fst _ _) l') (map (@fst _ _) l).
@@ -1910,4 +1931,17 @@ Qed.
 Theorem eval_rename : forall q,
   RL (eval_query_list ORN O basesort' instance' (rq q)) (eval_query_list ORN O basesort instance q).
 Proof. intro q; unfold eval_query_list; apply eval_rename_gen; constructor. Qed.
+(** A query fails over the renamed database when it fails over the database, and gives the renamed rows otherwise. *)
+Corollary eval_result_rename : forall q,
+  match eval_query_result ORN O basesort' instance' (rq q), eval_query_result ORN O basesort instance q with
+  | QR_Rows _ l', QR_Rows _ l => RL l' l
+  | QR_Error _, QR_Error _ => True
+  | _, _ => False
+  end.
+Proof.
+intro q; unfold eval_query_result; cbv zeta; assert (K := eval_rename q).
+rewrite (F2_existsb _ _ _ _ _ _ _ K row_error_RT).
+destruct (existsb (row_error O) (eval_query_list ORN O basesort instance q)); [exact I | exact K].
+Qed.
+
 End Sec.
