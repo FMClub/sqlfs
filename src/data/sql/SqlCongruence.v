@@ -6,7 +6,7 @@
     ([Refinement.v]): two dialects which agree on what a query uses give it the same rows. *)
 Require Import List Bool String NArith FunctionalExtensionality.
 Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection
-        FlatData Bool3 Formula SqlFull.
+        FlatData Bool3 Formula SqlFull SqlInduction.
 
 Section Sec.
 
@@ -307,18 +307,10 @@ Fixpoint fagg (f : swfun T relname) : Prop :=
   | _ => True
   end.
 
-Fixpoint swfun_exprs (f : swfun T relname) : list (sexpr T relname) :=
-  match f with
-  | W_Agg _ _ e _ | W_First_Value e _ | W_Last_Value e _ | W_Nth_Value e _ _ => e :: nil
-  | W_Lag e _ d | W_Lead e _ d => e :: d :: nil
-  | W_Opts f' _ _ => swfun_exprs f'
-  | _ => nil
-  end.
-
 Lemma fagg_wok : forall ev f, fagg f -> wok (wcomp ev f).
 Proof. intros ev f; induction f; simpl; tauto. Qed.
 
-Lemma wcomp_ext : forall ev ev' f, (forall e, In e (swfun_exprs f) -> ev e = ev' e) -> wcomp ev f = wcomp ev' f.
+Lemma wcomp_ext : forall ev ev' f, (forall e, In e (wexprs T relname f) -> ev e = ev' e) -> wcomp ev f = wcomp ev' f.
 Proof.
 intros ev ev' f; induction f as [ag sq e fr | | | | n | | | e n d | e n d | e fr | e fr | e n fr | f IH ign last];
   intro H; simpl in H |- *; try reflexivity.
@@ -349,7 +341,7 @@ Qed.
 Lemma wfun_cong : forall f lp lo a,
   (forall y, In y lp -> forall ce env, ev2 ce env y = ev1 ce env y) ->
   (forall e d n, In (O_By e d n) lo -> forall ce env, ev2 ce env e = ev1 ce env e) ->
-  (forall y, In y (swfun_exprs f) -> forall ce env, ev2 ce env y = ev1 ce env y) -> fagg f ->
+  (forall y, In y (wexprs T relname f) -> forall ce env, ev2 ce env y = ev1 ce env y) -> fagg f ->
   forall ce env, wfun O2 ce env (W_As f lp lo a) = wfun O1 ce env (W_As f lp lo a).
 Proof.
 intros f lp lo a Hp Ho Hf Ha ce env; unfold wfun; extensionality rows.
@@ -436,103 +428,126 @@ Ltac ih_s cong_e l :=
     | ]
   end.
 
-Fixpoint cong_e (e : sexpr T relname) {struct e} : ok (sexpr_uses e) -> forall ce env, ev2 ce env e = ev1 ce env e
-with cong_c (c : scond T relname) {struct c} :
-  ok (scond_uses c) -> (forall ce env, ec2 ce env c = ec1 ce env c) /\ (forall ce env, er2 ce env c = er1 ce env c)
-with cong_q (q : squery T relname) {struct q} : ok (squery_uses q) -> forall ce env, eq2 ce env q = eq1 ce env q
-with cong_s (sp : sspec T relname) {struct sp} : ok (sspec_uses sp) -> forall ce env ex, es2 ce env sp ex = es1 ce env sp ex
-with cong_f (f : sfrom T relname) {struct f} : ok (sfrom_uses f) -> forall ce env, ef2 ce env f = ef1 ce env f.
+(** the hypotheses of induction, once the constructs of the sub-terms are known to agree *)
+Ltac prep :=
+  intros; split_ok;
+  repeat match goal with
+         | H : ok ?u -> _, K : ok ?u |- _ => specialize (H K)
+         | H : (forall ce env, _) /\ (forall ce env, _) |- _ => destruct H
+         | H : forall y, In y ?l -> ok _ -> _, K : ok (flat_map _ ?l) |- _ =>
+           let H' := fresh "IHl" in pose proof (fun y Hy => H y Hy (ok_flat_map _ _ _ K y Hy)) as H'; clear H
+         | H : forall e d n, In (O_By e d n) ?l -> ok _ -> _, K : ok (flat_map _ ?l) |- _ =>
+           let H' := fresh "IHo" in pose proof (fun e d n Hy => H e d n Hy (ok_flat_map _ _ _ K _ Hy)) as H'; clear H
+         | H : forall e a, In (S_As e a) ?l -> ok _ -> _, K : ok (flat_map _ ?l) |- _ =>
+           let H' := fresh "IHs" in pose proof (fun e a Hy => H e a Hy (ok_flat_map _ _ _ K _ Hy)) as H'; clear H
+         end.
+
+Lemma cong_all : forall q, ok (squery_uses q) -> forall ce env, eq2 ce env q = eq1 ce env q.
 Proof.
-- destruct e as [v | a | f l | ag sq e c | ag sq e sep lo c | c e1 e2 | c | q | x]; intros H ce env; split_ok.
-  + unf; same_helpers; reflexivity.
-  + unf; same_helpers; reflexivity.
-  + ih_l cong_e l.
-    assert (M : forall ce env, map (ev2 ce env) l = map (ev1 ce env) l)
-      by (intros; apply map_ext_in; intros; apply IHl; assumption).
-    unf; same_helpers; rewrite M.
-    destruct (is_hidden env (E_Fun f l)); [reflexivity | ].
-    destruct (first_error O1 _); [reflexivity | ].
-    agr.
-  + ihc cong_c c; ihe cong_e e.
-    clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; same_helpers; destruct (is_hidden env _); [reflexivity | ];
-      destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr]).
-  + ihc cong_c c; ihe cong_e e. ih_o cong_e lo.
-    destruct sep as [s0 | ]; split_ok; [ihe cong_e s0 | ].
-    all: clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; same_helpers; destruct (is_hidden env _); [reflexivity | ];
-      destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr]).
-  + ihc cong_c c; ihe cong_e e1; ihe cong_e e2.
-    unf; same_helpers; rw_ih; reflexivity.
-  + ihc cong_c c. unf; same_helpers; rw_ih; reflexivity.
-  + ihq cong_q q. unf; same_helpers; rw_ih; reflexivity.
-  + unf; same_helpers; reflexivity.
-- destruct c as [a c1 c2 | c | | p l | e | qtf p l q la | l q la | q]; intros H; split_ok.
-  + ihc cong_c c1; ihc cong_c c2; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ihc cong_c c; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + split; intros ce env; reflexivity.
-  + ih_l cong_e l; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ihe cong_e e; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ih_l cong_e l; ihq cong_q q; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ih_l cong_e l; ihq cong_q q; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ihq cong_q q; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-- destruct q as [r | o sq q1 q2 | sp | q lo off lim | q lo off ties pct n | q lw | r q1 q2 | sq r q1 q2 q3]; intros H ce env;
-  split_ok.
-  + reflexivity.
-  + ihq cong_q q1; ihq cong_q q2; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + assert (E := cong_s sp ltac:(assumption)); unf; rw_ih; reflexivity.
-  + ih_o cong_e lo.
-    assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
-    { ihq cong_q q; clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
-      split_ok; rewrite (cong_s s ltac:(assumption)); reflexivity. }
-    rewrite !eval_order, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
-  + ih_o cong_e lo.
-    assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
-    { ihq cong_q q; clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
-      split_ok; rewrite (cong_s s ltac:(assumption)); reflexivity. }
-    rewrite !eval_fetch, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
-  + ihq cong_q q; rewrite !eval_windows; rw_ih.
-    assert (W : forall w, In w lw -> forall ce env, wfun O2 ce env w = wfun O1 ce env w).
-    { match goal with Hw : ok (flat_map _ lw) |- _ => clear - cong_e Hw; revert Hw end.
-      generalize lw; fix go 1; intros k Hk w Hw; destruct k as [ | w0 r]; [destruct Hw | ].
-      cbn [flat_map] in Hk; apply ok_app in Hk; destruct Hk as [H0 Hr].
-      destruct Hw as [<- | Hw]; [ | exact (go r Hr w Hw)].
-      destruct w0 as [f lp lo a]; split_ok.
-      ih_l cong_e lp; ih_o cong_e lo.
-      match goal with Hf : ok ?x |- _ => match x with context [f] => rename Hf into HF end end.
-      assert (Ha : fagg f) by (clear - HF; revert HF; induction f; cbn; intros; split_ok; auto).
-      assert (He : forall y, In y (swfun_exprs f) -> forall ce env, ev2 ce env y = ev1 ce env y).
-      { clear - cong_e HF; revert HF; generalize f; fix gof 1; intros f' Hf' y Hy.
-        destruct f'; cbn [swfun_exprs] in Hy; cbn in Hf'; split_ok;
-          repeat (destruct Hy as [<- | Hy]; [apply cong_e; assumption | ]);
-          try contradiction;
-          match goal with Hy : In y (swfun_exprs ?g) |- _ => exact (gof g ltac:(assumption) y Hy) end. }
-      apply wfun_cong; assumption. }
-    f_equal; apply map_ext_in; intros w Hw; apply W; exact Hw.
-  + ihq cong_q q1; ihq cong_q q2; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ihq cong_q q1; ihq cong_q q2; ihq cong_q q3; unf; rw_ih.
-    assert (S : forall r sa, (fun work => eq2 ((r, (sa, work)) :: ce) env q2) = (fun work => eq1 ((r, (sa, work)) :: ce) env q2))
-      by (intros; extensionality work; rw_ih; reflexivity).
-    rewrite S; same_helpers; reflexivity.
-- destruct sp as [sq s lf w g h]; intros H ce env ex; split_ok.
-  ihc cong_c w; ihc cong_c h; ih_lf cong_f lf.
-  assert (Hs : sih s). { destruct s as [ | l]; [exact I | ]; split_ok; ih_s cong_e l; exact IHs. }
-  assert (Hg : gih g).
-  { destruct g as [ | l | ss | l | l]; split_ok; try exact I; try (ih_l cong_e l; exact IHl).
-    match goal with H : ok ?x |- _ => match x with context [@sexpr_uses T relname] => match x with context [ss] => idtac end end;
-      clear - cong_e H; revert H end.
-    generalize ss; fix go 1; intros k Hk l Hl y Hy; destruct k as [ | l0 r]; [destruct Hl | ].
-    cbn in Hk; apply ok_app in Hk; destruct Hk as [H0 Hr].
-    destruct Hl as [<- | Hl]; [ | exact (go r Hr l Hl y Hy)].
-    revert H0 y Hy; generalize l0; fix go2 1; intros k' Hk' y Hy; destruct k' as [ | x r']; [destruct Hy | ].
-    cbn [flat_map] in Hk'; apply ok_app in Hk'; destruct Hk' as [Hx Hr'].
-    destruct Hy as [<- | Hy]; [exact (cong_e x Hx) | exact (go2 r' Hr' y Hy)]. }
+apply (ind_q T relname
+  (fun e => ok (sexpr_uses e) -> forall ce env, ev2 ce env e = ev1 ce env e)
+  (fun c => ok (scond_uses c) -> (forall ce env, ec2 ce env c = ec1 ce env c) /\ (forall ce env, er2 ce env c = er1 ce env c))
+  (fun q => ok (squery_uses q) -> forall ce env, eq2 ce env q = eq1 ce env q)
+  (fun sp => ok (sspec_uses sp) -> forall ce env ex, es2 ce env sp ex = es1 ce env sp ex)
+  (fun f => ok (sfrom_uses f) -> forall ce env, ef2 ce env f = ef1 ce env f)); unfold LE, LO; cbv beta.
+(* E_Const, E_Col *)
+- prep; unf; same_helpers; reflexivity.
+- prep; unf; same_helpers; reflexivity.
+(* E_Fun *)
+- prep.
+  assert (M : forall ce env, map (ev2 ce env) l = map (ev1 ce env) l)
+    by (intros; apply map_ext_in; intros; apply IHl; assumption).
+  unf; same_helpers; rewrite M.
+  destruct (is_hidden env (E_Fun f l)); [reflexivity | ].
+  destruct (first_error O1 _); [reflexivity | ].
+  agr.
+(* E_Agg *)
+- prep; unf; same_helpers; destruct (is_hidden env _); [reflexivity | ].
+  destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr].
+(* E_AggX *)
+- intros ag sq e sep lo c He Hs Ho Hc H ce env.
+  destruct sep as [s0 | ]; [specialize (Hs s0 eq_refl) | clear Hs]; prep.
+  all: unf; same_helpers; destruct (is_hidden env _); [reflexivity | ].
+  all: destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr].
+(* E_Case, E_Cond, E_Sub, E_Grouping *)
+- prep; unf; same_helpers; rw_ih; reflexivity.
+- prep; unf; same_helpers; rw_ih; reflexivity.
+- prep; unf; same_helpers; rw_ih; reflexivity.
+- prep; unf; same_helpers; reflexivity.
+(* the conditions *)
+- prep; split; intros; unf; cong.
+- prep; split; intros; unf; cong.
+- split; intros; reflexivity.
+- prep; split; intros; unf; cong.
+- prep; split; intros; unf; cong.
+- prep; split; intros; unf; cong.
+- prep; split; intros; unf; cong.
+- prep; split; intros; unf; cong.
+(* SQ_Table, SQ_Set, SQ_Select *)
+- intros; reflexivity.
+- prep; unf; cong.
+- prep; unf; rw_ih; reflexivity.
+(* SQ_Order, SQ_Fetch *)
+- intros q lo off lim Hq Hsp Ho H ce env; prep.
+  assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
+  { clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
+    split_ok; rewrite (Hsp s eq_refl ltac:(assumption)); reflexivity. }
+  rewrite !eval_order, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
+- intros q lo off ties pct n Hq Hsp Ho H ce env; prep.
+  assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
+  { clear ce env; intros ce env; unfold ord_rows; destruct q; try (rw_ih; reflexivity).
+    split_ok; rewrite (Hsp s eq_refl ltac:(assumption)); reflexivity. }
+  rewrite !eval_fetch, R, (ord_keys_cong lo IHo); same_helpers; reflexivity.
+(* SQ_Window *)
+- intros q lw Hq Hw H ce env; prep; rewrite !eval_windows; rw_ih.
+  assert (W : forall w, In w lw -> forall ce env, wfun O2 ce env w = wfun O1 ce env w).
+  { intros [f lp lo a] Iw.
+    match goal with K : ok (flat_map _ lw) |- _ => assert (K' := ok_flat_map _ _ _ K _ Iw) end.
+    destruct (Hw f lp lo a Iw) as [Hp [Ho Hf]]; clear Hw; cbv beta in K'; split_ok.
+    assert (IHp : forall y, In y lp -> forall ce env, ev2 ce env y = ev1 ce env y)
+      by (intros y Hy; apply Hp; [exact Hy | ]; match goal with K : ok (flat_map _ lp) |- _ => exact (ok_flat_map _ _ _ K y Hy) end).
+    match goal with K : ok (flat_map ?U lo), K2 : ok (flat_map ?V lo) |- _ =>
+      assert (IHo : forall e d n, In (O_By e d n) lo -> forall ce env, ev2 ce env e = ev1 ce env e)
+        by (intros e d n Hy; apply (Ho e d n Hy); first [exact (ok_flat_map _ _ _ K _ Hy) | exact (ok_flat_map _ _ _ K2 _ Hy)])
+    end.
+    match goal with HF : ok ?x |- _ => match x with context [f] => rename HF into HFf end end.
+    assert (Ha : fagg f) by (clear - HFf; revert HFf; induction f; cbn; intros; split_ok; auto).
+    assert (He : forall y, In y (wexprs T relname f) -> forall ce env, ev2 ce env y = ev1 ce env y).
+    { intros y Hy; apply Hf; [exact Hy | ]; clear - HFf Hy; revert HFf y Hy; induction f; intros HFf y Hy;
+        cbn in HFf, Hy; split_ok; try contradiction;
+        repeat (destruct Hy as [<- | Hy]; [assumption | ]); try contradiction; auto. }
+    apply wfun_cong; assumption. }
+  f_equal; apply map_ext_in; intros w Hw'; apply W; exact Hw'.
+(* SQ_With, SQ_WithRec *)
+- prep; unf; cong.
+- prep; unf; rw_ih.
+  assert (S : forall r sa, (fun work => eq2 ((r, (sa, work)) :: ce) env q2) = (fun work => eq1 ((r, (sa, work)) :: ce) env q2))
+    by (intros; extensionality work; rw_ih; reflexivity).
+  rewrite S; same_helpers; reflexivity.
+(* Select *)
+- intros sq s lf w g h Hs Hf Hw Hg Hh H ce env ex; split_ok.
+  specialize (Hw ltac:(assumption)); specialize (Hh ltac:(assumption)); destruct Hw as [Ec Rc]; destruct Hh as [Ec0 Rc0].
+  assert (IHf : forall y, In y lf -> forall ce env, ef2 ce env y = ef1 ce env y)
+    by (intros y Hy; apply Hf; [exact Hy | ]; match goal with K : ok (flat_map _ lf) |- _ => exact (ok_flat_map _ _ _ K y Hy) end).
+  assert (Hs' : sih s).
+  { destruct s as [ | l]; [exact I | ]; split_ok; intros e a Hy; apply (Hs e a Hy).
+    match goal with K : ok (flat_map _ l) |- _ => exact (ok_flat_map _ _ _ K _ Hy) end. }
+  assert (Hg' : gih g).
+  { destruct g as [ | l | ss | l | l]; split_ok; try exact I.
+    1, 3, 4: intros y Hy; apply (Hg y Hy); match goal with K : ok (flat_map _ ?L), Hy : In y ?L |- _ => exact (ok_flat_map _ _ _ K y Hy) end.
+    match goal with K : ok ?x |- _ => match x with context [@sexpr_uses T relname] => match x with context [ss] => idtac end end;
+      rename K into KS end.
+    intros l Hl y Hy; apply (Hg l Hl y Hy); clear - KS Hl Hy.
+    induction ss as [ | l0 ss IH]; [destruct Hl | ]; cbn in KS; apply ok_app in KS; destruct KS as [K1 K2].
+    destruct Hl as [<- | Hl]; [exact (ok_flat_map _ _ _ K1 y Hy) | exact (IH K2 Hl)]. }
   rewrite !eval_select; cbv zeta.
-  rewrite (where_rows_cong lf w IHf Ec Rc), (gkeys_cong g Hg), (row_vals_cong g Hg), (select_rest_cong s h Hs Ec0 Rc0).
+  rewrite (where_rows_cong lf w IHf Ec Rc), (gkeys_cong g Hg'), (row_vals_cong g Hg'), (select_rest_cong s h Hs' Ec0 Rc0).
   same_helpers; reflexivity.
-- destruct f as [q rho | jt lat f1 f2 c | name args ord atts]; intros H ce env; split_ok.
-  + ihq cong_q q; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ihf cong_f f1; ihf cong_f f2; ihc cong_c c; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-  + ih_l cong_e args; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
-Time Qed.
+(* the FROM items *)
+- prep; unf; cong.
+- prep; unf; cong.
+- prep; unf; cong.
+Qed.
 
 (** * The congruence
 
@@ -541,6 +556,6 @@ Time Qed.
 Theorem eval_congruence :
   forall q, ok (squery_uses q) ->
   forall ce env, eval_squery ORN O2 basesort instance ce env q = eval_squery ORN O1 basesort instance ce env q.
-Proof. exact cong_q. Qed.
+Proof. exact cong_all. Qed.
 
 End Sec.
