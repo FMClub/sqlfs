@@ -1513,9 +1513,9 @@ class Tr:
             alias, name, kind = r
             return '(col %s)' % attr(kind, alias + '.' + name)
         if k == 'neg':
-            return '(fn "neg" [%s])' % self.ex(e[1])
+            return '(fn "neg" [%s])' % self.ex(numctx(e[1]))
         if k == 'bitnot':
-            return '(fn "~" [%s])' % self.ex(e[1])
+            return '(fn "~" [%s])' % self.ex(numctx(e[1]))
         if k == 'bin':
             op = e[1]
             if op in ('and', 'or', 'xor', '||'):
@@ -1530,7 +1530,7 @@ class Tr:
                     '^': '#' if ENGINE == 'postgresql' else '^'}[op]
             if op == '^' and ENGINE == 'postgresql':
                 name = 'power'
-            return '(fn "%s" [%s; %s])' % (name, self.ex(e[2]), self.ex(e[3]))
+            return '(fn "%s" [%s; %s])' % (name, self.ex(numctx(e[2])), self.ex(numctx(e[3])))
         if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant', 'regexp', 'similar', 'cmp_array'):
             return '(e_cond %s)' % self.cond_raw(e)
         if k == 'subq':
@@ -1659,6 +1659,11 @@ class Tr:
         if k == 'cmp':
             op = {'=': '=', '<>': '<>', '!=': '<>', '<': '<', '<=': '<=', '>': '>', '>=': '>=', '<=>': '<=>',
                   '~': '~', '~*': '~*', '!~': '!~', '!~*': '!~*'}[e[1]]
+            # by a number, DAYNAME (d) is compared as a number
+            if e[2][0] == 'num':
+                e = (e[0], e[1], e[2], numctx(e[3])) + tuple(e[4:])
+            elif e[3][0] == 'num':
+                e = (e[0], e[1], numctx(e[2]), e[3]) + tuple(e[4:])
             if e[2][0] == 'row' or e[3][0] == 'row':
                 if e[2][0] != 'row' or e[3][0] != 'row' or len(e[2][1]) != len(e[3][1]) or \
                         op not in ('=', '<>', '<', '<=', '>', '>='):
@@ -1727,6 +1732,15 @@ def rollup_sets(l):
 
 RANKING = {'row_number': 'w_row_number', 'rank': 'w_rank', 'dense_rank': 'w_dense_rank',
            'percent_rank': 'w_percent_rank', 'cume_dist': 'w_cume_dist'}
+
+
+def numctx(e):
+    """An operand of an arithmetic operator, or of a comparison with a number (MySQL family): the value of
+    DAYNAME (d) as a number is the number of the day of the week, Monday being 0 (Item_func_dayname is an
+    Item_func_weekday: its val_int and val_real are the weekday)."""
+    if ENGINE == 'mysql' and isinstance(e, tuple) and e[0] == 'call' and e[1] == 'dayname':
+        return (e[0], 'weekday') + tuple(e[2:])
+    return e
 
 
 def has_call(e, name):

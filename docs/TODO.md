@@ -784,6 +784,8 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   failing cases (23 before). Open: the wildcards `*`, `**` of the paths are read as names (TODO 8.22).
 - **8.19 A name used as a number** (iteration 9): `DAYNAME (d) + 0` is the number of the day in the MySQL family
   (`Item_func_dayname::val_int`): 9 cases.
+  **Status: DONE** (iteration 11), in the translator: an operand `DAYNAME (d)` of an arithmetic operator, or of a
+  comparison with a number, is `WEEKDAY (d)` (`numctx`). TiDB `time`: the 27 cases pass.
 - **8.20 Date literals of the MySQL family with other delimiters** (iteration 9): `TIMESTAMP '2017@01@01 00~00~00'`.
   **Status: DONE** (iteration 10). `lit_datetime`, `lit_time` (`ValueKit.v`): the typed literals, stricter than the
   casts (an invalid literal is an error) and with the formats of the manual. TiDB `misc`: no failing case (15
@@ -794,3 +796,6 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   names by `parse_path`; `JSON_EXTRACT` and `JSON_CONTAINS_PATH` with them are wrong.
 - **8.23 `INTERVAL` with a fraction in the MySQL family** (iteration 10): `d + INTERVAL 1.2 SECOND`, `INTERVAL '1.9'
   MINUTE` (the fraction is dropped or rounded by the unit), `INTERVAL true MICROSECOND`: 11 cases of TiDB `time`.
+  **Status: DONE** (iteration 11). The `interval` of the MySQL family follows `get_interval_value`; a sum with a
+  fraction of a second has 6 fractional digits. TiDB `time`: 1 failing case (38 before), a datetime written as a
+  number with a fraction.

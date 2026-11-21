@@ -181,3 +181,22 @@ Example lit_time_3 : my_lit "lit_time" "21" = "00:00:21" /\ my_lit "lit_time" "1
 Proof. repeat split; vm_compute; reflexivity. Qed.
 Example lit_time_4 : my_lit "lit_time" "2017-01-01 00:00:00" = "error" /\ my_lit "lit_time" "20171231235959.999999" = "error".
 Proof. split; vm_compute; reflexivity. Qed.
+
+(** [INTERVAL] of the MySQL family ([get_interval_value]; TiDB [expression/time]; TODO 8.23): the seconds keep their
+    fraction, the other units take an integer (a decimal is rounded, a string gives the integer it starts with) *)
+Definition my_plus (n : sexpr) (u : string) : string :=
+  match eval_query_list ORN (dialect_of MySQL) (_basesort _ init_db) (_instance _ init_db)
+          (to_dialect MySQL (select_where [as_ (fn "cast_string" [fn "date_add" [str "1900-01-01 00:00:00"; fn "interval" [n; str u]]]) c0] [] c_true)) with
+  | r :: _ => show_value (dot (TD MySQL) r (out_attr 0))
+  | nil => "?"
+  end.
+Example iv_sec_frac : my_plus (cst (VD 12 1)) "SECOND" = "1900-01-01 00:00:01.200000".
+Proof. vm_compute; reflexivity. Qed.
+Example iv_min_string : my_plus (str "1.9") "MINUTE" = "1900-01-01 00:01:00".
+Proof. vm_compute; reflexivity. Qed.
+Example iv_min_decimal : my_plus (cst (VD 19 1)) "MINUTE" = "1900-01-01 00:02:00".
+Proof. vm_compute; reflexivity. Qed.
+Example iv_micro : my_plus (cst (VD 19 1)) "MICROSECOND" = "1900-01-01 00:00:00.000002".
+Proof. vm_compute; reflexivity. Qed.
+Example iv_hour_string : my_plus (str "1e+3") "HOUR" = "1900-01-01 01:00:00".
+Proof. vm_compute; reflexivity. Qed.

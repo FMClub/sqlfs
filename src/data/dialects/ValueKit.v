@@ -550,13 +550,25 @@ Definition my_ts_of (v : value) : option (Z * bool) :=
 
 (** [DATE_ADD(d, INTERVAL n unit)]: a [DATE] when [d] is a date and the unit is a day or longer, a
     [DATETIME] otherwise; a date out of [0001-01-01 .. 9999-12-31] is NULL *)
+(** the integer which a string starts with ([val_int] of a string: the rest is ignored, with a warning) *)
+Definition my_int_prefix (t : string) : Z :=
+  let t := string_ltrim t in
+  let '(neg, t) := match t with String "-" r => (true, r) | String "+" r => (false, r) | _ => (false, t) end in
+  let fix take (l : list ascii) : list ascii :=
+      match l with c :: r => if match digit c with Some _ => true | None => false end then c :: take r else nil | nil => nil end in
+  let z := match digits_of (string_of_list_ascii (take (list_ascii_of_string t))) with Some z => z | None => 0%Z end in
+  if neg then (- z)%Z else z.
+
 Definition my_date_add (sign : Z) (v iv : value) : value :=
   match my_ts_of v, iv with
   | Some (t, has_time), Value_V (Some (mo, d, us)) =>
     let r := ts_plus_interval t (sign * mo, sign * d, sign * us) in
     let '(y, _, _) := civil_from_days (ts_days r) in
     if negb ((1 <=? y) && (y <=? 9999))%Z then Value_T None
-    else if has_time || negb (Z.eqb us 0) then VTs r (match temporal_parts v with Some (_, _, f) => f | None => 0%nat end)
+    (* an interval with a fraction of a second gives 6 fractional digits *)
+    else if has_time || negb (Z.eqb us 0)
+         then VTs r (if negb (Z.eqb (us mod 1000000) 0) then 6%nat
+                     else match temporal_parts v with Some (_, _, f) => f | None => 0%nat end)
     else VDate (ts_days r)
   | _, _ => Value_T None
   end.

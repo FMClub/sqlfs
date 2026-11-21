@@ -690,9 +690,30 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                                       | None => Value_V None end
                                           | None => Value_V None end
                              | None =>
-                             match z_arg n, interval_of_unit 1 u with
-                             | Some k, Some (a, b, c) => Value_V (Some (k * a, k * b, k * c))
-                             | _, _ => Value_V None end end
+                             (* [get_interval_value] of [item_timefunc.cc]: the seconds keep their fraction
+                                (truncated to microseconds) when the value is not an integer; the other units take
+                                the value as an integer: a decimal is rounded, a string gives the integer which it
+                                starts with, a boolean is 0 or 1 *)
+                             let frac_sec :=
+                                 if String.eqb u "SECOND"
+                                 then match n with
+                                      | Value_Z _ | Value_I _ | Value_bool _ => None
+                                      | _ => match lenient n with
+                                             | Some (Num_Q q) => Some (Qc_trunc (Qcmult q (Qc_of_Z 1000000)))
+                                             | _ => None end
+                                      end
+                                 else None in
+                             let k := match n with
+                                      | Value_string (Some t) => Some (my_int_prefix t)
+                                      | Value_bool (Some b) => Some (if b then 1 else 0)%Z
+                                      | _ => z_arg n end in
+                             match frac_sec with
+                             | Some us => Value_V (Some (0, 0, us)%Z)
+                             | None =>
+                               match k, interval_of_unit 1 u with
+                               | Some k, Some (a, b, c) => Value_V (Some (k * a, k * b, k * c))
+                               | _, _ => Value_V None end
+                             end end
                            | _ => Value_V None end)
   :: ("date_add", fun l => match l with d :: iv :: nil => my_date_add 1 d iv | _ => Value_T None end)
   :: ("date_sub", fun l => match l with d :: iv :: nil => my_date_add (-1) d iv | _ => Value_T None end)
