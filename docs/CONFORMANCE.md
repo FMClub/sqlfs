@@ -92,6 +92,13 @@ test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 
+Run 10 (iteration 9, TODO 8.11): `NaN` and the infinities of `numeric` are represented by the special values of the
+doubles (`'NaN'::numeric`, the casts between `numeric` and the floats, `power`, the arithmetic by a string literal,
+which is read as a `numeric`); the variances and the statistics of two variables are NaN on such inputs: **69** fail
+(51 fewer). What still fails: 30 `to_char` with numeric format models, 16 infinite dates and timestamps, 12 others of
+`numeric` (the scales of `sqrt`, `ln`, `log` in queries which also hold special values, `exp` beyond 77 digits), 3
+window results which depend on the order of the peers, 2 `DateStyle`, and 6 others.
+
 Run 9 (iteration 7, TODO 8.13): the dates before the common era (`BC`, `EXTRACT` of negative years, the Julian
 day): **120** fail (13 fewer than run 8; the files `date` and `timestamp` were run again, the others are those of
 run 8). The calendar conversions were off by one day before 0000-03-01: fixed.
@@ -177,6 +184,16 @@ literals with a time zone offset (`TIMESTAMP '2024-01-01 14:00:00+01:00'`, MySQL
 non-JSON arguments, where TiDB reports an error that the model gives as a value; integer overflow errors (`ABS (-2^63)`):
 the integers of the MySQL family are unbounded in the model; results which hold a statement of the script (scripts
 without `;` echo): harness.
+
+Run 3 (iteration 9; the translator forgets the options of earlier tables of the same name, and the models of
+iterations 6 to 9): **2095** translated, **128** fail, 1 file (13 cases) over the memory limit. The groups: 38 of
+`time` (`DAYNAME (d) + 0`, a name used as a number, and the literals with a time zone offset), 31 JSON functions on
+arguments which are not JSON (an error in TiDB and in MySQL, a value in the model), 15 `misc` (date literals with
+other delimiters, `TIMESTAMP '00:00:00'`), 10 `builtin` (`tan`, `cot`, `exp` of Go's `math`, which is not correctly
+rounded; the overflow of `BIGINT`). Found by reading these: an error line of TiDB (`Error 1582 ...`) under a query of
+one column was read as the header of an empty result, so that such cases expected no row (TODO 8.17).
+
+**MySQL**, run 3 (same changes): **1211** translated, **95** fail.
 
 Found and fixed by the MySQL-family runs: digit strings read as dates (`'20050606'`), the exponent of numeric strings
 (`'123e-2'`), leading inline regular-expression flags, executable comments `/*!NNNNN ... */`, TiDB's error lines

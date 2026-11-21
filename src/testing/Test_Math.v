@@ -224,3 +224,21 @@ Proof. check. Qed.
 Example pg_series_numeric :
   List.length (run PostgreSQL (select_star_where [from_fun "generate_series" [fn "cast_numeric" [int 1]; fn "cast_numeric" [int 3]] false [c0]] c_true)) = 3%nat.
 Proof. check. Qed.
+
+(** [NaN] and the infinities of [numeric] (TODO 8.11): they are the special values of the doubles; a string
+    literal by a number is read as a [numeric] *)
+Definition num (t : string) := fn "cast_numeric" [str t].
+Example pg_num_nan : text PostgreSQL (num "NaN") = "NaN" /\ text PostgreSQL (num "-Infinity") = "-Infinity".
+Proof. split; check. Qed.
+Example pg_num_nan_div : text PostgreSQL (fn "/" [num "nan"; str "0"]) = "NaN".
+Proof. check. Qed.
+Example pg_num_inf_pow : text PostgreSQL (fn "power" [num "-inf"; str "3"]) = "-Infinity".
+Proof. check. Qed.
+Example pg_num_pow_inf : text PostgreSQL (fn "power" [num "-2"; str "-inf"]) = "0".
+Proof. check. Qed.
+Example pg_num_to_float4 : text PostgreSQL (fn "cast_float4" [num "Infinity"]) = "Infinity".
+Proof. check. Qed.
+Example pg_float_to_num : text PostgreSQL (fn "cast_numeric" [f8 "NaN"]) = "NaN".
+Proof. check. Qed.
+Example pg_lit_plus : text PostgreSQL (fn "+" [str "1.5"; int 1]) = "2.5".
+Proof. check. Qed.

@@ -6,9 +6,9 @@ for the suites, the method and the explanation of each failure).
 | Suite | Dialect | Translated | Failing | Not run (time or memory limit) | Pass |
 |---|---|---|---|---|---|
 | OceanBase test suite (run 20) | `OceanBaseMySQL` | 775 | 0 | 1 | 774 |
-| PostgreSQL regression tests (run 9) | `PostgreSQL` | 514 | 120 | 0 | 394 |
+| PostgreSQL regression tests (run 10) | `PostgreSQL` | 514 | 69 | 0 | 445 |
 | MariaDB mysql-test, 44 files (run 4) | `MariaDB` | 396 | 7 | 23 | 366 |
-| TiDB integrationtest (run 2) | `TiDB` | 1935 | 125 | 47 | 1763 |
-| MySQL mysql-test (run 2) | `MySQL` | 1122 | 118 | 0 | 1004 |
+| TiDB integrationtest (run 3) | `TiDB` | 2095 | 128 | 13 | 1954 |
+| MySQL mysql-test (run 3) | `MySQL` | 1211 | 95 | 0 | 1116 |
 
 "Not run" counts the cases of the files whose compilation stopped at the time or memory limit of the runner; "Pass" is the rest of the translated cases minus the failing ones.

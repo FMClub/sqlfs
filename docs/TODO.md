@@ -733,7 +733,8 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   - PostgreSQL (iteration 6): 238 failing cases of 514 became 133 (`docs/CONFORMANCE.md`, run 8). Remaining classes:
     `NaN` / `Infinity` of `numeric`, infinite dates, `to_char` with numeric formats (TODO 8.11, 8.12); after iteration 7
     (BC dates, `EXTRACT (JULIAN ...)`) 120 fail.
-  - TiDB, MySQL, MariaDB: not classified again yet.
+  - MariaDB (iteration 8): 396 translated, 7 fail. TiDB (iteration 9): 2095 translated, 128 fail. MySQL (iteration
+    9): 1211 translated, 95 fail. Their classes are items 8.17 to 8.21.
 - **8.10 Storage order and names** (iteration 4, I11): the order in which a stored table is read depends on the
   names of its columns. Decide between the options of I11 and do it.
   **Status: DONE** (iteration 5), by decision: option (a) of I11. The order of an unordered table is
@@ -741,6 +742,10 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   3.10, and `eval_rename` states its hypothesis on the order explicitly.
 - **8.11 `NaN` and `Infinity` of `numeric`, infinite dates and timestamps** (iteration 6): PostgreSQL has them, the
   model does not (`Value_D` is finite, a date is a number of days): 75 failing cases of the regression tests.
+  **Status: PARTIAL** (iteration 9). `NaN` and the infinities of `numeric` are the special values of the doubles
+  (the type of such a value is not distinguished from `double precision`; its text and its arithmetic are those of
+  PostgreSQL); the aggregates over them. PostgreSQL: 69 failing cases of 514. Not done: the infinite dates and
+  timestamps (16 cases).
 - **8.12 `to_char` of numbers** (iteration 6): the numeric format models (`9`, `0`, `FM`, `EEEE`, `RN`, `V`, ...): 28
   failing cases.
 - **8.13 BC dates** (iteration 6): the date parser reads years of the common era only: 12 failing cases.
@@ -764,4 +769,13 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   **Status: DONE** (iteration 8). `src/data/proof_of_concept/TemporalFacts.v`: `civil_round_trip` (every day),
   `days_round_trip` (every valid date), `civil_valid`; by the periodicity of both functions (400 years are 146097
   days) and a check of one period by computation.
-
+- **8.17 An error line of TiDB read as an empty result** (iteration 9): `Error 1582 ...` under a query of one column
+  is taken for the header of an empty result. Fix the reader, and check the queries which the engine rejects: the
+  model must fail on them too.
+- **8.18 JSON functions on arguments which are not JSON** (iteration 9): `JSON_MERGE (1, 2)` is an error in MySQL
+  and TiDB ("Invalid data type for JSON data"), a value in the model: 31 cases of TiDB.
+- **8.19 A name used as a number** (iteration 9): `DAYNAME (d) + 0` is the number of the day in the MySQL family
+  (`Item_func_dayname::val_int`): 9 cases.
+- **8.20 Date literals of the MySQL family with other delimiters** (iteration 9): `TIMESTAMP '2017@01@01 00~00~00'`.
+- **8.21 Overflow of `BIGINT` in the MySQL family** (iteration 9): `ABS (-9223372036854775808)`, `ROUND
+  (9223372036854775807, -1)` are errors; the integers of the model are unbounded there.
