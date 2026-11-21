@@ -631,13 +631,23 @@ open_case.
 prep; unf; cong.
 Qed.
 
+Lemma eval_set_op_O2 : forall o sq l1 l2, eval_set_op O2 o sq l1 l2 = eval_set_op O1 o sq l1 l2.
+Proof. intros o sq l1 l2; destruct sq; destruct o; reflexivity. Qed.
+
+Lemma rec_loop_O2 : forall step d sa n acc work, rec_loop O2 step d sa n acc work = rec_loop O1 step d sa n acc work.
+Proof.
+intros step d sa n; induction n as [ | n IH]; intros acc work; cbn [rec_loop].
+- destruct work; reflexivity.
+- destruct work as [ | w work]; [reflexivity | ]; rewrite IH, eval_set_op_O2; reflexivity.
+Qed.
+
 Lemma c_withrec : forall sq r q1 q2 q3, Pq_ q1 -> Pq_ q2 -> Pq_ q3 -> Pq_ (SQ_WithRec sq r q1 q2 q3).
 Proof.
 open_case.
 prep; unf; rw_ih.
 assert (S : forall r sa, (fun work => eq2 ((r, (sa, work)) :: ce) env q2) = (fun work => eq1 ((r, (sa, work)) :: ce) env q2))
   by (intros; extensionality work; rw_ih; reflexivity).
-rewrite S; same_helpers; reflexivity.
+rewrite S, rec_loop_O2, !eval_set_op_O2; reflexivity.
 Qed.
 
 Lemma c_spec : forall sq s lf w g h,
