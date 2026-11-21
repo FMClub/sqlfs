@@ -560,4 +560,214 @@ exact (ind_q T relname Ce Cc Cq Cs Cf k_const k_col k_fun k_agg k_aggx k_case k_
   k_fquery k_fjoin k_ffun).
 Qed.
 
+(** the aggregates of the blocks *)
+Lemma existsb_map_rho : forall (p p' : attribute T -> bool) l, (forall a, p' (rho a) = p a) ->
+  existsb p' (map rho l) = existsb p l.
+Proof. intros p p' l H; induction l as [ | a l IH]; [reflexivity | simpl; rewrite H, IH; reflexivity]. Qed.
+
+Lemma cols_test : forall (l : list (attribute T)) (sa' sa : Fset.set (A T)) (X : bool),
+  sa' =S= rs sa ->
+  match map rho l with nil => X | y :: r => existsb (fun x => x inS? sa') (y :: r) end =
+  match l with nil => X | y :: r => existsb (fun x => x inS? sa) (y :: r) end.
+Proof.
+intros l sa' sa X H; destruct l as [ | a l]; [reflexivity | ].
+rewrite <- (existsb_map_rho (fun x => x inS? sa) (fun x => x inS? sa') (a :: l)); [reflexivity | ].
+intro b; rewrite (Fset.mem_eq_2 _ _ _ H), mem_rs; reflexivity.
+Qed.
+
+Lemma cols_test2 : forall (l : list (attribute T)) (sa' sa b' b : Fset.set (A T)),
+  sa' =S= rs sa -> b' =S= rs b ->
+  match map rho l with nil => false | y :: r => existsb (fun x => x inS? sa') (y :: r) && negb (existsb (fun x => x inS? b') (y :: r)) end =
+  match l with nil => false | y :: r => existsb (fun x => x inS? sa) (y :: r) && negb (existsb (fun x => x inS? b) (y :: r)) end.
+Proof.
+intros l sa' sa b' b H1 H2; destruct l as [ | a l]; [reflexivity | ].
+rewrite <- (existsb_map_rho (fun x => x inS? sa) (fun x => x inS? sa') (a :: l)),
+  <- (existsb_map_rho (fun x => x inS? b) (fun x => x inS? b') (a :: l)); [reflexivity | | ];
+  intro c; [rewrite (Fset.mem_eq_2 _ _ _ H2) | rewrite (Fset.mem_eq_2 _ _ _ H1)]; rewrite mem_rs; reflexivity.
+Qed.
+
+Definition spf (ce : SqlFull.cte_env T relname) bs (sa : Fset.set (A T)) (sp : SqlFull.sspec T relname) : bool :=
+  squery_foreign ORN bs ce sa (SQ_Select sp).
+
+Definition Fe (e : SqlFull.sexpr T relname) := forall ce' ce sa' sa b' b, Rsort ce' ce -> sa' =S= rs sa -> b' =S= rs b ->
+  sexpr_foreign ORN basesort' ce' sa' b' (re e) = sexpr_foreign ORN basesort ce sa b e.
+Definition Fc (c : SqlFull.scond T relname) := forall ce' ce sa' sa b' b, Rsort ce' ce -> sa' =S= rs sa -> b' =S= rs b ->
+  scond_foreign ORN basesort' ce' sa' b' (rc c) = scond_foreign ORN basesort ce sa b c.
+Definition Fq (q : SqlFull.squery T relname) := forall ce' ce sa' sa, Rsort ce' ce -> sa' =S= rs sa ->
+  squery_foreign ORN basesort' ce' sa' (rq q) = squery_foreign ORN basesort ce sa q.
+Definition Fs (sp : SqlFull.sspec T relname) := forall ce' ce sa' sa, Rsort ce' ce -> sa' =S= rs sa ->
+  spf ce' basesort' sa' (rsp sp) = spf ce basesort sa sp.
+Definition Ff (f : SqlFull.sfrom T relname) := True.
+
+Ltac fold_for ce' ce :=
+  fold (sexpr_foreign ORN basesort' ce') (sexpr_foreign ORN basesort ce) (scond_foreign ORN basesort' ce')
+       (scond_foreign ORN basesort ce) (squery_foreign ORN basesort' ce') (squery_foreign ORN basesort ce).
+
+Ltac kfor := intros; intros ce' ce sa' sa b' b H Hs Hb;
+  cbn [r_e r_c r_q r_s r_f sexpr_foreign scond_foreign squery_foreign]; fold_for ce' ce; fold_cols ce' ce.
+Ltac kforq := intros; intros ce' ce sa' sa H Hs;
+  cbn [r_e r_c r_q r_s r_f sexpr_foreign scond_foreign squery_foreign]; fold_for ce' ce; fold_cols ce' ce.
+
+Lemma existsb_F : forall (X : Type) (f : X -> X) (p p' : X -> bool) l, (forall x, In x l -> p' (f x) = p x) ->
+  existsb p' (map f l) = existsb p l.
+Proof. intros X f p p' l H; induction l as [ | x l IH]; [reflexivity | simpl; rewrite H, IH; [reflexivity | | left; reflexivity]]; intros; apply H; right; assumption. Qed.
+
+Lemma f_const : forall v, Fe (E_Const T relname v). Proof. kfor; reflexivity. Qed.
+Lemma f_col : forall a, Fe (E_Col T relname a). Proof. kfor; reflexivity. Qed.
+Lemma f_fun : forall f l, LE T relname Fe l -> Fe (E_Fun f l).
+Proof. intros f l Hl; kfor; apply existsb_F; intros x Ix; apply (Hl x Ix); assumption. Qed.
+Lemma f_agg : forall ag sq e c, Fe e -> Fc c -> Fe (E_Agg ag sq e c).
+Proof.
+intros ag sq e c _ _; kfor; rewrite (cols_e e ce' ce H), (cols_c c ce' ce H), <- map_app.
+apply cols_test2; assumption.
+Qed.
+Lemma f_aggx : forall ag sq e sep lo c, Fe e -> (forall s, sep = Some s -> Fe s) -> LO T relname Fe lo -> Fc c ->
+  Fe (E_AggX ag sq e sep lo c).
+Proof.
+intros ag sq e sep lo c _ _ _ _; kfor.
+rewrite (cols_e e ce' ce H), (cols_c c ce' ce H), (Cflat_o lo ce' ce (fun x d n _ => cols_e x) H).
+replace (match match sep with Some s => Some (re s) | None => None end with Some s => sc_e' ce' s | None => nil end)
+  with (map rho (match sep with Some s => sc_e ce s | None => nil end))
+  by (destruct sep as [x | ]; [symmetry; apply cols_e; exact H | reflexivity]).
+rewrite <- !map_app; apply cols_test2; assumption.
+Qed.
+Lemma f_case : forall c e1 e2, Fc c -> Fe e1 -> Fe e2 -> Fe (E_Case c e1 e2).
+Proof. intros c e1 e2 Hc H1 H2; kfor; rewrite (Hc ce' ce sa' sa b' b), (H1 ce' ce sa' sa b' b), (H2 ce' ce sa' sa b' b); auto. Qed.
+Lemma f_cond : forall c, Fc c -> Fe (E_Cond c). Proof. intros c Hc; kfor; apply Hc; assumption. Qed.
+Lemma f_sub : forall q, Fq q -> Fe (E_Sub q). Proof. intros q Hq; kfor; apply Hq; assumption. Qed.
+Lemma f_grouping : forall x, Fe x -> Fe (E_Grouping x). Proof. intros x Hx; kfor; apply Hx; assumption. Qed.
+Lemma f_conj : forall a c1 c2, Fc c1 -> Fc c2 -> Fc (C_Conj a c1 c2).
+Proof. intros a c1 c2 H1 H2; kfor; rewrite (H1 ce' ce sa' sa b' b), (H2 ce' ce sa' sa b' b); auto. Qed.
+Lemma f_not : forall c, Fc c -> Fc (C_Not c). Proof. intros c Hc; kfor; apply Hc; assumption. Qed.
+Lemma f_true : Fc (C_True T relname). Proof. kfor; reflexivity. Qed.
+Lemma f_pred : forall p l, LE T relname Fe l -> Fc (C_Pred p l).
+Proof. intros p l Hl; kfor; apply existsb_F; intros x Ix; apply (Hl x Ix); assumption. Qed.
+Lemma f_expr : forall e, Fe e -> Fc (C_Expr e). Proof. intros e He; kfor; apply He; assumption. Qed.
+Lemma f_quant : forall qtf p l q la, LE T relname Fe l -> Fq q -> Fc (C_Quant qtf p l q la).
+Proof.
+intros qtf p l q la Hl Hq; kfor; rewrite (Hq ce' ce sa' sa H Hs); f_equal.
+apply existsb_F; intros x Ix; apply (Hl x Ix); assumption.
+Qed.
+Lemma f_in : forall l q la, LE T relname Fe l -> Fq q -> Fc (C_In l q la).
+Proof.
+intros l q la Hl Hq; kfor; rewrite (Hq ce' ce sa' sa H Hs); f_equal.
+apply existsb_F; intros x Ix; apply (Hl x Ix); assumption.
+Qed.
+Lemma f_exists : forall q, Fq q -> Fc (C_Exists q). Proof. intros q Hq; kfor; apply Hq; assumption. Qed.
+Lemma f_table : forall r, Fq (SQ_Table T r). Proof. kforq; reflexivity. Qed.
+Lemma f_set : forall o sq q1 q2, Fq q1 -> Fq q2 -> Fq (SQ_Set o sq q1 q2).
+Proof. intros o sq q1 q2 H1 H2; kforq; rewrite (H1 ce' ce sa' sa H Hs), (H2 ce' ce sa' sa H Hs); reflexivity. Qed.
+Lemma f_select : forall sp, Fs sp -> Fq (SQ_Select sp). Proof. intros sp Hsp ce' ce sa' sa H Hs; exact (Hsp ce' ce sa' sa H Hs). Qed.
+Lemma f_order : forall q lo off lim, Fq q -> (forall sp, q = SQ_Select sp -> Fs sp) -> LO T relname Fe lo -> Fq (SQ_Order q lo off lim).
+Proof. intros q lo off lim Hq _ _; kforq; apply Hq; assumption. Qed.
+Lemma f_fetch : forall q lo off ties pct n, Fq q -> (forall sp, q = SQ_Select sp -> Fs sp) -> LO T relname Fe lo ->
+  Fq (SQ_Fetch q lo off ties pct n).
+Proof. intros q lo off ties pct n Hq _ _; kforq; apply Hq; assumption. Qed.
+Lemma f_window : forall q lw, Fq q ->
+  (forall f lp lo a, In (W_As f lp lo a) lw -> LE T relname Fe lp /\ LO T relname Fe lo /\ LE T relname Fe (wexprs T relname f)) ->
+  Fq (SQ_Window q lw).
+Proof. intros q lw Hq _; kforq; apply Hq; assumption. Qed.
+Lemma f_with : forall r q1 q2, Fq q1 -> Fq q2 -> Fq (SQ_With r q1 q2).
+Proof.
+intros r q1 q2 H1 H2; kforq.
+rewrite (H1 ce' ce sa' sa H Hs), (H2 _ _ sa' sa (Rsort_cons _ _ r _ _ nil nil H (sort_rename q1 ce' ce H)) Hs); reflexivity.
+Qed.
+Lemma f_withrec : forall sq r q1 q2 q3, Fq q1 -> Fq q2 -> Fq q3 -> Fq (SQ_WithRec sq r q1 q2 q3).
+Proof.
+intros sq r q1 q2 q3 H1 H2 H3; kforq.
+assert (H' := Rsort_cons _ _ r _ _ nil nil H (sort_rename q1 ce' ce H)).
+rewrite (H1 ce' ce sa' sa H Hs), (H2 _ _ sa' sa H' Hs), (H3 _ _ sa' sa H' Hs); reflexivity.
+Qed.
+Lemma f_spec : forall sq s lf w g h,
+  match s with S_Star _ _ => True | S_List l => forall e a, In (S_As e a) l -> Fe e end ->
+  (forall f, In f lf -> Ff f) -> Fc w ->
+  match g with
+  | G_Fine _ _ => True
+  | G_By l | G_Rollup l | G_Cube l => LE T relname Fe l
+  | G_Sets ss => forall l, In l ss -> LE T relname Fe l
+  end -> Fc h -> Fs (Select sq s lf w g h).
+Proof.
+intros sq s lf w g h Hs' _ Hw _ Hh ce' ce sa' sa H Hs; unfold spf; cbn [r_s squery_foreign]; fold_for ce' ce.
+assert (Hb : Fset.Union (A T) (map (sfrom_sort ORN basesort' ce') (map rf lf)) =S=
+             rs (Fset.Union (A T) (map (sfrom_sort ORN basesort ce) lf))).
+{ rewrite (Fset.equal_eq_2 _ _ _ _ (rs_Union _)), map_map, map_map; apply Union_eq_F2.
+  clear - H Hbs Hrr Hrr' Hord; induction lf as [ | f lf IH]; constructor; [apply sort_rename_f; exact H | exact IH]. }
+rewrite (Hh _ _ _ _ _ _ H Hs Hb), (Hw _ _ _ _ _ _ H Hs Hb); f_equal; f_equal.
+destruct s as [ | l]; [reflexivity | ].
+rewrite map_map; apply existsb_F; intros [e a] I; cbn beta iota; apply (Hs' e a I); [assumption | assumption | rewrite <- (map_map rf); exact Hb].
+Qed.
+Lemma f_fquery : forall q r, Fq q -> Ff (Fr_Query q r). Proof. intros; exact I. Qed.
+Lemma f_fjoin : forall jt lat f1 f2 c, Ff f1 -> Ff f2 -> Fc c -> Ff (Fr_Join jt lat f1 f2 c). Proof. intros; exact I. Qed.
+Lemma f_ffun : forall name args ord atts, LE T relname Fe args -> Ff (Fr_Fun name args ord atts). Proof. intros; exact I. Qed.
+
+Lemma foreign_q : forall q, Fq q.
+Proof.
+exact (ind_q T relname Fe Fc Fq Fs Ff f_const f_col f_fun f_agg f_aggx f_case f_cond f_sub f_grouping f_conj f_not
+  f_true f_pred f_expr f_quant f_in f_exists f_table f_set f_select f_order f_fetch f_window f_with f_withrec f_spec
+  f_fquery f_fjoin f_ffun).
+Qed.
+
+Definition He_ (e : SqlFull.sexpr T relname) := forall ce' ce sa' sa, Rsort ce' ce -> sa' =S= rs sa ->
+  sexpr_has_agg ORN basesort' ce' sa' (re e) = sexpr_has_agg ORN basesort ce sa e.
+Definition Hc_ (c : SqlFull.scond T relname) := forall ce' ce sa' sa, Rsort ce' ce -> sa' =S= rs sa ->
+  scond_has_agg ORN basesort' ce' sa' (rc c) = scond_has_agg ORN basesort ce sa c.
+Definition Ht_ {X : Type} (x : X) := True.
+
+Ltac khas := intros ce' ce sa' sa H Hs;
+  cbn [r_e r_c sexpr_has_agg scond_has_agg];
+  fold (sexpr_has_agg ORN basesort' ce' sa') (sexpr_has_agg ORN basesort ce sa)
+       (scond_has_agg ORN basesort' ce' sa') (scond_has_agg ORN basesort ce sa); fold_cols ce' ce.
+
+Lemma h_const : forall v, He_ (E_Const T relname v). Proof. intro v; khas; reflexivity. Qed.
+Lemma h_col : forall a, He_ (E_Col T relname a). Proof. intro a; khas; reflexivity. Qed.
+Lemma h_fun : forall f l, LE T relname He_ l -> He_ (E_Fun f l).
+Proof. intros f l Hl; khas; apply existsb_F; intros x Ix; apply (Hl x Ix); assumption. Qed.
+Lemma h_agg : forall ag sq e c, He_ e -> Hc_ c -> He_ (E_Agg ag sq e c).
+Proof. intros ag sq e c _ _; khas; rewrite (cols_e e ce' ce H), (cols_c c ce' ce H), <- map_app; apply cols_test; exact Hs. Qed.
+Lemma h_aggx : forall ag sq e sep lo c, He_ e -> (forall s, sep = Some s -> He_ s) -> LO T relname He_ lo -> Hc_ c ->
+  He_ (E_AggX ag sq e sep lo c).
+Proof.
+intros ag sq e sep lo c _ _ _ _; khas.
+rewrite (cols_e e ce' ce H), (cols_c c ce' ce H), (Cflat_o lo ce' ce (fun x d n _ => cols_e x) H).
+replace (match match sep with Some s => Some (re s) | None => None end with Some s => sc_e' ce' s | None => nil end)
+  with (map rho (match sep with Some s => sc_e ce s | None => nil end))
+  by (destruct sep as [x | ]; [symmetry; apply cols_e; exact H | reflexivity]).
+rewrite <- !map_app; apply cols_test; exact Hs.
+Qed.
+Lemma h_case : forall c e1 e2, Hc_ c -> He_ e1 -> He_ e2 -> He_ (E_Case c e1 e2).
+Proof. intros c e1 e2 Hc H1 H2; khas; rewrite (Hc ce' ce sa' sa), (H1 ce' ce sa' sa), (H2 ce' ce sa' sa); auto. Qed.
+Lemma h_cond : forall c, Hc_ c -> He_ (E_Cond c). Proof. intros c Hc; khas; apply Hc; assumption. Qed.
+Lemma h_sub : forall q, @Ht_ (SqlFull.squery T relname) q -> He_ (E_Sub q). Proof. intros q _; khas; apply foreign_q; assumption. Qed.
+Lemma h_grouping : forall x, He_ x -> He_ (E_Grouping x). Proof. intros x _; khas; reflexivity. Qed.
+Lemma h_conj : forall a c1 c2, Hc_ c1 -> Hc_ c2 -> Hc_ (C_Conj a c1 c2).
+Proof. intros a c1 c2 H1 H2; khas; rewrite (H1 ce' ce sa' sa), (H2 ce' ce sa' sa); auto. Qed.
+Lemma h_not : forall c, Hc_ c -> Hc_ (C_Not c). Proof. intros c Hc; khas; apply Hc; assumption. Qed.
+Lemma h_true : Hc_ (C_True T relname). Proof. khas; reflexivity. Qed.
+Lemma h_pred : forall p l, LE T relname He_ l -> Hc_ (C_Pred p l).
+Proof. intros p l Hl; khas; apply existsb_F; intros x Ix; apply (Hl x Ix); assumption. Qed.
+Lemma h_expr : forall e, He_ e -> Hc_ (C_Expr e). Proof. intros e He; khas; apply He; assumption. Qed.
+Lemma h_quant : forall qtf p l q la, LE T relname He_ l -> @Ht_ (SqlFull.squery T relname) q -> Hc_ (C_Quant qtf p l q la).
+Proof.
+intros qtf p l q la Hl _; khas; rewrite (foreign_q q ce' ce sa' sa H Hs); f_equal.
+apply existsb_F; intros x Ix; apply (Hl x Ix); assumption.
+Qed.
+Lemma h_in : forall l q la, LE T relname He_ l -> @Ht_ (SqlFull.squery T relname) q -> Hc_ (C_In l q la).
+Proof.
+intros l q la Hl _; khas; rewrite (foreign_q q ce' ce sa' sa H Hs); f_equal.
+apply existsb_F; intros x Ix; apply (Hl x Ix); assumption.
+Qed.
+Lemma h_exists : forall q, @Ht_ (SqlFull.squery T relname) q -> Hc_ (C_Exists q). Proof. intros q _; khas; apply foreign_q; assumption. Qed.
+
+Lemma has_agg_e : forall e, He_ e.
+Proof.
+refine (ind_e T relname He_ Hc_ Ht_ Ht_ Ht_ h_const h_col h_fun h_agg h_aggx h_case h_cond h_sub h_grouping h_conj h_not
+  h_true h_pred h_expr h_quant h_in h_exists _ _ _ _ _ _ _ _ _ _ _ _); intros; exact I.
+Qed.
+
+Lemma has_agg_c : forall c, Hc_ c.
+Proof.
+refine (ind_c T relname He_ Hc_ Ht_ Ht_ Ht_ h_const h_col h_fun h_agg h_aggx h_case h_cond h_sub h_grouping h_conj h_not
+  h_true h_pred h_expr h_quant h_in h_exists _ _ _ _ _ _ _ _ _ _ _ _); intros; exact I.
+Qed.
+
 End Sec.
