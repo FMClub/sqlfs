@@ -6,7 +6,7 @@ for the suites, the method and the explanation of each failure).
 | Suite | Dialect | Translated | Failing | Not run (time or memory limit) | Pass |
 |---|---|---|---|---|---|
 | OceanBase test suite (run 20) | `OceanBaseMySQL` | 775 | 0 | 1 | 774 |
-| PostgreSQL regression tests (run 10) | `PostgreSQL` | 514 | 69 | 0 | 445 |
+| PostgreSQL regression tests (run 11) | `PostgreSQL` | 514 | 53 | 0 | 461 |
 | MariaDB mysql-test, 44 files (run 4) | `MariaDB` | 396 | 7 | 23 | 366 |
 | TiDB integrationtest (run 3) | `TiDB` | 2095 | 128 | 13 | 1954 |
 | MySQL mysql-test (run 3) | `MySQL` | 1211 | 95 | 0 | 1116 |

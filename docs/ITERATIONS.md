@@ -17,3 +17,4 @@ next item. One entry per iteration, newest last.
 | 9 | TODO 8.11 (numeric part), 8.9 | `NaN` / infinities of `numeric`, aggregates over them, string literals by numbers; PostgreSQL: 69 failing of 514; TiDB and MySQL run again (2095 / 128, 1211 / 95) | TODO 8.17–8.21 (a bug of the reader of TiDB results, JSON argument errors, names used as numbers, date delimiters, `BIGINT` overflow) |
 | 10 | TODO 8.17, 8.18, 8.20 | the reader of TiDB results and the cases which expect an error; JSON argument errors of the MySQL family; typed `TIMESTAMP` / `TIME` literals | TODO 8.22 (JSON path wildcards), 8.23 (fractional `INTERVAL`) |
 | 11 | TODO 8.19, 8.23 | `DAYNAME (d)` as a number; `INTERVAL` of the MySQL family (`get_interval_value`); TiDB `time`: 38 → 1 failing | all the suites to be run again with the new cases (8.9) |
+| 12 | TODO 8.11 (dates) | infinite dates and timestamps, special date inputs; PostgreSQL: 53 failing of 514 | — |

@@ -258,7 +258,10 @@ Definition pg_time_funs : list (string * (list value -> value)) :=
                                                       | Some r => VTs r 6 | None => Value_Err "stride must be greater than zero" end
                                   | _, _ => Value_T None end
                            | _ => Value_T None end)
-  :: ("isfinite", fun l => match l with v :: nil => if is_null v then Value_bool None else Value_bool (Some true) | _ => Value_bool None end)
+  :: ("isfinite", fun l => match l with
+                           | v :: nil => if is_null v then Value_bool None
+                                         else Value_bool (Some (match temporal_infinite v with Some _ => false | None => true end))
+                           | _ => Value_bool None end)
   :: ("clock_timestamp", fun _ => VTsTz statement_time 6) :: ("statement_timestamp", fun _ => VTsTz statement_time 6)
   :: ("transaction_timestamp", fun _ => VTsTz statement_time 6)
   :: nil.

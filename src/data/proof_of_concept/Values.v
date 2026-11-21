@@ -1572,6 +1572,15 @@ Definition pg_tm2 (minus : bool) (old : list value -> value) (l : list value) : 
 
 (** [EXTRACT(field FROM v)]: a [numeric] (PostgreSQL 14), with 6 decimals for the seconds and the epoch
     of a timestamp; [date_part] is the same number as a [float8] *)
+(** an infinite date or timestamp: its sign *)
+Definition temporal_infinite (v : value) : option bool :=
+  match temporal_parts v with
+  | Some (0%nat, n, _) => if Z.eqb n date_infinity then Some true else if Z.eqb n (- date_infinity) then Some false else None
+  | Some (1%nat, _, _) => None
+  | Some (_, n, _) => if Z.eqb n ts_infinity then Some true else if Z.eqb n (- ts_infinity) then Some false else None
+  | None => None
+  end.
+
 Definition pg_extract (field : string) (v : value) : value :=
   let f := string_map lower_ascii field in
   let num (z : Z) := VDec (Qc_of_Z z) 0 0 in
@@ -1585,6 +1594,13 @@ Definition pg_extract (field : string) (v : value) : value :=
     | "epoch" => micro (interval_usec (mo, d, us) + Z.quot mo 12 * 5 * usec_per_day / 4)
     | _ => Value_Err "unit not supported" end
   | _ =>
+  match temporal_infinite v with
+  | Some pos =>
+    (* the fields which grow with the date are infinite, the others are NULL ([NonFiniteTimestampTzPart]) *)
+    if existsb (String.eqb f) ("epoch" :: "year" :: "decade" :: "century" :: "millennium" :: "julian" :: "isoyear" :: nil)
+    then VF false ((if pos then F_PosInf else F_NegInf), Q2Qc 0)
+    else Value_D None
+  | None =>
   match temporal_parts v with
   | Some (k, n, _) =>
     let '(days, us) := match k with
@@ -1613,11 +1629,15 @@ Definition pg_extract (field : string) (v : value) : value :=
     end
   | None => if is_null v then Value_D None else Value_Err "function does not exist"
   end
+  end
   end%string.
 
 (** [date_trunc(field, v)]: a timestamp *)
 Definition pg_date_trunc (field : string) (v : value) : value :=
   let f := string_map lower_ascii field in
+  match temporal_infinite v with
+  | Some pos => Value_T (Some ((if pos then ts_infinity else - ts_infinity), 62%nat))
+  | None =>
   match to_ts v, temporal_parts v with
   | Some t, Some (k, _, fsp) =>
     let days := ts_days t in
@@ -1644,6 +1664,7 @@ Definition pg_date_trunc (field : string) (v : value) : value :=
     | None => Value_Err "unit not recognized"
     end
   | _, _ => if is_null v then Value_T None else Value_Err "function does not exist"
+  end
   end.
 
 (** [interval] from a text: [n unit [n unit ...]] and an optional [HH:MM:SS] ([interval_in], postgres style) *)
@@ -1677,9 +1698,36 @@ Definition cast_interval (v : value) : value :=
   end.
 
 Definition pg_cast_temporal (kind : nat) (v : value) : value :=
+  let inf (pos : bool) :=
+      match kind with
+      | 0%nat => VDate (if pos then date_infinity else - date_infinity)
+      | 1%nat => Value_Err "invalid input syntax for type time"
+      | _ => Value_T (Some ((if pos then ts_infinity else - ts_infinity), (kind + 60)%nat))
+      end in
   match v with
   | Value_string (Some t) =>
     let t := string_rtrim (string_ltrim t) in
+    let u := string_map lower_ascii t in
+    (* the special inputs of dates and timestamps ("Special Date/Time Inputs"): relative to the time of the
+       statement, at midnight *)
+    let at_day (off : Z) :=
+        let d := ts_days statement_time + off in
+        match kind with
+        | 0%nat => VDate d
+        | 1%nat => Value_Err "invalid input syntax for type time"
+        | _ => Value_T (Some (ts_of d 0, (kind + 60)%nat))
+        end in
+    if String.eqb u "infinity" || String.eqb u "+infinity" then inf true
+    else if String.eqb u "-infinity" then inf false
+    else if String.eqb u "today" then at_day 0
+    else if String.eqb u "tomorrow" then at_day 1
+    else if String.eqb u "yesterday" then at_day (-1)
+    else if String.eqb u "epoch" then (match kind with 0%nat => VDate 0 | 1%nat => Value_Err "invalid input syntax for type time"
+                                                  | _ => Value_T (Some (0, (kind + 60)%nat)) end)
+    else if String.eqb u "now" then (match kind with 0%nat => VDate (ts_days statement_time)
+                                                | 1%nat => Value_Err "invalid input syntax for type time"
+                                                | _ => Value_T (Some (statement_time, (kind + 60)%nat)) end)
+    else
     match kind with
     | 0%nat => match parse_date t with Some d => VDate d | None => 
                match parse_timestamp t with Some x => VDate (ts_days x) | None => Value_Err "invalid input syntax for type date" end end
@@ -1687,13 +1735,14 @@ Definition pg_cast_temporal (kind : nat) (v : value) : value :=
     | _ => match parse_timestamp t with Some u => Value_T (Some (u, (kind + 60)%nat)) | None => Value_Err "invalid input syntax for type timestamp" end
     end
   | Value_T (Some _) =>
+    match temporal_infinite v with Some pos => inf pos | None =>
     match kind, to_ts v, temporal_parts v with
     | 0%nat, Some x, _ => VDate (ts_days x)
     | 1%nat, Some x, _ => VTime (ts_usec x) 6
     | 1%nat, None, Some (1%nat, u, f) => VTime u f
     | _, Some x, _ => Value_T (Some (x, (kind + 60)%nat))
     | _, _, _ => Value_Err "cannot cast"
-    end
+    end end
   | _ => if is_null v then Value_T None else Value_Err "cannot cast"
   end.
 

@@ -92,6 +92,9 @@ test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 
+Run 11 (iteration 12): the infinite dates and timestamps and the special inputs (`today`, ...): **53** fail (the 16
+cases of `date` and `timestamp` pass; the other files are those of run 10).
+
 Run 10 (iteration 9, TODO 8.11): `NaN` and the infinities of `numeric` are represented by the special values of the
 doubles (`'NaN'::numeric`, the casts between `numeric` and the floats, `power`, the arithmetic by a string literal,
 which is read as a `numeric`); the variances and the statistics of two variables are NaN on such inputs: **69** fail

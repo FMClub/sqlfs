@@ -742,10 +742,12 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   3.10, and `eval_rename` states its hypothesis on the order explicitly.
 - **8.11 `NaN` and `Infinity` of `numeric`, infinite dates and timestamps** (iteration 6): PostgreSQL has them, the
   model does not (`Value_D` is finite, a date is a number of days): 75 failing cases of the regression tests.
-  **Status: PARTIAL** (iteration 9). `NaN` and the infinities of `numeric` are the special values of the doubles
+  **Status: DONE** (iterations 9 and 12). `NaN` and the infinities of `numeric` are the special values of the doubles
   (the type of such a value is not distinguished from `double precision`; its text and its arithmetic are those of
-  PostgreSQL); the aggregates over them. PostgreSQL: 69 failing cases of 514. Not done: the infinite dates and
-  timestamps (16 cases).
+  PostgreSQL); the aggregates over them. The infinite dates and timestamps are numbers of days and of microseconds
+  beyond every date (`date_infinity`, `ts_infinity`): their texts, the casts between them, `EXTRACT` (infinite for
+  the fields which grow with the date, NULL for the others), `isfinite`, `date_trunc`; the special inputs `today`,
+  `tomorrow`, `yesterday`, `epoch`, `now`. PostgreSQL: 53 failing cases of 514.
 - **8.12 `to_char` of numbers** (iteration 6): the numeric format models (`9`, `0`, `FM`, `EEEE`, `RN`, `V`, ...): 28
   failing cases.
 - **8.13 BC dates** (iteration 6): the date parser reads years of the common era only: 12 failing cases.
