@@ -19,11 +19,9 @@ for line in sys.stdin:
     if line.startswith('Closed under the global context'):
         section = False
         continue
-    m = re.match(r'^([A-Za-z_][A-Za-z0-9_.\']*) :', line)
+    m = re.match(r'^([A-Za-z_][A-Za-z0-9_.\']*)( :|\s*$)', line)
     if section and m:
         if m.group(1) not in ALLOWED:
             bad.append(m.group(1))
-    elif section and line.strip() and not line.startswith(' '):
-        section = False
 if bad:
     sys.exit('axioms outside the allowed set: ' + ', '.join(sorted(set(bad))))
