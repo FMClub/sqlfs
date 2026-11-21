@@ -263,6 +263,8 @@ Every name of the tables of functions, predicates and aggregates, the files whic
 | `like_escape` | StringFuns.v | core.md |
 | `likelihood` | SQLite.v | conditional.md |
 | `likely` | SQLite.v | conditional.md |
+| `lit_datetime` | MySQL.v | core.md |
+| `lit_time` | MySQL.v | core.md |
 | `ln` | ValueKit.v, Values.v | math.md |
 | `localtime` | MySQL.v | closeout.md |
 | `localtimestamp` | MySQL.v, Values.v | closeout.md |

@@ -44,6 +44,7 @@ documented somewhere in this directory.
 | `cast_string` | text (each dialect's text of each type) | Phase 1.9 |
 | `cast_bool` | boolean (PostgreSQL) | Phase 1.4 |
 | `cast_date`, `cast_time`, `cast_timestamp`, `cast_timestamptz`, `cast_datetime`, `cast_interval` | temporal types | Phase 1.5 |
+| `lit_datetime`, `lit_time` | the typed literals `TIMESTAMP '...'` and `TIME '...'` of the MySQL family: an invalid literal is an error (`ER_WRONG_VALUE`), the fields of a `TIMESTAMP` are separated by any punctuation | MySQL manual, "Date and Time Literals"; TiDB `tests/integrationtest/r/expression/misc.result` |
 | `cast_json`, `cast_jsonb` | JSON | Phase 1.6 |
 | `collate` | `x COLLATE name` | Phase 1.3 |
 

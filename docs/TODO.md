@@ -772,10 +772,25 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
 - **8.17 An error line of TiDB read as an empty result** (iteration 9): `Error 1582 ...` under a query of one column
   is taken for the header of an empty result. Fix the reader, and check the queries which the engine rejects: the
   model must fail on them too.
+  **Status: DONE** (iteration 10). The error lines are recognised first. A query of the suites of the MySQL
+  family which the engine rejects is a case of its own (`mk_case_error`, `error_ok` in `SpecRunner.v`): it passes
+  when the dialect does not accept the query (`accepted_by`) or its evaluation fails (`QR_Error`). TiDB: 53 such
+  cases.
 - **8.18 JSON functions on arguments which are not JSON** (iteration 9): `JSON_MERGE (1, 2)` is an error in MySQL
   and TiDB ("Invalid data type for JSON data"), a value in the model: 31 cases of TiDB.
+  **Status: DONE** (iteration 10). `my_json_doc` reads a JSON value or a string only; an invalid text is an error in
+  `JSON_PRETTY`, `JSON_CONTAINS_PATH`, `JSON_SEARCH`, `JSON_OVERLAPS`; `JSON_QUOTE` takes a string; the mode of
+  `JSON_SEARCH` is checked also when nothing is found; a path with a wildcard cannot be changed. TiDB `json`: 5
+  failing cases (23 before). Open: the wildcards `*`, `**` of the paths are read as names (TODO 8.22).
 - **8.19 A name used as a number** (iteration 9): `DAYNAME (d) + 0` is the number of the day in the MySQL family
   (`Item_func_dayname::val_int`): 9 cases.
 - **8.20 Date literals of the MySQL family with other delimiters** (iteration 9): `TIMESTAMP '2017@01@01 00~00~00'`.
+  **Status: DONE** (iteration 10). `lit_datetime`, `lit_time` (`ValueKit.v`): the typed literals, stricter than the
+  casts (an invalid literal is an error) and with the formats of the manual. TiDB `misc`: no failing case (15
+  before).
 - **8.21 Overflow of `BIGINT` in the MySQL family** (iteration 9): `ABS (-9223372036854775808)`, `ROUND
   (9223372036854775807, -1)` are errors; the integers of the model are unbounded there.
+- **8.22 Wildcards of JSON paths in the MySQL family** (iteration 10): `$.*`, `$[*]`, `$**.a` are read as member
+  names by `parse_path`; `JSON_EXTRACT` and `JSON_CONTAINS_PATH` with them are wrong.
+- **8.23 `INTERVAL` with a fraction in the MySQL family** (iteration 10): `d + INTERVAL 1.2 SECOND`, `INTERVAL '1.9'
+  MINUTE` (the fraction is dropped or rounded by the unit), `INTERVAL true MICROSECOND`: 11 cases of TiDB `time`.

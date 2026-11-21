@@ -1541,7 +1541,10 @@ class Tr:
         if k == 'temporal':
             f = {'date': 'cast_date', 'timestamp': 'cast_timestamp', 'time': 'cast_time'}[e[1]]
             if ENGINE == 'mysql' and e[1] == 'timestamp':
-                f = 'cast_datetime'
+                # a typed literal is stricter than a cast (an error, not NULL) and reads other delimiters
+                f = 'lit_datetime'
+            if ENGINE == 'mysql' and e[1] == 'time':
+                f = 'lit_time'
             return '(fn "%s" [(str %s)])' % (f, coq_str(e[2]))
         if k == 'interval':
             return '(fn "interval" [%s; (str "%s")])' % (self.ex(e[1]), e[2])
@@ -2610,6 +2613,10 @@ def parse_results(res_lines, ncols):
         blank += 1
     if not lines:
         return None
+    # an error: [ERROR 1064 ...] (mysqltest), [Error 1582 (42000): ...] (TiDB); checked first: under a query of one
+    # column such a line would be read as the header of an empty result
+    if lines[0].startswith('ERROR') or re.match(r'^Error \d+', lines[0]):
+        return None
     if len(lines) == 1 and ncols == 1 and not lines[0].startswith(('ERROR', '+')):
         # a header alone is an empty result; followed by one blank line, a row holding ''
         # (several blank lines are ambiguous with the separators, and skipped)
@@ -2961,7 +2968,9 @@ def process(path, out, stats):
                 qt.limit_any = None
                 cq, ncols, ordered, _ = qt.query(q)
                 rows = parse_results(res, ncols)
-                if rows is None:
+                # the engine rejects the query (the suites of the MySQL family, --lenient): the model must too
+                error_case = rows is None and failed and LENIENT and ENGINE == 'mysql'
+                if rows is None and not error_case:
                     stats['no_result'] += 1
                     continue
                 tabs = []
@@ -2970,11 +2979,17 @@ def process(path, out, stats):
                     tabs.append('(%s, [%s], [%s])' % (coq_str(t.name),
                                                       '; '.join(attr(kd, n) for n, kd in t.cols),
                                                       '; '.join('[%s]' % '; '.join(r) for r in t.rows)))
-                exp = '[%s]' % '; '.join('[%s]' % '; '.join(coq_str(c) for c in r) for r in rows)
                 try:
                     sql_txt = coq_str(' '.join(s.split())[:400])
                 except Skip:
                     sql_txt = '""'
+                if error_case:
+                    cases.append('  mk_case_error %s [%s] %s %s' % (
+                        coq_str('%s:%d' % (base, bi)), '; '.join(tabs), cq, sql_txt))
+                    stats['translated'] += 1
+                    stats['error_cases'] = stats.get('error_cases', 0) + 1
+                    continue
+                exp = '[%s]' % '; '.join('[%s]' % '; '.join(coq_str(c) for c in r) for r in rows)
                 if qt.limit_any is not None:
                     # any [n] rows of the result
                     cases.append('  mk_case_limit %s %d [%s] %s %s %s' % (

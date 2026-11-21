@@ -212,6 +212,9 @@ Definition my_rx : rx_env :=
             (negb (Nat.eqb (ms_regex ss) 1))
             "Illegal argument to a regular expression".
 
+(** a path with a wildcard *)
+Definition json_wild (t : string) : bool := match index 0 "*" t with Some _ => true | None => false end.
+
 (** the JSON functions of TODO 2.8: a document, then paths (and values); NULL if one is NULL *)
 Definition my_json_update (create replace : bool) (l : list value) : value :=
   match l with
@@ -223,7 +226,9 @@ Definition my_json_update (create replace : bool) (l : list value) : value :=
                match r with
                | nil => Some acc
                | p :: v :: r' => match text_of p with
-                                 | Some t => match parse_path t with
+                                 (* a path with [*] or [**] is not allowed in the functions which change a document *)
+                                 | Some t => if json_wild t then None else
+                                             match parse_path t with
                                              | Some st => go r' (set_path create replace st acc (my_json_of_value v))
                                              | None => None end
                                  | None => None end
@@ -243,7 +248,8 @@ Definition my_json_paths (f : list step -> json -> option json) (l : list value)
     else match my_json_doc d with
          | Some (Some j) =>
            let r := fold_left (fun acc p => match acc, text_of p with
-                                            | Some a, Some t => match parse_path t with Some st => f st a | None => None end
+                                            | Some a, Some t => if json_wild t then None else
+                                                                match parse_path t with Some st => f st a | None => None end
                                             | _, _ => None end) paths (Some j) in
            match r with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
          | Some None => Value_J None
@@ -603,6 +609,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                               | "ALL"%string => Value_Z (Some (if forallb (fun b => b) bs then 1 else 0))
                                               | _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
                                        | Some None, _ => Value_Z None
+                                       | None, _ => Value_Err "Invalid JSON text in argument 1"
                                        | _, _ => Value_Z None end
                                      | _ => Value_Z None end)
   :: ("json_search", fun l => match l with
@@ -611,21 +618,24 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                 | Some (Some j), Some m, Some t =>
                                   let ps := search_paths (json_size j) t "$" j in
                                   match Temporal.upper_string m, ps with
-                                  | _, nil => Value_J None
+                                  | "ONE"%string, nil | "ALL"%string, nil => Value_J None
                                   | "ONE"%string, p :: _ => VJ 0 (JStr p)
                                   | "ALL"%string, p :: nil => VJ 0 (JStr p)
                                   | "ALL"%string, _ => VJ 0 (JArr (map JStr ps))
                                   | _, _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
+                                | None, _, _ => Value_Err "Invalid JSON text in argument 1"
                                 | _, _, _ => Value_J None end
                               | _ => Value_J None end)
   :: ("json_overlaps", fun l => match l with
                                 | a :: b :: nil => match my_json_doc a, my_json_doc b with
                                                    | Some (Some x), Some (Some y) => Value_Z (Some (if json_overlaps x y then 1 else 0))
+                                                   | None, _ | _, None => Value_Err "Invalid JSON text"
                                                    | _, _ => Value_Z None end
                                 | _ => Value_Z None end)
   :: ("json_pretty", fun l => match l with
                               | d :: nil => match my_json_doc d with
                                             | Some (Some j) => Value_string (Some (pretty 2 (normalize j)))
+                                            | None => Value_Err "Invalid JSON text in argument 1"
                                             | _ => Value_string None end
                               | _ => Value_string None end)
   :: ("->", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
@@ -641,7 +651,13 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
             | _ => None end in
         match pairs l with Some ps => VJ 0 (JObj ps) | None => Value_Err "Incorrect parameter count" end)
   :: ("json_array", fun l => VJ 0 (JArr (map my_json_of_value l)))
-  :: ("json_quote", fun l => match l with v :: nil => match text_of v with Some t => Value_string (Some (text_compact (JStr t))) | None => Value_string None end | _ => Value_string None end)
+  (* the argument of [JSON_QUOTE] is a string ("Incorrect type for argument 1 in function json_quote") *)
+  :: ("json_quote", fun l => match l with
+                             | v :: nil => if is_null v then Value_string None
+                                           else match v with
+                                                | Value_string (Some t) | Value_C (Some (t, _)) => Value_string (Some (text_compact (JStr t)))
+                                                | _ => Value_Err "Incorrect type for argument 1 in function json_quote" end
+                             | _ => Value_string None end)
   :: ("json_valid", fun l => match l with 
                              | v :: nil => if is_null v then Value_Z None 
                                            else match v with Value_J _ => Value_Z (Some 1) | _ => 
@@ -831,6 +847,8 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("cast_date", fun l => match l with v :: nil => my_cast_temporal 0 v | _ => Value_T None end)
   :: ("cast_time", fun l => match l with v :: nil => my_cast_temporal 1 v | _ => Value_T None end)
   :: ("cast_datetime", fun l => match l with v :: nil => my_cast_temporal 2 v | _ => Value_T None end)
+  :: ("lit_datetime", fun l => match l with v :: nil => my_lit_datetime v | _ => Value_T None end)
+  :: ("lit_time", fun l => match l with v :: nil => my_lit_time v | _ => Value_T None end)
   :: ("cast_timestamp", fun l => match l with v :: nil => my_cast_temporal 2 v | _ => Value_T None end)
   (* [s COLLATE c]: an unknown collation is an error ([ER_UNKNOWN_COLLATION]) *)
   :: ("collate", fun l => match l with
