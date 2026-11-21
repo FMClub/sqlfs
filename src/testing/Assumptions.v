@@ -52,3 +52,4 @@ Print Assumptions SqlFull.eval_select.
 Print Assumptions SqlSorts.eval_sorts.
 Print Assumptions SqlRelateSelect.sql_full_agree2.
 Print Assumptions SqlRelateAlg.sql_full_alg.
+Print Assumptions SqlRelateSelect.select_agree_grp.
