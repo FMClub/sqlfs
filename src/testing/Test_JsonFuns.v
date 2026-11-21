@@ -250,3 +250,26 @@ Proof. check. Qed.
 Example arr_122 : holds PostgreSQL (pred "<all" [int 3; arr [int 1; int 2; int 3]]) = false.
 Proof. check. Qed.
 
+
+(** the documents of the JSON functions of MySQL are JSON values or strings: a number is an error, an invalid text
+    too; [JSON_QUOTE] takes a string; a path with a wildcard cannot be changed (TiDB [expression/json]; TODO 8.18) *)
+Definition my_fails (e : sexpr) : bool :=
+  match eval_query_result ORN (dialect_of MySQL) (_basesort _ init_db) (_instance _ init_db)
+                          (to_dialect MySQL (select_where [as_ e c0] [] c_true)) with
+  | QR_Error _ => true
+  | _ => false
+  end.
+Example jf_err_1 : my_fails (fn "json_merge_preserve" [int 1; int 2]) = true.
+Proof. check. Qed.
+Example jf_err_2 : my_fails (fn "json_contains_path" [int 1; str "one"; str "$.a"]) = true.
+Proof. check. Qed.
+Example jf_err_3 : my_fails (fn "json_quote" [int 123]) = true.
+Proof. check. Qed.
+Example jf_err_4 : my_fails (fn "json_pretty" [str "[1,2,3]}"]) = true.
+Proof. check. Qed.
+Example jf_err_5 : my_fails (fn "json_search" [str "{}"; str "on"; str "$.a"]) = true.
+Proof. check. Qed.
+Example jf_err_6 : my_fails (fn "json_remove" [str "{}"; str "$.*"]) = true.
+Proof. check. Qed.
+Example jf_ok_1 : my_fails (fn "json_merge_preserve" [str "1"; str "2"]) = false.
+Proof. check. Qed.

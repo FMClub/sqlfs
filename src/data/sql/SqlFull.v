@@ -196,7 +196,20 @@ Inductive feature : Type :=
   (** [NTH_VALUE (...) FROM LAST] *)
   | F_From_Last
   (** an aggregate or a [GROUP BY] in the recursive term of a recursive [WITH]: no engine has it *)
-  | F_Rec_Aggregate.
+  | F_Rec_Aggregate
+  (** an aggregate in a grouping expression ([GROUP BY sum (a)]): no engine has it *)
+  | F_Group_Aggregate
+  (** [SELECT DISTINCT ... ORDER BY e] where [e] is not one of the selected expressions (an error of PostgreSQL,
+      of Oracle, and of the MySQL family with [ONLY_FULL_GROUP_BY]; SQLite takes the value of a row) *)
+  | F_Order_Not_Selected
+  (** a window frame whose start is after its end by its form ([BETWEEN 1 FOLLOWING AND CURRENT ROW], [BETWEEN
+      CURRENT ROW AND 1 PRECEDING], a start [UNBOUNDED FOLLOWING], an end [UNBOUNDED PRECEDING]): no engine has it *)
+  | F_Frame_Bounds
+  (** [NTILE (0)]: no engine has it *)
+  | F_Ntile_Zero
+  (** [LAG] or [LEAD] over a window without [ORDER BY] (an error of MariaDB: "No order list in window
+      specification") *)
+  | F_Shift_No_Order.
 
 Record dialect : Type :=
   mk_dialect
@@ -593,10 +606,46 @@ Definition nulls_features (o : sorder) : list use :=
   | O_By _ _ _ => (U_Feature F_Nulls_Order) :: nil
   end.
 
+(** the bounds of a frame whose start is after its end, by their form *)
+Definition bounds_illegal (lo hi : frame_bound) : bool :=
+  match lo, hi with
+  | Unbounded_Following, _ | _, Unbounded_Preceding => true
+  | (Following _ | Following_Q _), (Current_Row | Preceding _ | Preceding_Q _) => true
+  | Current_Row, (Preceding _ | Preceding_Q _) => true
+  | _, _ => false
+  end.
+
 Fixpoint frame_bound_is_groups (f : frame) : list use :=
   match f with
-  | Frame_Groups _ _ => (U_Feature F_Frame_Groups) :: nil
+  | Frame_Groups lo hi => (U_Feature F_Frame_Groups) :: (if bounds_illegal lo hi then (U_Feature F_Frame_Bounds) :: nil else nil)
+  | Frame_Rows lo hi | Frame_Range lo hi => if bounds_illegal lo hi then (U_Feature F_Frame_Bounds) :: nil else nil
   | Frame_Excl f' _ => (U_Feature F_Frame_Exclusion) :: frame_bound_is_groups f'
+  end.
+
+(** what a window function uses by its form: [ordered] tells whether its window has an [ORDER BY] *)
+Fixpoint wfun_static (f : swfun) (ordered : bool) : list use :=
+  match f with
+  | W_Ntile 0%nat => U_Feature F_Ntile_Zero :: nil
+  | W_Lag _ _ _ | W_Lead _ _ _ => if ordered then nil else U_Feature F_Shift_No_Order :: nil
+  | W_Opts f' _ _ => wfun_static f' ordered
+  | _ => nil
+  end.
+
+(** the keys of an [ORDER BY] over a [SELECT DISTINCT] block which are not selected: a key is selected when it is
+    the name of an output column or one of the selected expressions *)
+Definition order_not_selected (q : squery) (lo : list sorder) : list use :=
+  match q with
+  | SQ_Select (Select Set_Distinct s _ _ _ _) =>
+    let selected (e : sexpr) :=
+        match s with
+        | S_Star => match e with E_Col _ => true | _ => false end
+        | S_List l =>
+          existsb (fun it => match it with
+                             | S_As e' a => sexpr_eqb e e' || match e with E_Col b => Oset.eq_bool (OAtt T) a b | _ => false end
+                             end) l
+        end in
+    if forallb (fun o => match o with O_By e _ _ => selected e end) lo then nil
+    else U_Feature F_Order_Not_Selected :: nil
   | _ => nil
   end.
 
@@ -646,12 +695,12 @@ with squery_uses (q : squery) {struct q} : list use :=
   | SQ_Select sp => sspec_uses sp
   | SQ_Order q lo _ _ => 
     squery_uses q ++ flat_map nulls_features lo ++ 
-    flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo
+    flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo ++ order_not_selected q lo
   | SQ_Fetch q lo _ ties percent _ => 
     squery_uses q ++ flat_map nulls_features lo ++ 
     flat_map (fun o => match o with O_By e _ _ => sexpr_uses e end) lo ++
     (if ties then (U_Feature F_Fetch_Ties) :: nil else nil) ++
-    (if percent then (U_Feature F_Fetch_Percent) :: nil else nil)
+    (if percent then (U_Feature F_Fetch_Percent) :: nil else nil) ++ order_not_selected q lo
   | SQ_Window q lw => 
     (U_Feature F_Window) :: squery_uses q ++
     flat_map (fun w => 
@@ -671,7 +720,8 @@ with squery_uses (q : squery) {struct q} : list use :=
                        (if ign then (U_Feature F_Null_Treatment) :: nil else nil) ++
                        (if last then (U_Feature F_From_Last) :: nil else nil) ++ fuses f'
                      | _ => nil
-                     end) f
+                     end) f ++
+                  wfun_static f (match lo with nil => false | _ => true end)
                 end) lw
   | SQ_With _ q1 q2 => (U_Feature F_With) :: squery_uses q1 ++ squery_uses q2
   | SQ_WithRec _ _ q1 q2 q3 =>
@@ -699,7 +749,8 @@ with sspec_uses (sp : sspec) {struct sp} : list use :=
                        match ss with nil => nil | l :: r => flat_map sexpr_uses l ++ go r end) ss
      end) ++ 
     scond_uses h ++
-    (if block_has_bare_column s g h then (U_Feature F_Bare_Column) :: nil else nil)
+    (if block_has_bare_column s g h then (U_Feature F_Bare_Column) :: nil else nil) ++
+    (if existsb has_agg_syn (group_exprs g) then (U_Feature F_Group_Aggregate) :: nil else nil)
   end
 
 with sfrom_uses (f : sfrom) {struct f} : list use :=

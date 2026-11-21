@@ -550,13 +550,25 @@ Definition my_ts_of (v : value) : option (Z * bool) :=
 
 (** [DATE_ADD(d, INTERVAL n unit)]: a [DATE] when [d] is a date and the unit is a day or longer, a
     [DATETIME] otherwise; a date out of [0001-01-01 .. 9999-12-31] is NULL *)
+(** the integer which a string starts with ([val_int] of a string: the rest is ignored, with a warning) *)
+Definition my_int_prefix (t : string) : Z :=
+  let t := string_ltrim t in
+  let '(neg, t) := match t with String "-" r => (true, r) | String "+" r => (false, r) | _ => (false, t) end in
+  let fix take (l : list ascii) : list ascii :=
+      match l with c :: r => if match digit c with Some _ => true | None => false end then c :: take r else nil | nil => nil end in
+  let z := match digits_of (string_of_list_ascii (take (list_ascii_of_string t))) with Some z => z | None => 0%Z end in
+  if neg then (- z)%Z else z.
+
 Definition my_date_add (sign : Z) (v iv : value) : value :=
   match my_ts_of v, iv with
   | Some (t, has_time), Value_V (Some (mo, d, us)) =>
     let r := ts_plus_interval t (sign * mo, sign * d, sign * us) in
     let '(y, _, _) := civil_from_days (ts_days r) in
     if negb ((1 <=? y) && (y <=? 9999))%Z then Value_T None
-    else if has_time || negb (Z.eqb us 0) then VTs r (match temporal_parts v with Some (_, _, f) => f | None => 0%nat end)
+    (* an interval with a fraction of a second gives 6 fractional digits *)
+    else if has_time || negb (Z.eqb us 0)
+         then VTs r (if negb (Z.eqb (us mod 1000000) 0) then 6%nat
+                     else match temporal_parts v with Some (_, _, f) => f | None => 0%nat end)
     else VDate (ts_days r)
   | _, _ => Value_T None
   end.
@@ -606,6 +618,94 @@ Definition my_cast_temporal (kind : nat) (v : value) : value :=
          | _, _, _ => Value_T None end
   end.
 
+(** The typed literals [TIMESTAMP '...'] and [TIME '...'] of the MySQL family ("Date and Time Literals"): a
+    [TIMESTAMP] literal has a date and a time, whose fields are runs of digits separated by any punctuation
+    (['2017@01@01 00~00~00']), and a fractional part after a dot; a literal which is not one is an error
+    ("Incorrect datetime value", [ER_WRONG_VALUE]), where the cast gives NULL. *)
+Definition is_dig (c : ascii) : bool := match digit c with Some _ => true | None => false end.
+
+Fixpoint digit_runs (l : list ascii) (cur : list ascii) : list string :=
+  match l with
+  | nil => match cur with nil => nil | _ => (string_of_list_ascii (rev cur) :: nil) end
+  | c :: r => if is_dig c then digit_runs r (c :: cur)
+              else match cur with nil => digit_runs r nil | _ => string_of_list_ascii (rev cur) :: digit_runs r nil end
+  end.
+
+Definition my_lit_datetime (v : value) : value :=
+  let bad := Value_Err "Incorrect datetime value" in
+  match v with
+  | Value_string (Some t) =>
+    let t := string_rtrim (string_ltrim t) in
+    match index 0 " " t with
+    | Some i =>
+      let d := substring 0 i t in
+      let tm := string_ltrim (substring (S i) (String.length t - S i) t) in
+      let (main, frac) := match index 0 "." tm with
+                          | Some j => (substring 0 j tm, substring (S j) (String.length tm - S j) tm)
+                          | None => (tm, EmptyString) end in
+      let num (x : string) := match digits_of x with Some z => z | None => 0%Z end in
+      match digit_runs (list_ascii_of_string d) nil, digit_runs (list_ascii_of_string main) nil with
+      | y :: m :: dd :: nil, h :: mi :: rest =>
+        let sec := match rest with x :: nil => Some x | nil => Some "0"%string | _ => None end in
+        match sec with
+        | Some x =>
+          let canon := (pad 4 (num y) ++ "-" ++ pad 2 (num m) ++ "-" ++ pad 2 (num dd) ++ " " ++
+                        pad 2 (num h) ++ ":" ++ pad 2 (num mi) ++ ":" ++ pad 2 (num x) ++
+                        (match frac with EmptyString => EmptyString | _ => "." ++ frac end))%string in
+          match parse_timestamp canon with
+          | Some u => if forallb is_dig (list_ascii_of_string frac) then VTs u (Nat.min 6 (String.length frac)) else bad
+          | None => bad
+          end
+        | None => bad
+        end
+      | _, _ => bad
+      end
+    | None => bad
+    end
+  | _ => if is_null v then Value_T None else bad
+  end.
+
+(** [TIME '[-][D ]hh:mm[:ss][.ffffff]'], ['D hh'], and without delimiters ['hhmmss'], ['mmss'], ['ss'] (at most 6
+    digits; a longer run of digits is a date and time, which is not a [TIME] literal); the fraction is rounded to 6
+    digits. *)
+Definition my_lit_time (v : value) : value :=
+  let bad := Value_Err "Incorrect time value" in
+  match v with
+  | Value_string (Some t0) =>
+    let t := string_rtrim (string_ltrim t0) in
+    let '(neg, t) := match t with String "-" r => (true, r) | _ => (false, t) end in
+    let '(main, frac) := match index 0 "." t with
+                         | Some j => (substring 0 j t, substring (S j) (String.length t - S j) t)
+                         | None => (t, EmptyString) end in
+    let '(days, hms) := match index 0 " " main with
+                        | Some i => (Some (substring 0 i main), string_ltrim (substring (S i) (String.length main - S i) main))
+                        | None => (None, main) end in
+    let d := match days with Some x => digits_of x | None => Some 0%Z end in
+    let parts := match map digits_of (split_at ":" hms) with
+                 | Some n :: nil =>
+                   match days with
+                   | Some _ => Some (n, 0, 0)%Z
+                   | None => if Nat.leb (String.length hms) 6 then Some (n / 10000, (n / 100) mod 100, n mod 100)%Z else None
+                   end
+                 | Some h :: Some m :: nil => Some (h, m, 0%Z)
+                 | Some h :: Some m :: Some x :: nil => Some (h, m, x)
+                 | _ => None
+                 end in
+    let fr := list_ascii_of_string frac in
+    match d, parts with
+    | Some dz, Some (h, m, x) =>
+      if (m <? 60)%Z && (x <? 60)%Z && forallb is_dig fr then
+        let six := string_of_list_ascii (firstn 6 (fr ++ repeat "0"%char 6)) in
+        let up := match nth_error fr 6 with Some c => match digit c with Some z => (5 <=? z)%Z | None => false end | None => false end in
+        let us := (((dz * 24 + h) * 3600 + m * 60 + x) * 1000000 +
+                   (match digits_of six with Some z => z | None => 0 end) + (if up then 1 else 0))%Z in
+        VTime (if neg then - us else us)%Z (Nat.min 6 (List.length fr))
+      else bad
+    | _, _ => bad
+    end
+  | _ => if is_null v then Value_T None else bad
+  end.
+
 (** * JSON in the MySQL family ([sql/item_jsonfunc.cc], [sql-common/json_dom.cc])
 
     A value becomes a JSON value as a number, a string, or [null]; a string argument which a function reads
@@ -625,9 +725,13 @@ Definition my_json_doc (v : value) : option (option json) :=
   match v with
   | Value_J _ => Some (json_of_J v)
   | _ => if is_null v then Some None 
-         else match text_of v with
-              | Some t => match parse_json t with Some j => Some (Some j) | None => None end
-              | None => Some None end
+         else match v with
+              (* only a string can be the text of a document: a number is an error ("Invalid data type for JSON
+                 data in argument 1", [ER_INVALID_TYPE_FOR_JSON]) *)
+              | Value_string (Some t) | Value_C (Some (t, _)) =>
+                match parse_json t with Some j => Some (Some j) | None => None end
+              | _ => None
+              end
   end.
 
 Definition my_json_extract (doc p : value) : value :=
@@ -759,6 +863,17 @@ Definition dec_max (a b : option nat) : option nat :=
   match a, b with Some x, Some y => Some (Nat.max x y) | _, _ => None end.
 Definition dec_sum (a b : option nat) : option nat :=
   match a, b with Some x, Some y => Some (x + y)%nat | _, _ => None end.
+
+(** the result [r] of a function of the integer [v] ([ABS], [ROUND] to tens): out of the range of [BIGINT], or of
+    [BIGINT UNSIGNED] for an unsigned argument, it is an error ([ER_DATA_OUT_OF_RANGE]) *)
+Definition my_int_range (v r : value) : value :=
+  match v, r with
+  | Value_I (Some (_, 1%nat)), (Value_Z (Some z) | Value_I (Some (z, _))) =>
+    if int_range_ok 1 z then r else Value_Err "BIGINT UNSIGNED value is out of range"
+  | (Value_Z (Some _) | Value_I (Some _)), (Value_Z (Some z) | Value_I (Some (z, _))) =>
+    if int_range_ok 64 z then r else Value_Err "BIGINT value is out of range"
+  | _, _ => r
+  end.
 
 (** [fi] is the operation on integers, if the result of two integers is an integer *)
 Definition my_arith2 (fi : option (Z -> Z -> Z)) (fd : Qc * nat * nat -> Qc * nat * nat -> value)

@@ -34,6 +34,7 @@ make install
 | `eval_congruence`, `dialect_refinement` | `SqlCongruence.v`, `dialects/Refinement.v` | two dialects which agree on what a query uses give it the same rows |
 | `eval_rename`, `eval_rename_names` | `SqlRename.v`, `dialects/Renaming.v` | the evaluation does not depend on the names of the attributes |
 | `rollup_as_grouping_sets`, frame and set-operation laws | `SqlGroupFacts.v`, `SqlFullFacts.v` | laws of the constructs |
+| `civil_round_trip`, `days_round_trip` | `proof_of_concept/TemporalFacts.v` | the conversions between days and dates of the Gregorian calendar are inverse of each other |
 | TLP, NoREC, containment | `Oracles.v`, `SqlFullFacts.v` | the oracles of the testing tools hold in the semantics |
 
 `src/testing/Assumptions.v` prints the assumptions of these results (no axiom); `AssumptionsExt.v` those of the
@@ -73,6 +74,7 @@ make                                              # the library and the examples
 python3 tools/check_hygiene.py                    # no Admitted, no Axiom, the core imports no dialect
 python3 tools/functions/check_provenance.py       # every function of the tables has a source
 python3 tools/spec/sqlprint.py --dialect MySQL tools/spec/roundtrip_samples.sql
+python3 tools/spec/test_sql2coq.py                # the translator of the conformance harness
 ```
 
 

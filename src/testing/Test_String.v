@@ -266,3 +266,8 @@ Example my_like_esc_null : holds MySQL (pred "like_escape" [s "David_"; s "David
 Proof. check. Qed.
 Example my_like_esc_null_hit : holds MySQL (pred "like_escape" [s "David_"; s "David\_"; cst NullZ]) = true.
 Proof. check. Qed.
+
+(** [TRIM ([LEADING | BOTH | TRAILING] FROM s)] without the string to remove: the spaces (TODO 8.27) *)
+Example str_trim_from : text MySQL (fn "trim_leading" [s " a "]) = "a " /\ text MySQL (fn "trim_both" [s " a "]) = "a"
+                        /\ text MySQL (fn "trim_trailing" [s " a "]) = " a".
+Proof. repeat split; check. Qed.

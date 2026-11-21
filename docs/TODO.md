@@ -572,7 +572,7 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
   - `src/data/sql/SqlRelate.v`: `to_full` translates the queries of `Sql.v` made of tables and its set operations (the bag operations `UNION ALL`, `INTERSECT ALL`, `EXCEPT ALL` and the maximum of multiplicities) to `SqlFull.v`, and `sql_full_agree` proves that the two semantics give the same bag (for a dialect which does not convert the columns of set operations, whose canonical form identifies only equal tuples, on stored rows without error values, and operands of the same sort, as `Sql.v` requires); the multiplicity lemmas (`tuple_count_filter_occ`, `eval_set_op_all_count`: sum, minimum, truncated difference and maximum) are the bag laws of `SqlFull.v`'s `ALL` operations.
   - The deviations A4 (an aggregate without `GROUP BY` over an empty input) and A6 (attributes of the same name in a `FROM` list) are documented in `docs/SQL_COVERAGE.md` (A4 is correct in `SqlFull.v`; A6 is the design of named tuples).
   - Selections, products and renamings (`src/data/sql/SqlRelateSelect.v`): the blocks `SELECT s FROM q1 [AS r1 (b...)], ..., qn WHERE f` of `Sql.v` without grouping, whose `SELECT` list and `WHERE` formula are built from function terms and predicates, translate (`ft_to`, `f_to`, `s_to`); `select_agree_g`: the two semantics give the same bag when the `FROM` items do (`item_star`, `item_ren`: a renamed item, for tuples whose missing columns have the default value of their type, `Hdot`) (the product of `SqlFull.v`, a left fold of `cross_product`, lists the combinations of the right nested product of `Sql.v` up to the equality of tuples: `prod_F2`, through the associativity of `join_tuple`), and `sql_full_agree2` for every query made of tables, set operations and such selections (`to_full2`), for a dialect whose functions, predicates and literals are those of the instance, which converts nothing before a comparison, has no error value, and whose NULLs have no type (`SqlFull.v` stores a NULL with the type of its column, `Sql.v` keeps the value: a documented deviation); the agreement of terms (`ft_agree`), formulas (`f_agree`) and rows (`row_agree`), and the bags through permutations up to the equality of tuples.
-  - Grouping and aggregates (`select_agree_grp`): the blocks with `GROUP BY t1, ..., tk` (`k > 0`) and a `HAVING` formula of predicates over such terms (`hf_to`, `hf_agree`) whose items outside the aggregates are built on the grouping terms and whose aggregated terms read the columns of the `FROM` clause (`gcheck`), for a dialect whose aggregates are those of the instance and do not depend on the order of their input, and whose canonical form of a value is injective; the groups of `Sql.v` (`partition`) are those of `SqlFull.v` (`group_on_list`) in the same order, each reversed (`partition_groups`); `to_full2` and `sql_full_agree2` include them.
+  - Grouping and aggregates (`select_agree_grp`): the blocks with `GROUP BY t1, ..., tk` (`k > 0`) and a `HAVING` formula of predicates over such terms (`hf_to`, `hf_agree`) whose items outside the aggregates are built on the grouping terms and whose aggregated terms read the columns of the `FROM` clause (`gcheck`), for a dialect whose aggregates are those of the instance, for the aggregates which do not depend on the order of their input (`perm_ag`, which `gcheck` requires: 8.29), and whose canonical form of a value is injective; the groups of `Sql.v` (`partition`) are those of `SqlFull.v` (`group_on_list`) in the same order, each reversed (`partition_groups`); `to_full2` and `sql_full_agree2` include them.
   - The algebra (`src/data/sql/SqlRelateAlg.v`): `sql_full_alg`, for the queries of the common fragment, the evaluation of the translation to `SqlFull.v` is the evaluation of the translation to the relational algebra (`sql_query_to_alg`), by `sql_full_agree2` and `sql_query_to_alg_is_sound`.
   - Subqueries in formulas (correlated): `EXISTS`, `IN` and the quantified comparisons (`f_to3`, `f_agree3`; `IN` by position, `in_rows`, for a dialect whose comparison `eq3` is UNKNOWN on NULLs and equality otherwise, `in_ok`), in every block, grouped or not, through related environments of one row per block (`Renv`: the slices of `Sql.v` and of `SqlFull.v`, `lookup_R`, `ft_agree_R`, `select_agree_R`, `select_agree_grpR`); `to_full3` and `sql_full_agree3` for every query made of tables, set operations (of operands of the same sort), selections and grouped blocks with such subqueries, and renamings of columns of the query (`ren_ok`); `sql_full_alg3` for the algebra.
   - The two deviations of `Sql.v` which this needed are fixed: `IN` compared the columns by name (A7: now by position, in the order of the `SELECT` lists, `sql_cols`), and an aggregate in a subquery was given to the outermost block covering it (A8: now the innermost block binding one of its columns, as in SQL and `SqlFull.v`).
@@ -733,7 +733,8 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   - PostgreSQL (iteration 6): 238 failing cases of 514 became 133 (`docs/CONFORMANCE.md`, run 8). Remaining classes:
     `NaN` / `Infinity` of `numeric`, infinite dates, `to_char` with numeric formats (TODO 8.11, 8.12); after iteration 7
     (BC dates, `EXTRACT (JULIAN ...)`) 120 fail.
-  - TiDB, MySQL, MariaDB: not classified again yet.
+  - MariaDB (iteration 8): 396 translated, 7 fail. TiDB (iteration 9): 2095 translated, 128 fail. MySQL (iteration
+    9): 1211 translated, 95 fail. Their classes are items 8.17 to 8.21.
 - **8.10 Storage order and names** (iteration 4, I11): the order in which a stored table is read depends on the
   names of its columns. Decide between the options of I11 and do it.
   **Status: DONE** (iteration 5), by decision: option (a) of I11. The order of an unordered table is
@@ -741,6 +742,12 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   3.10, and `eval_rename` states its hypothesis on the order explicitly.
 - **8.11 `NaN` and `Infinity` of `numeric`, infinite dates and timestamps** (iteration 6): PostgreSQL has them, the
   model does not (`Value_D` is finite, a date is a number of days): 75 failing cases of the regression tests.
+  **Status: DONE** (iterations 9 and 12). `NaN` and the infinities of `numeric` are the special values of the doubles
+  (the type of such a value is not distinguished from `double precision`; its text and its arithmetic are those of
+  PostgreSQL); the aggregates over them. The infinite dates and timestamps are numbers of days and of microseconds
+  beyond every date (`date_infinity`, `ts_infinity`): their texts, the casts between them, `EXTRACT` (infinite for
+  the fields which grow with the date, NULL for the others), `isfinite`, `date_trunc`; the special inputs `today`,
+  `tomorrow`, `yesterday`, `epoch`, `now`. PostgreSQL: 53 failing cases of 514.
 - **8.12 `to_char` of numbers** (iteration 6): the numeric format models (`9`, `0`, `FM`, `EEEE`, `RN`, `V`, ...): 28
   failing cases.
 - **8.13 BC dates** (iteration 6): the date parser reads years of the common era only: 12 failing cases.
@@ -752,5 +759,92 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   before the year 0, a round trip over 2000 days.
 - **8.14 `INSERT IGNORE` of a NULL into a `NOT NULL` string column** (iteration 6): the OceanBase suite expects the
   implicit default `''`; the replay gives NULL (`insert_ignore:117`).
+  **Status: DONE** (iteration 8). The translator records the `NOT NULL` columns: a column which an `INSERT IGNORE`
+  does not give takes the implicit default of its type (`''`, 0); without `IGNORE` the statement is an error of
+  the strict mode and the table is not read. Found on the way, and fixed: the `AUTO_INCREMENT` columns were
+  recorded by table name and never forgotten, so that a later table of the same name, in another script, was
+  skipped: 19 more cases are translated (775), all pass.
 - **8.15 Speed of the text of a long decimal** (iteration 6): `1.234 ^ 5678` (519 digits) takes 70 seconds to
   check, most of it in the conversion to text.
+- **8.16 The calendar conversions are not proved** (iteration 8; the bug of 8.13 was in them): prove that
+  `civil_from_days` and `days_from_civil` are inverse of each other.
+  **Status: DONE** (iteration 8). `src/data/proof_of_concept/TemporalFacts.v`: `civil_round_trip` (every day),
+  `days_round_trip` (every valid date), `civil_valid`; by the periodicity of both functions (400 years are 146097
+  days) and a check of one period by computation.
+- **8.17 An error line of TiDB read as an empty result** (iteration 9): `Error 1582 ...` under a query of one column
+  is taken for the header of an empty result. Fix the reader, and check the queries which the engine rejects: the
+  model must fail on them too.
+  **Status: DONE** (iteration 10). The error lines are recognised first. A query of the suites of the MySQL
+  family which the engine rejects is a case of its own (`mk_case_error`, `error_ok` in `SpecRunner.v`): it passes
+  when the dialect does not accept the query (`accepted_by`) or its evaluation fails (`QR_Error`). TiDB: 53 such
+  cases.
+- **8.18 JSON functions on arguments which are not JSON** (iteration 9): `JSON_MERGE (1, 2)` is an error in MySQL
+  and TiDB ("Invalid data type for JSON data"), a value in the model: 31 cases of TiDB.
+  **Status: DONE** (iteration 10). `my_json_doc` reads a JSON value or a string only; an invalid text is an error in
+  `JSON_PRETTY`, `JSON_CONTAINS_PATH`, `JSON_SEARCH`, `JSON_OVERLAPS`; `JSON_QUOTE` takes a string; the mode of
+  `JSON_SEARCH` is checked also when nothing is found; a path with a wildcard cannot be changed. TiDB `json`: 5
+  failing cases (23 before). Open: the wildcards `*`, `**` of the paths are read as names (TODO 8.22).
+- **8.19 A name used as a number** (iteration 9): `DAYNAME (d) + 0` is the number of the day in the MySQL family
+  (`Item_func_dayname::val_int`): 9 cases.
+  **Status: DONE** (iteration 11), in the translator: an operand `DAYNAME (d)` of an arithmetic operator, or of a
+  comparison with a number, is `WEEKDAY (d)` (`numctx`). TiDB `time`: the 27 cases pass.
+- **8.20 Date literals of the MySQL family with other delimiters** (iteration 9): `TIMESTAMP '2017@01@01 00~00~00'`.
+  **Status: DONE** (iteration 10). `lit_datetime`, `lit_time` (`ValueKit.v`): the typed literals, stricter than the
+  casts (an invalid literal is an error) and with the formats of the manual. TiDB `misc`: no failing case (15
+  before).
+- **8.21 Overflow of `BIGINT` in the MySQL family** (iteration 9): `ABS (-9223372036854775808)`, `ROUND
+  (9223372036854775807, -1)` are errors; the integers of the model are unbounded there.
+  **Status: DONE** (iteration 15). The sums, differences and products of integers were already checked
+  (`my_arith2`); `ABS` and `ROUND` of an integer are now (`my_int_range`).
+- **8.22 Wildcards of JSON paths in the MySQL family** (iteration 10): `$.*`, `$[*]`, `$**.a` are read as member
+  names by `parse_path`; `JSON_EXTRACT` and `JSON_CONTAINS_PATH` with them are wrong.
+- **8.23 `INTERVAL` with a fraction in the MySQL family** (iteration 10): `d + INTERVAL 1.2 SECOND`, `INTERVAL '1.9'
+  MINUTE` (the fraction is dropped or rounded by the unit), `INTERVAL true MICROSECOND`: 11 cases of TiDB `time`.
+  **Status: DONE** (iteration 11). The `interval` of the MySQL family follows `get_interval_value`; a sum with a
+  fraction of a second has 6 fractional digits. TiDB `time`: 1 failing case (38 before), a datetime written as a
+  number with a fraction.
+- **8.24 The translator of the harness has no test** (iteration 13): four problems were found in it by reading
+  failing cases (8.9, 8.14, 8.17, 8.19).
+  **Status: DONE** (iteration 13). `tools/spec/test_sql2coq.py`: 9 regression tests on small result files, run by
+  the continuous integration.
+- **8.25 Static errors which the cases expecting an error show** (iteration 14): the queries which the engines reject
+  and the model accepts.
+  **Status: PARTIAL** (iterations 14 and 17). Done: an aggregate in a grouping expression (`F_Group_Aggregate`, no dialect
+  has it); a `SELECT DISTINCT` ordered by an expression which is not selected (`F_Order_Not_Selected`:
+  rejected by PostgreSQL, Oracle mode and `ONLY_FULL_GROUP_BY`; accepted by SQLite, MariaDB, OceanBase's MySQL
+  mode); tests in `src/testing/Test_Arity.v`; `docs/DIALECT_TABLES.md` regenerated. Iteration 17: a window frame
+  whose start is after its end by its form (`F_Frame_Bounds`) and `NTILE (0)` (`F_Ntile_Zero`), which no dialect
+  has; `LAG` / `LEAD` over a window without `ORDER BY` (`F_Shift_No_Order`, rejected by MariaDB); a window function
+  in the argument of an aggregate cannot be written in `SqlFull.v`: the translator does not translate it. The
+  cases of MariaDB which expect these errors pass. Open: a window ordered by an alias of the same block, the
+  invalid regular expressions of MySQL (`a**`, `a{37,17}`, references to groups which do not exist), a duplicate
+  name of `WITH` up to the case.
+- **8.26 Result files of the same name** (iteration 14): 39 result files of TiDB have the name of another one in
+  another directory; their cases were written to the same file, so that only the last one was checked.
+  **Status: DONE** (iteration 14). Such files are named after their directory too (`executor_integration`); 12 more
+  files of cases are checked. A test in `tools/spec/test_sql2coq.py`.
+- **8.27 `TRIM ([LEADING | BOTH | TRAILING] FROM s)` without the characters to remove** (iteration 14): an error
+  in the model (TiDB `executor/issues`).
+  **Status: DONE** (iteration 15): the spaces are removed (`f_trim_str`).
+- **8.28 Replay of the scripts** (iteration 14): the failing cases of TiDB which come from statements the
+  translator does not follow (`EXPLAIN ANALYZE` of an `INSERT`, cascading foreign keys, temporary tables shadowing a
+  table, `LAST_INSERT_ID ()`, batch DML): the tables they change must be marked unreliable.
+- **8.29 The hypotheses of the relation between `Sql.v` and `SqlFull.v` could not be met** (iteration 16): two
+  hypotheses of `sql_full_agree`, `sql_full_agree2`, `sql_full_agree3`, `sql_full_alg`, `sql_full_alg3` and
+  `positional_agree` were false for the instance of the project, so that these theorems said nothing about it.
+  `Hu` asked `unify_rows O atts rows = rows` as an equality of lists, but `unify_rows` builds the tuples again:
+  they are equal as tuples, not as terms. `Hperm` asked every aggregate to be independent of the order of its
+  input, which `string_agg` and `group_concat` are not.
+  **Status: DONE** (iteration 16). `Hu` is replaced by `Hun : forall l, unify_column O l = l` (the dialect does not
+  convert the columns of a set operation), from which `unify_rows_eq`, `unify_rows_bag`, `unify_rows_clean`
+  (`SqlRelate.v`) give the rows up to the equality of tuples; the proofs go through bags and through the
+  invariance of the statements under this equality (`Inv_teq` in `SqlPositional.v`). `Hperm` is asked for the
+  aggregates accepted by a predicate `perm_ag`, which `gcheck` requires of the aggregates of a grouped block. The
+  witness: `src/testing/Test_Relate.v` gives a dialect of the instance (`paper`), a database and two queries (a
+  selection with `UNION ALL`, a correlated `EXISTS`) for which every hypothesis holds: `relate_witness`.
+- **8.30 The NULLs of the relation theorems** (iteration 16): `Hnull` (`is_null O v = true -> null_of T a = v` for
+  every attribute `a`) holds on the instance only for a dialect which takes no value for a NULL (`is_null` is
+  false: `paper`), because the NULLs of the instance have a type. The theorems therefore relate the two semantics
+  where `SqlFull.v` does not normalise the NULLs. To relate them for the dialects of the engines, the statement has
+  to be up to the type of the NULLs.
+

@@ -711,12 +711,17 @@ Fixpoint at_to2 (t : aggterm T) : sexpr :=
   | A_fun _ f l => E_Fun f (map at_to2 l)
   end.
 
+(** the aggregates whose value does not depend on the order of their input ([sum], [count], [min], ...; not
+    [string_agg]): the two semantics read the rows of a group in different orders, and agree on these aggregates
+    only *)
+Variable perm_ag : aggregate T -> bool.
+
 (** a term of a grouped block: outside the aggregates, built on the grouping terms; inside, on the columns
-    of the [FROM] clause *)
+    of the [FROM] clause, and the aggregate does not depend on the order of its input *)
 Fixpoint gcheck (S : Fset.set (A T)) (keys : list (funterm T)) (t : aggterm T) : bool :=
   match t with
   | A_Expr _ ft => is_built_upon_ft T keys ft
-  | A_agg _ _ ft => Fset.subset (A T) (variables_ft T ft) S
+  | A_agg _ ag ft => perm_ag ag && Fset.subset (A T) (variables_ft T ft) S
   | A_fun _ _ l => forallb (gcheck S keys) l
   end.
 
@@ -783,7 +788,8 @@ Qed.
 
 
 Hypothesis Hagg : forall ag l, interp_agg O ag l = interp_aggregate T ag l.
-Hypothesis Hperm : forall ag l1 l2, Permutation l1 l2 -> interp_aggregate T ag l1 = interp_aggregate T ag l2.
+Hypothesis Hperm : forall ag, perm_ag ag = true ->
+  forall l1 l2, Permutation l1 l2 -> interp_aggregate T ag l1 = interp_aggregate T ag l2.
 
 Lemma extract_dots : forall l, extract_funterms T (map (fun a => A_Expr T (F_Dot T a)) l ++ nil) = map (F_Dot T) l.
 Proof. intro l; induction l as [ | a l IH]; [reflexivity | simpl; f_equal; exact IH]. Qed.
@@ -859,12 +865,12 @@ assert (I1 : In t1 k) by (apply (proj2 (in_rev k t1)); rewrite Hr; left; reflexi
 fix IH 1; intros [ft | ag ft | f l] H.
 - cbn [interp_aggterm at_to2]; rewrite (itf_slice _ _ _ t0 r ft Hq), (ft_agree_s nil (labels T t1) t1 rest ft (Fset.equal_refl _ _)).
   exact (built_const g t0 t1 (Hk t0 t1 I0 I1) ft H).
-- cbn [at_to2]; simpl in H; rewrite (agg_sql _ _ _ t0 r ag ft Hq).
+- cbn [at_to2]; simpl in H; rewrite andb_true_iff in H; destruct H as [Hpa H]; rewrite (agg_sql _ _ _ t0 r ag ft Hq).
   2: { rewrite Fset.subset_spec in H |- *; intros b Hb; rewrite (Fset.mem_eq_2 _ _ _ (Hl t0 I0)); apply H; exact Hb. }
   rewrite agg_full.
   2: { intros t It; rewrite <- Hr, <- in_rev in It.
        rewrite (Fset.equal_eq_1 _ _ _ _ (Hl t1 I1)), (Fset.equal_eq_2 _ _ _ _ (Hl t It)); apply Fset.equal_refl. }
-  apply Hperm, Permutation_map; rewrite <- Hr.
+  apply (Hperm ag Hpa), Permutation_map; rewrite <- Hr.
   eapply perm_trans; [apply Permutation_sym, permut_eq_Permutation, quick_permut_strong | apply Permutation_rev].
 - cbn [interp_aggterm at_to2]; change (ev nil ((labels T t1, t1 :: rest, nil) :: nil) (E_Fun f (map at_to2 l))) with
     (if is_hidden ((labels T t1, t1 :: rest, nil) :: nil) (E_Fun f (map at_to2 l)) then null O
@@ -1247,7 +1253,7 @@ Section Agree.
 
 Hypothesis Hcanon :
   forall t u, Oeset.eq_bool (OTuple T) (canon_tuple O t) (canon_tuple O u) = Oeset.eq_bool (OTuple T) t u.
-Hypothesis Hu : forall atts rows, unify_rows O atts rows = rows.
+Hypothesis Hun : forall l, unify_column O l = l.
 
 Theorem sql_full_agree2 : forall unknown cn, (forall t1 t2, t1 =t= t2 -> cn t1 = cn t2) ->
   well_sorted_sql_table T basesort instance ->
@@ -1267,7 +1273,7 @@ intros unknown cn Hcn WT; fix IH 1; intros q q' H W; destruct q as [r | o q1 q2 
                     (keep_errors O (eval_set_op O o Set_All (eq0 a) (eq0 b)) (eq0 a ++ eq0 b))
              else nil))
             (eval_sql_query basesort instance unknown cn nil (Sql_Set o q1 q2)) = true).
-  rewrite S', Hu, keep_errors_id.
+  rewrite S', (Febag.equal_eq_1 _ _ _ _ (unify_rows_bag T O Hun _ _)), keep_errors_id.
   set (R := eval_set_op O o Set_All (eq0 a) (eq0 b)).
   rewrite eval_sql_query_unfold, S12; simpl.
   rewrite Febag.nb_occ_equal; intro t.
@@ -1896,13 +1902,13 @@ assert (I1 : In t1 k) by (apply (proj2 (in_rev k t1)); rewrite Hr; left; reflexi
 fix IH 1; intros [ft | ag ft | f l] H.
 - cbn [interp_aggterm at_to2]; rewrite (itf_sliceR E _ _ _ t0 r ft Hq), (ft_agree_sR nil E F (labels T t1) t1 rest R (Fset.equal_refl _ _) ft).
   exact (built_constR E g t0 t1 (Hk t0 t1 I0 I1) ft H).
-- cbn [at_to2]; simpl in H; rewrite (agg_sqlR E _ _ _ t0 r ag ft Hq).
+- cbn [at_to2]; simpl in H; rewrite andb_true_iff in H; destruct H as [Hpa H]; rewrite (agg_sqlR E _ _ _ t0 r ag ft Hq).
   2: { rewrite Fset.subset_spec in H |- *; intros b Hb; rewrite (Fset.mem_eq_2 _ _ _ (Hl t0 I0)); apply H; exact Hb. }
   rewrite (agg_fullR nil E F); [ | exact R | | ].
   2: { rewrite Fset.subset_spec in H |- *; intros b Hb; rewrite (Fset.mem_eq_2 _ _ _ (Hl t1 I1)); apply H; exact Hb. }
   2: { intros t It; rewrite <- Hr, <- in_rev in It.
        rewrite (Fset.equal_eq_1 _ _ _ _ (Hl t1 I1)), (Fset.equal_eq_2 _ _ _ _ (Hl t It)); apply Fset.equal_refl. }
-  apply Hperm, Permutation_map; rewrite <- Hr.
+  apply (Hperm ag Hpa), Permutation_map; rewrite <- Hr.
   eapply perm_trans; [apply Permutation_sym, permut_eq_Permutation, quick_permut_strong | apply Permutation_rev].
 - cbn [interp_aggterm at_to2]; change (ev nil ((labels T t1, t1 :: rest, nil) :: F) (E_Fun f (map at_to2 l))) with
     (if is_hidden ((labels T t1, t1 :: rest, nil) :: F) (E_Fun f (map at_to2 l)) then null O
@@ -2174,7 +2180,7 @@ intros unknown cn Hcn Hin WT; fix IH 1; intros q q' H E F R; destruct q as [r | 
                     (keep_errors O (eval_set_op O o Set_All (eqF F a) (eqF F b)) (eqF F a ++ eqF F b))
              else nil))
             (eval_sql_query basesort instance unknown cn E (Sql_Set o q1 q2)) = true).
-  rewrite S', Hu, keep_errors_id.
+  rewrite S', (Febag.equal_eq_1 _ _ _ _ (unify_rows_bag T O Hun _ _)), keep_errors_id.
   set (RS := eval_set_op O o Set_All (eqF F a) (eqF F b)).
   rewrite eval_sql_query_unfold, S12; simpl.
   rewrite Febag.nb_occ_equal; intro t.

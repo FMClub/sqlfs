@@ -1303,14 +1303,17 @@ Definition float_to_numeric (v : value) : value :=
       let sc := Z.to_nat (Z.max 0 (Z.opp e)) in
       VDec q sc sc
   | Some (F_NegZero, _, _) => VDec (Q2Qc 0) 0 0
-  | Some (F_NaN, _, _) => Value_Err "cannot convert NaN to numeric"
-  | Some _ => Value_Err "cannot convert infinity to numeric"
+  (* [NaN] and the infinities of [numeric] are those of [double precision]: the value is kept *)
+  | Some ((F_NaN | F_PosInf | F_NegInf) as sp, _, _) => VF false (sp, Q2Qc 0)
   | None => Value_D None
   end.
 
 Definition cast_float (w32 : bool) (v : value) : value :=
   match v with
-  | Value_F (Some (x, k)) => if w32 then VF true (round_q binary32 x) else Value_F (Some (x, (2 * Nat.div (Nat.modulo k 10) 2)%nat))
+  | Value_F (Some (x, k)) =>
+    let sp := special_of_tag (Nat.div (Nat.modulo k 10) 2) in
+    if w32 then (match sp with F_Finite => VF true (round_q binary32 x) | _ => VF true (sp, x) end)
+    else Value_F (Some (x, (2 * Nat.div (Nat.modulo k 10) 2)%nat))
   | Value_Z (Some z) => to_float w32 (Qc_of_Z z)
   | Value_Q (Some q) => to_float w32 q
   | Value_D (Some (q, _, _)) => to_float w32 q
@@ -1349,7 +1352,13 @@ Definition cast_Q v :=
     | Some q => 
       let sc := match String.index 0 "." t with Some i => (String.length t - S i)%nat | None => 0%nat end in
       VDec q sc sc
-    | None => Value_Err "invalid input syntax for type numeric"
+    | None =>
+      (* [NaN], [Infinity], [-Infinity] ([numeric_in]): represented by the special values of the doubles *)
+      let u := string_map lower_ascii t in
+      if String.eqb u "nan" then VF false (F_NaN, Q2Qc 0)
+      else if String.eqb u "infinity" || String.eqb u "inf" || String.eqb u "+infinity" || String.eqb u "+inf" then VF false (F_PosInf, Q2Qc 0)
+      else if String.eqb u "-infinity" || String.eqb u "-inf" then VF false (F_NegInf, Q2Qc 0)
+      else Value_Err "invalid input syntax for type numeric"
     end
   | _ => Value_Q None
   end.
@@ -1563,6 +1572,15 @@ Definition pg_tm2 (minus : bool) (old : list value -> value) (l : list value) : 
 
 (** [EXTRACT(field FROM v)]: a [numeric] (PostgreSQL 14), with 6 decimals for the seconds and the epoch
     of a timestamp; [date_part] is the same number as a [float8] *)
+(** an infinite date or timestamp: its sign *)
+Definition temporal_infinite (v : value) : option bool :=
+  match temporal_parts v with
+  | Some (0%nat, n, _) => if Z.eqb n date_infinity then Some true else if Z.eqb n (- date_infinity) then Some false else None
+  | Some (1%nat, _, _) => None
+  | Some (_, n, _) => if Z.eqb n ts_infinity then Some true else if Z.eqb n (- ts_infinity) then Some false else None
+  | None => None
+  end.
+
 Definition pg_extract (field : string) (v : value) : value :=
   let f := string_map lower_ascii field in
   let num (z : Z) := VDec (Qc_of_Z z) 0 0 in
@@ -1576,6 +1594,13 @@ Definition pg_extract (field : string) (v : value) : value :=
     | "epoch" => micro (interval_usec (mo, d, us) + Z.quot mo 12 * 5 * usec_per_day / 4)
     | _ => Value_Err "unit not supported" end
   | _ =>
+  match temporal_infinite v with
+  | Some pos =>
+    (* the fields which grow with the date are infinite, the others are NULL ([NonFiniteTimestampTzPart]) *)
+    if existsb (String.eqb f) ("epoch" :: "year" :: "decade" :: "century" :: "millennium" :: "julian" :: "isoyear" :: nil)
+    then VF false ((if pos then F_PosInf else F_NegInf), Q2Qc 0)
+    else Value_D None
+  | None =>
   match temporal_parts v with
   | Some (k, n, _) =>
     let '(days, us) := match k with
@@ -1604,11 +1629,15 @@ Definition pg_extract (field : string) (v : value) : value :=
     end
   | None => if is_null v then Value_D None else Value_Err "function does not exist"
   end
+  end
   end%string.
 
 (** [date_trunc(field, v)]: a timestamp *)
 Definition pg_date_trunc (field : string) (v : value) : value :=
   let f := string_map lower_ascii field in
+  match temporal_infinite v with
+  | Some pos => Value_T (Some ((if pos then ts_infinity else - ts_infinity), 62%nat))
+  | None =>
   match to_ts v, temporal_parts v with
   | Some t, Some (k, _, fsp) =>
     let days := ts_days t in
@@ -1635,6 +1664,7 @@ Definition pg_date_trunc (field : string) (v : value) : value :=
     | None => Value_Err "unit not recognized"
     end
   | _, _ => if is_null v then Value_T None else Value_Err "function does not exist"
+  end
   end.
 
 (** [interval] from a text: [n unit [n unit ...]] and an optional [HH:MM:SS] ([interval_in], postgres style) *)
@@ -1668,9 +1698,36 @@ Definition cast_interval (v : value) : value :=
   end.
 
 Definition pg_cast_temporal (kind : nat) (v : value) : value :=
+  let inf (pos : bool) :=
+      match kind with
+      | 0%nat => VDate (if pos then date_infinity else - date_infinity)
+      | 1%nat => Value_Err "invalid input syntax for type time"
+      | _ => Value_T (Some ((if pos then ts_infinity else - ts_infinity), (kind + 60)%nat))
+      end in
   match v with
   | Value_string (Some t) =>
     let t := string_rtrim (string_ltrim t) in
+    let u := string_map lower_ascii t in
+    (* the special inputs of dates and timestamps ("Special Date/Time Inputs"): relative to the time of the
+       statement, at midnight *)
+    let at_day (off : Z) :=
+        let d := ts_days statement_time + off in
+        match kind with
+        | 0%nat => VDate d
+        | 1%nat => Value_Err "invalid input syntax for type time"
+        | _ => Value_T (Some (ts_of d 0, (kind + 60)%nat))
+        end in
+    if String.eqb u "infinity" || String.eqb u "+infinity" then inf true
+    else if String.eqb u "-infinity" then inf false
+    else if String.eqb u "today" then at_day 0
+    else if String.eqb u "tomorrow" then at_day 1
+    else if String.eqb u "yesterday" then at_day (-1)
+    else if String.eqb u "epoch" then (match kind with 0%nat => VDate 0 | 1%nat => Value_Err "invalid input syntax for type time"
+                                                  | _ => Value_T (Some (0, (kind + 60)%nat)) end)
+    else if String.eqb u "now" then (match kind with 0%nat => VDate (ts_days statement_time)
+                                                | 1%nat => Value_Err "invalid input syntax for type time"
+                                                | _ => Value_T (Some (statement_time, (kind + 60)%nat)) end)
+    else
     match kind with
     | 0%nat => match parse_date t with Some d => VDate d | None => 
                match parse_timestamp t with Some x => VDate (ts_days x) | None => Value_Err "invalid input syntax for type date" end end
@@ -1678,13 +1735,14 @@ Definition pg_cast_temporal (kind : nat) (v : value) : value :=
     | _ => match parse_timestamp t with Some u => Value_T (Some (u, (kind + 60)%nat)) | None => Value_Err "invalid input syntax for type timestamp" end
     end
   | Value_T (Some _) =>
+    match temporal_infinite v with Some pos => inf pos | None =>
     match kind, to_ts v, temporal_parts v with
     | 0%nat, Some x, _ => VDate (ts_days x)
     | 1%nat, Some x, _ => VTime (ts_usec x) 6
     | 1%nat, None, Some (1%nat, u, f) => VTime u f
     | _, Some x, _ => Value_T (Some (x, (kind + 60)%nat))
     | _, _, _ => Value_Err "cannot cast"
-    end
+    end end
   | _ => if is_null v then Value_T None else Value_Err "cannot cast"
   end.
 
@@ -2021,21 +2079,36 @@ Definition pg_math_table (num_power : list value -> value) : list (string * (lis
   :: ("radians", dbl_fun1 c (fun q => Some (radians_pg q)) bad pg_sp_same bad)
   :: ("pi", fun l => match l with nil => VF false (F_Finite, pi_double) | _ => bad end)
   (* [power] of two non-[numeric] arguments is the one of [double precision] *)
-  :: ("power", fun l => if existsb is_D l
-                        then
-                          (* a string literal by a [numeric] is a [numeric] *)
-                          let dv (v : value) := dec_of_value (match v with Value_string _ => cast_Q v | _ => v end) in
-                          match l with
-                          | a :: b :: nil =>
-                            if is_null a || is_null b then Value_D None
-                            else match dv a, dv b with
-                                 | Some (qa, _, sa), Some (qb, _, sb) => pg_num_power (qa, sa) (qb, sb)
-                                 | _, _ => num_power l
-                                 end
-                          | _ => num_power l
-                          end
-                        else dpow l)
+  (* a string literal takes the type of the other argument: it is read as a [numeric]; [power] is the one of
+     [numeric] when no argument is a double (the special values of [numeric] are doubles here) *)
+  :: ("power", fun l => let l' := map (fun v => match v with Value_string (Some _) => cast_Q v | _ => v end) l in
+                        let is_F (v : value) := match v with Value_F (Some _) => true | _ => false end in
+                        if existsb is_D l' && negb (existsb is_F l')
+                        then match l' with
+                             | a :: b :: nil =>
+                               if is_null a || is_null b then Value_D None
+                               else match dec_of_value a, dec_of_value b with
+                                    | Some (qa, _, sa), Some (qb, _, sb) => pg_num_power (qa, sa) (qb, sb)
+                                    | _, _ => num_power l
+                                    end
+                             | _ => num_power l
+                             end
+                        else if existsb (fun v => match v with Value_string (Some _) => true | _ => false end) l
+                                && negb (existsb is_F l') && negb (existsb is_D l')
+                             then dpow l
+                             else dpow l')
   :: nil.
+
+(** A string literal has the type [unknown]: by a number, it is read as a [numeric] (PostgreSQL resolves the
+    operator on the type of the other operand); two strings and the other pairs are left as they are. *)
+Definition lit2 (f : list value -> value) (l : list value) : value :=
+  let numeric (v : value) :=
+      match v with Value_Z (Some _) | Value_I (Some _) | Value_Q (Some _) | Value_D (Some _) | Value_F (Some _) => true | _ => false end in
+  match l with
+  | (Value_string (Some _) as a) :: b :: nil => if numeric b then f (cast_Q a :: b :: nil) else f l
+  | a :: (Value_string (Some _) as b) :: nil => if numeric a then f (a :: cast_Q b :: nil) else f l
+  | _ => f l
+  end.
 
 Definition symbol_table_raw : list (string * (list value -> value)) :=
   let plus := pg_tm2 false (pg_int2 Z.add (pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)))))) in
@@ -2073,12 +2146,12 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
                     (fun a b => if Qc_is_zero b then None else Some (Qcdiv a b)))))) in
   let modulo := by_zero (pg_int2 Z.rem (pg_dec2 pg_dec_mod (arith2 (fun a b => if Z.eqb b 0 then None else Some (Z.rem a b))
                        (fun _ _ => None)))) in
-     ("plus", plus) :: ("+", plus)
-  :: ("minus", minus) :: ("-", minus)
-  :: ("mult", mult) :: ("*", mult)
+     ("plus", lit2 plus) :: ("+", lit2 plus)
+  :: ("minus", lit2 minus) :: ("-", lit2 minus)
+  :: ("mult", lit2 mult) :: ("*", lit2 mult)
   :: ("opp", opp) :: ("neg", opp)
-  :: ("div", div) :: ("/", div)
-  :: ("mod", modulo) :: ("%", modulo)
+  :: ("div", lit2 div) :: ("/", lit2 div)
+  :: ("mod", lit2 modulo) :: ("%", lit2 modulo)
  :: ("abs", fun l => match l with
                       | Value_F (Some (x, k)) :: nil => 
                         let w := Nat.odd k in

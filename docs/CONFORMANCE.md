@@ -92,6 +92,16 @@ test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 
+Run 11 (iteration 12): the infinite dates and timestamps and the special inputs (`today`, ...): **53** fail (the 16
+cases of `date` and `timestamp` pass; the other files are those of run 10).
+
+Run 10 (iteration 9, TODO 8.11): `NaN` and the infinities of `numeric` are represented by the special values of the
+doubles (`'NaN'::numeric`, the casts between `numeric` and the floats, `power`, the arithmetic by a string literal,
+which is read as a `numeric`); the variances and the statistics of two variables are NaN on such inputs: **69** fail
+(51 fewer). What still fails: 30 `to_char` with numeric format models, 16 infinite dates and timestamps, 12 others of
+`numeric` (the scales of `sqrt`, `ln`, `log` in queries which also hold special values, `exp` beyond 77 digits), 3
+window results which depend on the order of the peers, 2 `DateStyle`, and 6 others.
+
 Run 9 (iteration 7, TODO 8.13): the dates before the common era (`BC`, `EXTRACT` of negative years, the Julian
 day): **120** fail (13 fewer than run 8; the files `date` and `timestamp` were run again, the others are those of
 run 8). The calendar conversions were off by one day before 0000-03-01: fixed.
@@ -154,6 +164,10 @@ connection or change of `sql_mode`; the lines printed by `--echo` are not rows. 
 | `win_empty_over:2` | `ROW_NUMBER () OVER ()`: the numbering of the rows is not specified (no `ORDER BY`) |
 | `group_by:286` | `DATE ('20050606')`: a string of digits read as a date; fixed after the run (`my_ts_of`) |
 
+Run 4 (iteration 8, after the translator forgets the options of earlier tables of the same name): **396** queries
+translated, **7** fail (the cases of the table above without `group_by:286`, and `win_percentile:59`, the same
+`MEDIAN ... OVER ()` through a view); `subselect` (23 cases) is not run (memory limit of 5 GB).
+
 Non-recursive `WITH` (since the run above; TODO 5.6): `cte_nonrecursive.result` and `cte_nonrecursive_not_embedded.result`, 37 queries translated, 37 pass.
 
 Found and fixed by the MariaDB runs: the decimals of `VARIANCE`/`STD` (argument decimals + 4, 20 cases), the maximal
@@ -173,6 +187,25 @@ literals with a time zone offset (`TIMESTAMP '2024-01-01 14:00:00+01:00'`, MySQL
 non-JSON arguments, where TiDB reports an error that the model gives as a value; integer overflow errors (`ABS (-2^63)`):
 the integers of the MySQL family are unbounded in the model; results which hold a statement of the script (scripts
 without `;` echo): harness.
+
+Run 3 (iteration 9; the translator forgets the options of earlier tables of the same name, and the models of
+iterations 6 to 9): **2095** translated, **128** fail, 1 file (13 cases) over the memory limit. The groups: 38 of
+`time` (`DAYNAME (d) + 0`, a name used as a number, and the literals with a time zone offset), 31 JSON functions on
+arguments which are not JSON (an error in TiDB and in MySQL, a value in the model), 15 `misc` (date literals with
+other delimiters, `TIMESTAMP '00:00:00'`), 10 `builtin` (`tan`, `cot`, `exp` of Go's `math`, which is not correctly
+rounded; the overflow of `BIGINT`). Found by reading these: an error line of TiDB (`Error 1582 ...`) under a query of
+one column was read as the header of an empty result, so that such cases expected no row (TODO 8.17).
+
+**MySQL**, run 3 (same changes): **1211** translated, **95** fail.
+
+Runs 4 (iterations 10 to 15): the queries which the engine rejects are cases (`mk_case_error`); the result files of
+the same name are all checked; the fixes of the JSON functions, of the typed literals, of `DAYNAME`, of `INTERVAL`.
+**TiDB**: **2102** translated (53 expect an error), **50** fail (8 of them expect an error), 1 file over the memory
+limit. **MySQL**: **1314** translated (103 expect an error), **124** fail (31 of them expect an error): 39 regular
+expressions (inline flags scoped to a group, invalid patterns which must be errors), 9 roles, 8 locks, and others of
+the session and of the server. **MariaDB**, run 5: **428** translated (32 expect an error), **16** fail (9 of them
+expect an error; they pass since iteration 17), `subselect` not run. **OceanBase**, run 21: **775** translated,
+none fails, 1 file over the time limit.
 
 Found and fixed by the MySQL-family runs: digit strings read as dates (`'20050606'`), the exponent of numeric strings
 (`'123e-2'`), leading inline regular-expression flags, executable comments `/*!NNNNN ... */`, TiDB's error lines

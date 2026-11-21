@@ -163,12 +163,30 @@ Definition pg_regex_funs : list (string * (list value -> value)) :=
 (** ** Aggregates (TODO 2.5): the variance and the standard deviation are [numeric] (of integers and [numeric]
     values) or [double precision]; [variance] and [stddev] are the sample ones; the statistics of two
     variables are [double precision] *)
+(** The variances and the statistics of two variables are NaN as soon as an input is a NaN or an infinity
+    ([float8_var_pop], [numeric_var_pop]: the sums of squares are NaN). A string literal ['NaN'] in the place of
+    an argument is one. *)
+Definition is_special (v : value) : bool :=
+  match v with
+  | Value_F (Some (_, k)) => Nat.leb 2 (Nat.div (Nat.modulo k 10) 2)
+  | Value_string (Some t) =>
+    let u := lower_s t in
+    String.eqb u "nan" || String.eqb u "infinity" || String.eqb u "inf" || String.eqb u "-infinity" || String.eqb u "-inf"
+  | _ => false
+  end.
+
+Definition nan_agg (f : list value -> value) (l : list value) : value :=
+  if existsb is_special l then VF false (IEEE.F_NaN, Q2Qc 0) else f l.
+
 Definition pg_aggregates : list (string * (list value -> value)) :=
-     ("var_pop", pg_var_agg false false) :: ("var_samp", pg_var_agg true false) :: ("variance", pg_var_agg true false)
-  :: ("stddev_pop", pg_var_agg false true) :: ("stddev_samp", pg_var_agg true true) :: ("stddev", pg_var_agg true true)
+     ("var_pop", nan_agg (pg_var_agg false false)) :: ("var_samp", nan_agg (pg_var_agg true false))
+  :: ("variance", nan_agg (pg_var_agg true false))
+  :: ("stddev_pop", nan_agg (pg_var_agg false true)) :: ("stddev_samp", nan_agg (pg_var_agg true true))
+  :: ("stddev", nan_agg (pg_var_agg true true))
   :: ("bit_xor", bit_xor_agg false is_null num_of_value)
   :: ("any_value", any_value_agg is_null)
-  :: map (fun w => (w, stat2_agg w is_null num_of_value))
+  :: map (fun w => (w, if String.eqb w "regr_count" then stat2_agg w is_null num_of_value
+                       else nan_agg (stat2_agg w is_null num_of_value)))
          ("covar_pop" :: "covar_samp" :: "corr" :: "regr_count" :: "regr_slope" :: "regr_intercept" :: "regr_r2"
           :: "regr_sxx" :: "regr_syy" :: "regr_sxy" :: "regr_avgx" :: "regr_avgy" :: nil)%string
   ++ ("json_agg", json_array_agg 1 pg_json_of_value) :: ("jsonb_agg", json_array_agg 0 pg_json_of_value)
@@ -240,7 +258,10 @@ Definition pg_time_funs : list (string * (list value -> value)) :=
                                                       | Some r => VTs r 6 | None => Value_Err "stride must be greater than zero" end
                                   | _, _ => Value_T None end
                            | _ => Value_T None end)
-  :: ("isfinite", fun l => match l with v :: nil => if is_null v then Value_bool None else Value_bool (Some true) | _ => Value_bool None end)
+  :: ("isfinite", fun l => match l with
+                           | v :: nil => if is_null v then Value_bool None
+                                         else Value_bool (Some (match temporal_infinite v with Some _ => false | None => true end))
+                           | _ => Value_bool None end)
   :: ("clock_timestamp", fun _ => VTsTz statement_time 6) :: ("statement_timestamp", fun _ => VTsTz statement_time 6)
   :: ("transaction_timestamp", fun _ => VTsTz statement_time 6)
   :: nil.
@@ -742,7 +763,8 @@ Definition PostgreSQL : vsem :=
           sql_order
           canon_numeric
           false
-          (fun f => match f with F_Bare_Column | F_Fetch_Percent | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false | _ => true end)
+          (fun f => match f with F_Bare_Column | F_Fetch_Percent | F_Null_Treatment | F_From_Last | F_Rec_Aggregate
+                                  | F_Group_Aggregate | F_Order_Not_Selected | F_Frame_Bounds | F_Ntile_Zero => false | _ => true end)
           false
           (* an escape of more than one character: [invalid escape string] *)
           (fun p l => bad_escape pg_skit p l || rx_bad pg_rx ("~" :: "~*" :: "!~" :: "!~*" :: nil)%string p l)

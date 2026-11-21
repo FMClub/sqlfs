@@ -35,11 +35,14 @@ Record spec_case : Type :=
       sc_expected : list (list string);
       sc_sql : string;
       (** [LIMIT n] without [ORDER BY]: any [n] rows of the result of [sc_query] (TODO 3.10) *)
-      sc_limit : option nat
+      sc_limit : option nat;
+      (** the engine rejects the query (an error): the model must reject it or fail on it (TODO 8.17) *)
+      sc_error : bool
     }.
 
-Definition mk_case id ordered tabs q expected sql := mk_spec_case id ordered tabs q expected sql None.
-Definition mk_case_limit id (n : nat) tabs q expected sql := mk_spec_case id false tabs q expected sql (Some n).
+Definition mk_case id ordered tabs q expected sql := mk_spec_case id ordered tabs q expected sql None false.
+Definition mk_case_limit id (n : nat) tabs q expected sql := mk_spec_case id false tabs q expected sql (Some n) false.
+Definition mk_case_error id tabs q sql := mk_spec_case id false tabs q nil sql None true.
 
 (** The database of a case *)
 Definition build_db (tabs : list table_spec) : db_state :=
@@ -148,7 +151,19 @@ Definition ties_ok (d : vsem) (c : spec_case) (ncols : nat) : bool :=
   | None => false
   end.
 
+(** the query is not accepted by the dialect (an unknown function, a wrong number of arguments, a construct which
+    it does not have), or its evaluation fails *)
+Definition error_ok (d : vsem) (c : spec_case) : bool :=
+  let db := build_db (sc_tables c) in
+  let q := to_dialect d (sc_query c) in
+  negb (accepted_by (dialect_of d) (vs_supports d) q) ||
+  match eval_query_result ORN (dialect_of d) (_basesort _ db) (_instance _ db) q with
+  | QR_Error _ => true
+  | QR_Rows _ _ => false
+  end.
+
 Definition check_case (d : vsem) (c : spec_case) : bool :=
+  if sc_error c then error_ok d c else
   let ncols := match sc_expected c with e :: _ => List.length e | nil => 0%nat end in
   match sc_limit c with
   | Some n =>
@@ -186,5 +201,6 @@ Definition show_rows (rows : list (list string)) : string :=
 
 (** For each failing case: its identifier, the statement, the expected rows and the actual ones. *)
 Definition diagnose (d : vsem) (cs : list spec_case) : list string :=
-  map (fun c => sc_id c ++ " | " ++ sc_sql c ++ " | expected " ++ show_rows (sc_expected c) ++ " | got " ++ show_rows (show_actual d c))
+  map (fun c => sc_id c ++ " | " ++ sc_sql c ++ " | expected " ++
+                (if sc_error c then "an error" else show_rows (sc_expected c)) ++ " | got " ++ show_rows (show_actual d c))
       (filter (fun c => negb (check_case d c)) cs).

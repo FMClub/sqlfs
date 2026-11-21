@@ -1513,9 +1513,9 @@ class Tr:
             alias, name, kind = r
             return '(col %s)' % attr(kind, alias + '.' + name)
         if k == 'neg':
-            return '(fn "neg" [%s])' % self.ex(e[1])
+            return '(fn "neg" [%s])' % self.ex(numctx(e[1]))
         if k == 'bitnot':
-            return '(fn "~" [%s])' % self.ex(e[1])
+            return '(fn "~" [%s])' % self.ex(numctx(e[1]))
         if k == 'bin':
             op = e[1]
             if op in ('and', 'or', 'xor', '||'):
@@ -1530,7 +1530,7 @@ class Tr:
                     '^': '#' if ENGINE == 'postgresql' else '^'}[op]
             if op == '^' and ENGINE == 'postgresql':
                 name = 'power'
-            return '(fn "%s" [%s; %s])' % (name, self.ex(e[2]), self.ex(e[3]))
+            return '(fn "%s" [%s; %s])' % (name, self.ex(numctx(e[2])), self.ex(numctx(e[3])))
         if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant', 'regexp', 'similar', 'cmp_array'):
             return '(e_cond %s)' % self.cond_raw(e)
         if k == 'subq':
@@ -1541,7 +1541,10 @@ class Tr:
         if k == 'temporal':
             f = {'date': 'cast_date', 'timestamp': 'cast_timestamp', 'time': 'cast_time'}[e[1]]
             if ENGINE == 'mysql' and e[1] == 'timestamp':
-                f = 'cast_datetime'
+                # a typed literal is stricter than a cast (an error, not NULL) and reads other delimiters
+                f = 'lit_datetime'
+            if ENGINE == 'mysql' and e[1] == 'time':
+                f = 'lit_time'
             return '(fn "%s" [(str %s)])' % (f, coq_str(e[2]))
         if k == 'interval':
             return '(fn "interval" [%s; (str "%s")])' % (self.ex(e[1]), e[2])
@@ -1656,6 +1659,11 @@ class Tr:
         if k == 'cmp':
             op = {'=': '=', '<>': '<>', '!=': '<>', '<': '<', '<=': '<=', '>': '>', '>=': '>=', '<=>': '<=>',
                   '~': '~', '~*': '~*', '!~': '!~', '!~*': '!~*'}[e[1]]
+            # by a number, DAYNAME (d) is compared as a number
+            if e[2][0] == 'num':
+                e = (e[0], e[1], e[2], numctx(e[3])) + tuple(e[4:])
+            elif e[3][0] == 'num':
+                e = (e[0], e[1], numctx(e[2]), e[3]) + tuple(e[4:])
             if e[2][0] == 'row' or e[3][0] == 'row':
                 if e[2][0] != 'row' or e[3][0] != 'row' or len(e[2][1]) != len(e[3][1]) or \
                         op not in ('=', '<>', '<', '<=', '>', '>='):
@@ -1724,6 +1732,15 @@ def rollup_sets(l):
 
 RANKING = {'row_number': 'w_row_number', 'rank': 'w_rank', 'dense_rank': 'w_dense_rank',
            'percent_rank': 'w_percent_rank', 'cume_dist': 'w_cume_dist'}
+
+
+def numctx(e):
+    """An operand of an arithmetic operator, or of a comparison with a number (MySQL family): the value of
+    DAYNAME (d) as a number is the number of the day of the week, Monday being 0 (Item_func_dayname is an
+    Item_func_weekday: its val_int and val_real are the weekday)."""
+    if ENGINE == 'mysql' and isinstance(e, tuple) and e[0] == 'call' and e[1] == 'dayname':
+        return (e[0], 'weekday') + tuple(e[2:])
+    return e
 
 
 def has_call(e, name):
@@ -1972,6 +1989,10 @@ class QTr:
                         return ('icol', 'w%d' % k)
                 wins.append(e)
                 return ('icol', 'w%d' % (len(wins) - 1))
+            # a window function in the argument of an aggregate is an error of every engine ("aggregate function
+            # calls cannot contain window function calls"); the syntax of SqlFull cannot write it: not translated
+            if is_agg_call(e) and has_wcall(e):
+                raise Skip('window function in an aggregate')
             if not has_wcall(e):
                 return icol(e)
             if e[0] in ('subq', 'exists', 'insub', 'quant'):
@@ -2329,6 +2350,8 @@ def looks_like_statement(l):
 
 # the AUTO_INCREMENT columns (their positions) of the tables
 AUTO_INC = {}
+# the NOT NULL columns (their positions) of the tables
+NOT_NULL = {}
 
 
 def parse_create(toks):
@@ -2346,6 +2369,9 @@ def parse_create(toks):
         raise Skip('qualified')
     if not p.eat_op('('):
         raise Skip('create like/as')
+    # the options of an earlier table of the same name (of another script) are forgotten
+    AUTO_INC.pop(name.lower(), None)
+    NOT_NULL.pop(name.lower(), None)
     cols = []
     limits = []
     while True:
@@ -2425,6 +2451,9 @@ def parse_create(toks):
                 elif t[0] in ('id', 'kw') and t[1].lower() == 'unsigned' and ENGINE == 'mysql' and \
                         ty in ('float', 'double', 'real', 'decimal', 'numeric'):
                     pass  # UNSIGNED on a float or a decimal only rejects the negative values (an error: not replayed)
+                elif t[0] in ('id', 'kw') and t[1].lower() == 'not' and p.peek(1)[0] in ('id', 'kw') and \
+                        p.peek(1)[1].lower() == 'null':
+                    NOT_NULL.setdefault(name.lower(), set()).add(len(cols))
                 elif t[0] in ('id', 'kw') and t[1].lower() == 'auto_increment' and ENGINE == 'mysql' and kind == 'Z':
                     # the rows which give the column a value are those of the INSERT (parse_insert); the others,
                     # whose value the engine generates, make the table unreliable
@@ -2512,7 +2541,9 @@ def conv_value(lit, kind, limit=None):
 def parse_insert(toks, tables):
     p = P(toks)
     p.need_kw('insert')
+    ignore = False
     if p.kw('ignore'):
+        ignore = True
         p.i += 1
     p.eat_kw('into')
     name = p.ident()
@@ -2564,6 +2595,17 @@ def parse_insert(toks, tables):
                 if row[i] is None:
                     if i in AUTO_INC.get(name.lower(), ()):
                         raise Skip('auto_increment value')
+                    if i in NOT_NULL.get(name.lower(), ()):
+                        # a NOT NULL column without DEFAULT (a table with a DEFAULT is not read) which the INSERT
+                        # does not give: an error in the strict mode; with IGNORE, the implicit default of the
+                        # type ('' or 0) and a warning (MySQL manual, "Data Type Default Values")
+                        if not ignore or ENGINE != 'mysql':
+                            raise Skip('not null column without value')
+                        lim = t.limits[i] if i < len(t.limits) else None
+                        if isinstance(lim, tuple) and lim[0] == 'tmp':
+                            raise Skip('implicit default of a temporal column')
+                        row[i] = conv_value(('str', '') if t.cols[i][1] == 'S' else ('num', '0'), t.cols[i][1], lim)
+                        continue
                     row[i] = {'Z': 'NullZ', 'S': 'NullS', 'Q': 'NullQ'}[t.cols[i][1]]
         out.append(row)
     # an AUTO_INCREMENT column whose value is NULL or 0 gets the next value of the engine
@@ -2588,6 +2630,10 @@ def parse_results(res_lines, ncols):
         lines.pop()
         blank += 1
     if not lines:
+        return None
+    # an error: [ERROR 1064 ...] (mysqltest), [Error 1582 (42000): ...] (TiDB); checked first: under a query of one
+    # column such a line would be read as the header of an empty result
+    if lines[0].startswith('ERROR') or re.match(r'^Error \d+', lines[0]):
         return None
     if len(lines) == 1 and ncols == 1 and not lines[0].startswith(('ERROR', '+')):
         # a header alone is an empty result; followed by one blank line, a row holding ''
@@ -2668,6 +2714,10 @@ LENIENT = False
 USER_FUNCS = set()
 
 
+# the names of the cases of the result files whose base name is not unique among the files of a run
+BASE_NAMES = {}
+
+
 def process(path, out, stats):
     USER_FUNCS.clear()
     VIEWS.clear()
@@ -2680,7 +2730,7 @@ def process(path, out, stats):
         lines.pop()  # the end of the last line, not an empty line
     tables = {}
     blocks = split_blocks(lines)
-    base = path.split('/')[-1].replace('.result', '')
+    base = BASE_NAMES.get(path, path.split('/')[-1].replace('.result', ''))
     cases = []
     # the statements which a loop or an eval of the test script runs are not in the result file
     # the test script: OceanBase r/mysql/x.result -> t/x.test; TiDB and MySQL r/x.result -> t/x.test;
@@ -2940,7 +2990,9 @@ def process(path, out, stats):
                 qt.limit_any = None
                 cq, ncols, ordered, _ = qt.query(q)
                 rows = parse_results(res, ncols)
-                if rows is None:
+                # the engine rejects the query (the suites of the MySQL family, --lenient): the model must too
+                error_case = rows is None and failed and LENIENT and ENGINE == 'mysql'
+                if rows is None and not error_case:
                     stats['no_result'] += 1
                     continue
                 tabs = []
@@ -2949,11 +3001,17 @@ def process(path, out, stats):
                     tabs.append('(%s, [%s], [%s])' % (coq_str(t.name),
                                                       '; '.join(attr(kd, n) for n, kd in t.cols),
                                                       '; '.join('[%s]' % '; '.join(r) for r in t.rows)))
-                exp = '[%s]' % '; '.join('[%s]' % '; '.join(coq_str(c) for c in r) for r in rows)
                 try:
                     sql_txt = coq_str(' '.join(s.split())[:400])
                 except Skip:
                     sql_txt = '""'
+                if error_case:
+                    cases.append('  mk_case_error %s [%s] %s %s' % (
+                        coq_str('%s:%d' % (base, bi)), '; '.join(tabs), cq, sql_txt))
+                    stats['translated'] += 1
+                    stats['error_cases'] = stats.get('error_cases', 0) + 1
+                    continue
+                exp = '[%s]' % '; '.join('[%s]' % '; '.join(coq_str(c) for c in r) for r in rows)
                 if qt.limit_any is not None:
                     # any [n] rows of the result
                     cases.append('  mk_case_limit %s %d [%s] %s %s %s' % (
@@ -3005,6 +3063,16 @@ def main():
     global SERVER_VERSION
     SERVER_VERSION = {'MariaDB': 110400, 'TiDB': 80011, 'OceanBaseMySQL': 50725, 'PolarDB': 80018}.get(dialect, 80400)
     stats = {'selects': 0, 'translated': 0, 'no_result': 0, 'skipped_files': 0, 'skip': {}}
+    # two result files of the same name in different directories (TiDB: executor/integration.result,
+    # planner/core/integration.result) would write the same Spec file: they are named after their directory too
+    names = {}
+    for path in args:
+        names.setdefault(os.path.basename(path), []).append(path)
+    for same in names.values():
+        if len(same) > 1:
+            for path in same:
+                BASE_NAMES[path] = (os.path.basename(os.path.dirname(os.path.abspath(path))) + '_' +
+                                    os.path.basename(path).replace('.result', ''))
     for path in args:
         out = []
         process(path, out, stats)

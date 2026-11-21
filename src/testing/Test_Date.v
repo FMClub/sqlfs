@@ -174,3 +174,19 @@ Example parse_bc : option_map Temporal.date_text (Temporal.parse_date "0002-12-3
 Proof. vm_compute; reflexivity. Qed.
 Example parse_ad : option_map Temporal.date_text (Temporal.parse_date "0001-01-01 AD") = Some "0001-01-01".
 Proof. vm_compute; reflexivity. Qed.
+
+(** the infinite dates and timestamps of PostgreSQL, and the special inputs (TODO 8.11) *)
+Example pg_inf_date : text PostgreSQL (fn "cast_date" [str "infinity"]) = "infinity" /\ text PostgreSQL (fn "cast_date" [str "-infinity"]) = "-infinity".
+Proof. split; vm_compute; reflexivity. Qed.
+Example pg_inf_cmp : text PostgreSQL (e_cond (pred ">" [fn "cast_date" [str "infinity"]; fn "cast_date" [str "today"]])) = "true".
+Proof. vm_compute; reflexivity. Qed.
+Example pg_inf_extract : text PostgreSQL (fn "extract" [str "year"; fn "cast_date" [str "infinity"]]) = "Infinity"
+                         /\ text PostgreSQL (fn "extract" [str "month"; fn "cast_date" [str "-infinity"]]) = "NULL".
+Proof. split; vm_compute; reflexivity. Qed.
+Example pg_inf_finite : text PostgreSQL (fn "isfinite" [fn "cast_date" [str "infinity"]]) = "false"
+                        /\ text PostgreSQL (fn "isfinite" [fn "cast_date" [str "today"]]) = "true".
+Proof. split; vm_compute; reflexivity. Qed.
+Example pg_inf_trunc : text PostgreSQL (fn "date_trunc" [str "week"; fn "cast_timestamp" [str "infinity"]]) = "infinity".
+Proof. vm_compute; reflexivity. Qed.
+Example pg_inf_ts_of_date : text PostgreSQL (fn "cast_timestamp" [fn "cast_date" [str "-infinity"]]) = "-infinity".
+Proof. vm_compute; reflexivity. Qed.

@@ -212,6 +212,9 @@ Definition my_rx : rx_env :=
             (negb (Nat.eqb (ms_regex ss) 1))
             "Illegal argument to a regular expression".
 
+(** a path with a wildcard *)
+Definition json_wild (t : string) : bool := match index 0 "*" t with Some _ => true | None => false end.
+
 (** the JSON functions of TODO 2.8: a document, then paths (and values); NULL if one is NULL *)
 Definition my_json_update (create replace : bool) (l : list value) : value :=
   match l with
@@ -223,7 +226,9 @@ Definition my_json_update (create replace : bool) (l : list value) : value :=
                match r with
                | nil => Some acc
                | p :: v :: r' => match text_of p with
-                                 | Some t => match parse_path t with
+                                 (* a path with [*] or [**] is not allowed in the functions which change a document *)
+                                 | Some t => if json_wild t then None else
+                                             match parse_path t with
                                              | Some st => go r' (set_path create replace st acc (my_json_of_value v))
                                              | None => None end
                                  | None => None end
@@ -243,7 +248,8 @@ Definition my_json_paths (f : list step -> json -> option json) (l : list value)
     else match my_json_doc d with
          | Some (Some j) =>
            let r := fold_left (fun acc p => match acc, text_of p with
-                                            | Some a, Some t => match parse_path t with Some st => f st a | None => None end
+                                            | Some a, Some t => if json_wild t then None else
+                                                                match parse_path t with Some st => f st a | None => None end
                                             | _, _ => None end) paths (Some j) in
            match r with Some r => VJ 0 r | None => Value_Err "Invalid JSON path expression" end
          | Some None => Value_J None
@@ -405,6 +411,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("abs", fun l => match l with
                       | Value_D (Some (q, f, s)) :: nil => 
                         VDec (match Qccompare q (Qc_of_Z 0) with Lt => Qcopp q | _ => q end) f s
+                      | v :: nil => my_int_range v (num_fun1 conv num_abs l)
                       | _ => num_fun1 conv num_abs l end)
   :: ("sign", num_fun1 conv num_sign)
   :: ("floor", num_fun1 conv num_floor)
@@ -415,7 +422,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                           match z_arg d with Some d => let d := clamp_scale d in my_dround false q d | None => Value_Z None end
                         | v :: nil => num_fun1 conv (fun a => num_round a 0) l
                         | v :: d :: nil => match conv v, z_arg d with
-                                           | Some a, Some d => let d := clamp_scale d in value_of_num (num_round a d) 
+                                           | Some a, Some d => let d := clamp_scale d in my_int_range v (value_of_num (num_round a d)) 
                                            | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   :: ("truncate", fun l => match l with
@@ -603,6 +610,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                               | "ALL"%string => Value_Z (Some (if forallb (fun b => b) bs then 1 else 0))
                                               | _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
                                        | Some None, _ => Value_Z None
+                                       | None, _ => Value_Err "Invalid JSON text in argument 1"
                                        | _, _ => Value_Z None end
                                      | _ => Value_Z None end)
   :: ("json_search", fun l => match l with
@@ -611,21 +619,24 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                 | Some (Some j), Some m, Some t =>
                                   let ps := search_paths (json_size j) t "$" j in
                                   match Temporal.upper_string m, ps with
-                                  | _, nil => Value_J None
+                                  | "ONE"%string, nil | "ALL"%string, nil => Value_J None
                                   | "ONE"%string, p :: _ => VJ 0 (JStr p)
                                   | "ALL"%string, p :: nil => VJ 0 (JStr p)
                                   | "ALL"%string, _ => VJ 0 (JArr (map JStr ps))
                                   | _, _ => Value_Err "The oneOrAll argument may take these values: 'one' or 'all'" end
+                                | None, _, _ => Value_Err "Invalid JSON text in argument 1"
                                 | _, _, _ => Value_J None end
                               | _ => Value_J None end)
   :: ("json_overlaps", fun l => match l with
                                 | a :: b :: nil => match my_json_doc a, my_json_doc b with
                                                    | Some (Some x), Some (Some y) => Value_Z (Some (if json_overlaps x y then 1 else 0))
+                                                   | None, _ | _, None => Value_Err "Invalid JSON text"
                                                    | _, _ => Value_Z None end
                                 | _ => Value_Z None end)
   :: ("json_pretty", fun l => match l with
                               | d :: nil => match my_json_doc d with
                                             | Some (Some j) => Value_string (Some (pretty 2 (normalize j)))
+                                            | None => Value_Err "Invalid JSON text in argument 1"
                                             | _ => Value_string None end
                               | _ => Value_string None end)
   :: ("->", fun l => match l with d :: p :: nil => my_json_extract d p | _ => Value_J None end)
@@ -641,7 +652,13 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
             | _ => None end in
         match pairs l with Some ps => VJ 0 (JObj ps) | None => Value_Err "Incorrect parameter count" end)
   :: ("json_array", fun l => VJ 0 (JArr (map my_json_of_value l)))
-  :: ("json_quote", fun l => match l with v :: nil => match text_of v with Some t => Value_string (Some (text_compact (JStr t))) | None => Value_string None end | _ => Value_string None end)
+  (* the argument of [JSON_QUOTE] is a string ("Incorrect type for argument 1 in function json_quote") *)
+  :: ("json_quote", fun l => match l with
+                             | v :: nil => if is_null v then Value_string None
+                                           else match v with
+                                                | Value_string (Some t) | Value_C (Some (t, _)) => Value_string (Some (text_compact (JStr t)))
+                                                | _ => Value_Err "Incorrect type for argument 1 in function json_quote" end
+                             | _ => Value_string None end)
   :: ("json_valid", fun l => match l with 
                              | v :: nil => if is_null v then Value_Z None 
                                            else match v with Value_J _ => Value_Z (Some 1) | _ => 
@@ -674,9 +691,30 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                                       | None => Value_V None end
                                           | None => Value_V None end
                              | None =>
-                             match z_arg n, interval_of_unit 1 u with
-                             | Some k, Some (a, b, c) => Value_V (Some (k * a, k * b, k * c))
-                             | _, _ => Value_V None end end
+                             (* [get_interval_value] of [item_timefunc.cc]: the seconds keep their fraction
+                                (truncated to microseconds) when the value is not an integer; the other units take
+                                the value as an integer: a decimal is rounded, a string gives the integer which it
+                                starts with, a boolean is 0 or 1 *)
+                             let frac_sec :=
+                                 if String.eqb u "SECOND"
+                                 then match n with
+                                      | Value_Z _ | Value_I _ | Value_bool _ => None
+                                      | _ => match lenient n with
+                                             | Some (Num_Q q) => Some (Qc_trunc (Qcmult q (Qc_of_Z 1000000)))
+                                             | _ => None end
+                                      end
+                                 else None in
+                             let k := match n with
+                                      | Value_string (Some t) => Some (my_int_prefix t)
+                                      | Value_bool (Some b) => Some (if b then 1 else 0)%Z
+                                      | _ => z_arg n end in
+                             match frac_sec with
+                             | Some us => Value_V (Some (0, 0, us)%Z)
+                             | None =>
+                               match k, interval_of_unit 1 u with
+                               | Some k, Some (a, b, c) => Value_V (Some (k * a, k * b, k * c))
+                               | _, _ => Value_V None end
+                             end end
                            | _ => Value_V None end)
   :: ("date_add", fun l => match l with d :: iv :: nil => my_date_add 1 d iv | _ => Value_T None end)
   :: ("date_sub", fun l => match l with d :: iv :: nil => my_date_add (-1) d iv | _ => Value_T None end)
@@ -831,6 +869,8 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("cast_date", fun l => match l with v :: nil => my_cast_temporal 0 v | _ => Value_T None end)
   :: ("cast_time", fun l => match l with v :: nil => my_cast_temporal 1 v | _ => Value_T None end)
   :: ("cast_datetime", fun l => match l with v :: nil => my_cast_temporal 2 v | _ => Value_T None end)
+  :: ("lit_datetime", fun l => match l with v :: nil => my_lit_datetime v | _ => Value_T None end)
+  :: ("lit_time", fun l => match l with v :: nil => my_lit_time v | _ => Value_T None end)
   :: ("cast_timestamp", fun l => match l with v :: nil => my_cast_temporal 2 v | _ => Value_T None end)
   (* [s COLLATE c]: an unknown collation is an error ([ER_UNKNOWN_COLLATION]) *)
   :: ("collate", fun l => match l with
@@ -987,7 +1027,7 @@ Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
   (* no [EXCLUDE] in frames; [RESPECT NULLS] and [FROM FIRST] only *)
-  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate => false
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate | F_Frame_Bounds | F_Ntile_Zero => false
   (* [ONLY_FULL_GROUP_BY] is in the default [sql_mode]; functional dependencies are not modelled *)
   | F_Fetch_Ties | F_Fetch_Percent => false
   (* only [WITH ROLLUP] *)
@@ -1190,7 +1230,9 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           my_order
           canon_my
           true
-          (fun f => match f with F_Bare_Column => negb (ms_only_full_group_by ss) | _ => supports f end)
+          (* [ONLY_FULL_GROUP_BY] also rejects a [SELECT DISTINCT] ordered by an expression which is not selected
+             ([ER_FIELD_IN_ORDER_NOT_SELECT]) *)
+          (fun f => match f with F_Bare_Column | F_Order_Not_Selected => negb (ms_only_full_group_by ss) | _ => supports f end)
           false
           (* [Illegal mix of collations]: a comparison of two strings with different explicit collations *)
           (fun p l => match l with

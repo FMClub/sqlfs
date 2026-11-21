@@ -130,3 +130,13 @@ Proof. check. Qed.
 Example agg_27 : agg1 PostgreSQL "json_agg" xs (c_not c_true) = ["NULL"].
 Proof. check. Qed.
 
+
+(** the variances and the covariances are NaN as soon as an input is NaN or infinite (PostgreSQL regression test
+    [aggregates]; TODO 8.11) *)
+Definition with_inf := values_ [c0; c1] [[fn "cast_float8" [str "1"]; int 0]; [fn "cast_float8" [str "infinity"]; int 0]].
+Example agg_inf_var : agg1 PostgreSQL "var_pop" (values_ [c0] [[fn "cast_float8" [str "1"]]; [fn "cast_float8" [str "infinity"]]]) c_true = ["NaN"].
+Proof. check. Qed.
+Example agg_inf_sum : agg1 PostgreSQL "sum" (values_ [c0] [[fn "cast_float8" [str "1"]]; [fn "cast_float8" [str "infinity"]]]) c_true = ["Infinity"].
+Proof. check. Qed.
+Example agg_inf_covar : agg2 PostgreSQL "covar_pop" with_inf = ["NaN"].
+Proof. check. Qed.

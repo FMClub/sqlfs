@@ -615,7 +615,7 @@ assert (W : forall w, In w lw -> forall ce env, wfun O2 ce env w = wfun O1 ce en
     assert (IHo : forall e d n, In (O_By e d n) lo -> forall ce env, ev2 ce env e = ev1 ce env e)
       by (intros e d n Hy; apply (Ho e d n Hy); first [exact (ok_flat_map _ _ _ K _ Hy) | exact (ok_flat_map _ _ _ K2 _ Hy)])
   end.
-  match goal with HF : ok ?x |- _ => match x with context [f] => rename HF into HFf end end.
+  match goal with HF : ok ?x |- _ => match x with context [f] => match x with context [@sexpr_uses] => rename HF into HFf end end end.
   assert (Ha : fagg f) by (clear - HFf; revert HFf; induction f; cbn; intros; split_ok; auto).
   assert (He : forall y, In y (wexprs T relname f) -> forall ce env, ev2 ce env y = ev1 ce env y).
   { intros y Hy; apply Hf; [exact Hy | ]; clear - HFf Hy; revert HFf y Hy; induction f; intros HFf y Hy;

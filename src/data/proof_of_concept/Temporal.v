@@ -83,8 +83,14 @@ Definition pad (w : nat) (z : Z) : string :=
   let s := string_of_Z (Z.abs z) in
   ((if Z.ltb z 0 then "-" else "") ++ repeat_zero (w - String.length s) ++ s)%string.
 
+(** The infinite dates and timestamps of PostgreSQL (['infinity'], ['-infinity']): a number of days, or of
+    microseconds, beyond every date ([DATEVAL_NOEND], [DT_NOEND] are the largest integers of the engine). *)
+Definition date_infinity : Z := 2 ^ 40.
+Definition ts_infinity : Z := 2 ^ 62.
+
 (** a year before the common era is printed as PostgreSQL does: the year 0 of the calendar is [0001 ... BC] *)
 Definition date_text (days : Z) : string :=
+  if Z.eqb days date_infinity then "infinity" else if Z.eqb days (- date_infinity) then "-infinity" else
   let '(y, m, d) := civil_from_days days in
   if Z.leb y 0 then (pad 4 (1 - y) ++ "-" ++ pad 2 m ++ "-" ++ pad 2 d ++ " BC")%string
   else (pad 4 y ++ "-" ++ pad 2 m ++ "-" ++ pad 2 d)%string.
@@ -99,6 +105,7 @@ Definition time_text (usec : Z) (fsp : nat) : string :=
    (match fsp with O => "" | _ => "." ++ substring 0 fsp (pad 6 frac) end))%string.
 
 Definition timestamp_text (ts : Z) (fsp : nat) : string :=
+  if Z.eqb ts ts_infinity then "infinity" else if Z.eqb ts (- ts_infinity) then "-infinity" else
   (date_text (ts_days ts) ++ " " ++ time_text (ts_usec ts) fsp)%string.
 
 (** PostgreSQL prints the fractional seconds which are not zero, without trailing zeros *)
@@ -118,6 +125,7 @@ Definition pg_time_text (usec : Z) : string :=
   if Z.eqb frac 0 then base else (base ++ "." ++ strip_trailing_zeros_aux 6 (pad 6 frac))%string.
 
 Definition pg_timestamp_text (ts : Z) : string :=
+  if Z.eqb ts ts_infinity then "infinity" else if Z.eqb ts (- ts_infinity) then "-infinity" else
   (date_text (ts_days ts) ++ " " ++ pg_time_text (ts_usec ts))%string.
 
 (** * Parsing: [YYYY-MM-DD], [YYYY-MM-DD HH:MM:SS[.ffffff]], [HH:MM:SS[.ffffff]] *)
