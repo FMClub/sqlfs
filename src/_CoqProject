@@ -52,6 +52,7 @@ data/sql/SqlScopeQuery.v
 data/sql/SqlRelate.v
 data/sql/SqlRelateSelect.v
 data/sql/SqlRelateAlg.v
+data/sql/SqlPositional.v
 data/proof_of_concept/TuplesImpl.v
 data/proof_of_concept/IEEE.v
 data/proof_of_concept/Temporal.v
@@ -150,6 +151,7 @@ testing/Test_Closeout.v
 testing/Test_WellFormed.v
 testing/Test_ResultText.v
 testing/Test_Positional.v
+testing/Test_SqlPositional.v
 testing/Test_Typing.v
 testing/Test_TypeOf.v
 testing/Test_Refinement.v
