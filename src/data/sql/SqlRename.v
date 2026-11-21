@@ -1057,7 +1057,7 @@ Definition RP (x' x : tuple T * SqlFull.senv T relname) := RT (fst x') (fst x) /
 Definition Ee (e : SqlFull.sexpr T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env -> ev' ce' env' (re e) = ev ce env e.
 Definition Ec (c : SqlFull.scond T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env ->
   ec' ce' env' (rc c) = ec ce env c /\ er' ce' env' (rc c) = er ce env c.
-Definition Eq (q : SqlFull.squery T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env ->
+Definition Eqr (q : SqlFull.squery T relname) := forall ce' ce env' env, RCE ce' ce -> REnv env' env ->
   RL (eq' ce' env' (rq q)) (eq_ ce env q).
 Definition Es (sp : SqlFull.sspec T relname) := forall ce' ce env' env ex, RCE ce' ce -> REnv env' env ->
   Forall2 RP (es' ce' env' (rsp sp) (map re ex)) (es ce env sp ex).
@@ -1075,7 +1075,7 @@ Ltac unf :=
   cbn [r_e r_c r_q r_s r_f eval_sexpr eval_scond scond_raises eval_squery eval_sspec eval_sfrom] in *;
   fold ev' ec' er' eq' es' ef' ev ec er eq_ es ef in *; fold r_e r_c r_q r_s r_f in *.
 
-Ltac open_e := unfold Ee, Ec, Eq, Es, Ef, LE, LO; cbv beta.
+Ltac open_e := unfold Ee, Ec, Eqr, Es, Ef, LE, LO; cbv beta.
 
 Ltac prep :=
   repeat match goal with
@@ -1172,7 +1172,7 @@ Proof. open_e; intros c e1 e2 IH IH1 IH2 ce' ce env' env Hc He; prep; hid (E_Cas
 Lemma e_cond : forall c, Ec c -> Ee (E_Cond c).
 Proof. open_e; intros c IH ce' ce env' env Hc He; prep; hid (E_Cond c); rcong. Qed.
 
-Lemma e_sub : forall q, Eq q -> Ee (E_Sub q).
+Lemma e_sub : forall q, Eqr q -> Ee (E_Sub q).
 Proof.
 open_e; intros q IH ce' ce env' env Hc He; hid (E_Sub q).
 generalize (IH ce' ce env' env Hc He); intro K.
@@ -1216,7 +1216,7 @@ Proof. open_e; intros e IH ce' ce env' env Hc He; unf; rewrite (IH ce' ce env' e
 Lemma dots_R : forall t' t la, RT t' t -> map (dot T t') (map rho la) = map (dot T t) la.
 Proof. intros t' t la H; rewrite map_map; apply map_ext; intro a; apply RT_dot_all; exact H. Qed.
 
-Lemma e_quant : forall qtf p l q la, LE T relname Ee l -> Eq q -> Ec (C_Quant qtf p l q la).
+Lemma e_quant : forall qtf p l q la, LE T relname Ee l -> Eqr q -> Ec (C_Quant qtf p l q la).
 Proof.
 open_e; intros qtf p l q la IH IHq ce' ce env' env Hc He; unf; cbv zeta.
 assert (M : map (ev' ce' env') (map re l) = map (ev ce env) l) by rcong.
@@ -1226,7 +1226,7 @@ assert (K := IHq ce' ce env' env Hc He); rewrite M; split.
   apply (F2_existsb _ _ RT); [exact K | intros x y Hxy; rewrite (dots_R _ _ _ Hxy); reflexivity].
 Qed.
 
-Lemma e_in : forall l q la, LE T relname Ee l -> Eq q -> Ec (C_In l q la).
+Lemma e_in : forall l q la, LE T relname Ee l -> Eqr q -> Ec (C_In l q la).
 Proof.
 open_e; intros l q la IH IHq ce' ce env' env Hc He; unf; cbv zeta.
 assert (M : map (ev' ce' env') (map re l) = map (ev ce env) l) by rcong.
@@ -1235,9 +1235,340 @@ assert (K := IHq ce' ce env' env Hc He); rewrite M; split.
 - rewrite (F2_existsb _ _ _ _ _ _ _ K row_error_RT); reflexivity.
 Qed.
 
-Lemma e_exists : forall q, Eq q -> Ec (C_Exists q).
+Lemma e_exists : forall q, Eqr q -> Ec (C_Exists q).
 Proof.
 open_e; intros q IHq ce' ce env' env Hc He; unf.
 assert (K := IHq ce' ce env' env Hc He); split; [destruct K; reflexivity | apply (F2_existsb _ _ RT); [exact K | apply row_error_RT]].
+Qed.
+
+(** ** Queries *)
+
+Lemma RS_equal : forall s1' s1 s2' s2, s1' =S= rs s1 -> s2' =S= rs s2 -> Fset.equal (A T) s1' s2' = Fset.equal (A T) s1 s2.
+Proof.
+intros s1' s1 s2' s2 H1 H2; apply eq_true_iff_eq; rewrite !Fset.equal_spec; split; intros H a.
+- rewrite <- (mem_rs s1), <- (mem_rs s2), <- (Fset.mem_eq_2 _ _ _ H1), <- (Fset.mem_eq_2 _ _ _ H2); apply H.
+- rewrite (Fset.mem_eq_2 _ _ _ H1), (Fset.mem_eq_2 _ _ _ H2), !mem_rs'; apply H.
+Qed.
+
+Lemma RS_elements : forall s' s, s' =S= rs s -> {{{s'}}} = map rho ({{{s}}}).
+Proof. intros s' s H; rewrite <- elements_rs; apply (Fset.elements_spec1 _ _ _ H). Qed.
+
+Lemma q_table : forall r, Eqr (SQ_Table T r).
+Proof.
+open_e; intros r ce' ce env' env Hc He; unf.
+generalize (RCE_find ce' ce r Hc); destruct (Oset.find ORN r ce') as [[s' l'] | ]; destruct (Oset.find ORN r ce) as [[s l] | ];
+  intro K; try contradiction; [exact K | apply Hinst].
+Qed.
+
+Lemma q_set : forall o sq q1 q2, Eqr q1 -> Eqr q2 -> Eqr (SQ_Set o sq q1 q2).
+Proof.
+open_e; intros o sq q1 q2 IH1 IH2 ce' ce env' env Hc He; unf.
+assert (R0 := RCE_Rsort _ _ Hc).
+rewrite (RS_equal _ _ _ _ (sort_rename q1 ce' ce R0) (sort_rename q2 ce' ce R0)).
+destruct (Fset.equal (A T) (sq_sort ce q1) (sq_sort ce q2)); [ | constructor].
+rewrite (RS_elements _ _ (sort_rename q1 ce' ce R0)).
+assert (K1 := IH1 ce' ce env' env Hc He); assert (K2 := IH2 ce' ce env' env Hc He).
+apply unify_rows_R, keep_errors_R; [apply set_op_R; assumption | apply RL_app; assumption].
+Qed.
+
+Lemma RP_fst : forall l' l, Forall2 RP l' l -> RL (map (@fst _ _) l') (map (@fst _ _) l).
+Proof. intros l' l H; apply (F2_map2 _ _ _ _ _ RP); [exact H | intros x y [Hxy _]; exact Hxy]. Qed.
+
+Lemma q_select : forall sp, Es sp -> Eqr (SQ_Select sp).
+Proof. open_e; intros sp IH ce' ce env' env Hc He; unf; apply RP_fst; exact (IH ce' ce env' env nil Hc He). Qed.
+
+(** *** ORDER BY and FETCH *)
+
+Notation ordr' := (ord_rows T relname ORN basesort' instance' O).
+Notation ordk' := (ord_keys T relname ORN basesort' instance' O).
+Notation ordr := (ord_rows T relname ORN basesort instance O).
+Notation ordk := (ord_keys T relname ORN basesort instance O).
+Notation rlo lo := (map (fun o : sorder T relname => match o with O_By e d n => O_By (re e) d n end) lo).
+
+Lemma output_col_R : forall t' t e, RT t' t -> is_output_col t' (re e) = is_output_col t e.
+Proof.
+intros t' t e H; destruct e; simpl; trivial.
+rewrite (RT_mem _ _ _ H), (RT_dot_all _ _ _ H); reflexivity.
+Qed.
+
+Lemma ordk_R : forall lo ce' ce x' x, LO T relname Ee lo -> RCE ce' ce -> RP x' x -> ordk' ce' (rlo lo) x' = ordk ce lo x.
+Proof.
+intros lo ce' ce x' x Ho Hc [H1 H2]; unfold ord_keys; rewrite map_map; apply map_ext_in; intros [e d n] Hin.
+rewrite (output_col_R _ _ e H1); destruct (is_output_col (fst x) e); [reflexivity | apply (Ho e d n Hin); assumption].
+Qed.
+
+Lemma ordr_R : forall q lo ce' ce env' env, RCE ce' ce -> REnv env' env -> Eqr q -> (forall sp, q = SQ_Select sp -> Es sp) ->
+  Forall2 RP (ordr' ce' env' (rq q) (rlo lo)) (ordr ce env q lo).
+Proof.
+intros q lo ce' ce env' env Hc He Hq Hs.
+assert (M : Forall2 RP (map (fun t => (t, slice_t T relname t :: env')) (eq' ce' env' (rq q)))
+                       (map (fun t => (t, slice_t T relname t :: env)) (eq_ ce env q))).
+{ apply (F2_map2 _ _ _ _ _ RT); [apply Hq; assumption | intros x y Hxy; split; [exact Hxy | apply REnv_t; assumption]]. }
+unfold ord_rows; destruct q; try exact M.
+cbn [r_q]; fold r_s.
+replace (map (fun o : sorder T relname => match o with O_By e _ _ => e end) (rlo lo))
+  with (map re (map (fun o : sorder T relname => match o with O_By e _ _ => e end) lo))
+  by (rewrite !map_map; apply map_ext; intros [e d n]; reflexivity).
+apply (Hs s eq_refl); assumption.
+Qed.
+
+Lemma flag_R : forall (k1 k2 : tuple T * SqlFull.senv T relname -> list (value T)) l' l,
+  (forall x' x, RP x' x -> k1 x' = k2 x) -> Forall2 RP l' l ->
+  Forall2 RP (flag_rows T relname O k1 l') (flag_rows T relname O k2 l).
+Proof.
+intros k1 k2 l' l K H; unfold flag_rows; apply (F2_map2 _ _ _ _ _ _ _ _ _ _ H).
+intros x y Hxy; rewrite (K x y Hxy); destruct (existsb _ _); [ | exact Hxy].
+destruct Hxy as [H1 H2]; split; [apply err_row_RT; exact H1 | exact H2].
+Qed.
+
+Lemma q_order : forall q lo off lim, Eqr q -> (forall sp, q = SQ_Select sp -> Es sp) -> LO T relname Ee lo -> Eqr (SQ_Order q lo off lim).
+Proof.
+intros q lo off lim Hq Hs Ho ce' ce env' env Hc He; cbn [r_q]; fold r_q r_e.
+rewrite !eval_order; cbv zeta.
+assert (K := flag_R _ _ _ _ (fun x' x => ordk_R lo ce' ce x' x Ho Hc) (ordr_R q lo ce' ce env' env Hc He Hq Hs)).
+apply keep_errors_R; apply RP_fst; [ | exact K].
+rewrite spec_re; apply F2_offset_limit, F2_sort_on; [exact K | intros x y Hxy; apply ordk_R; assumption].
+Qed.
+
+Lemma F2_take : forall (X Y : Type) (P : X -> Y -> Prop) (c1 : X -> comparison) (c2 : Y -> comparison) l1 l2, Forall2 P l1 l2 ->
+  (forall x y, P x y -> c1 x = c2 y) ->
+  Forall2 P ((fix take (l : list X) : list X :=
+               match l with x :: l' => match c1 x with Datatypes.Eq => x :: take l' | _ => nil end | nil => nil end) l1)
+            ((fix take (l : list Y) : list Y :=
+               match l with x :: l' => match c2 x with Datatypes.Eq => x :: take l' | _ => nil end | nil => nil end) l2).
+Proof.
+intros X Y P c1 c2 l1 l2 H K; induction H as [ | x y l1 l2 Hxy H IH]; [constructor | ].
+rewrite (K x y Hxy); destruct (c2 y); try constructor; trivial.
+Qed.
+
+Lemma fetch_R : forall lo off ties pct n (k1 k2 : tuple T * SqlFull.senv T relname -> list (value T)) l1 l2, Forall2 RP l1 l2 ->
+  (forall x y, RP x y -> k1 x = k2 y) ->
+  RL (fetch_rest T relname O (rlo lo) off ties pct n k1 l1) (fetch_rest T relname O lo off ties pct n k2 l2).
+Proof.
+intros lo off ties pct n k1 k2 l1 l2 H K; unfold fetch_rest; cbv zeta; rewrite spec_re.
+assert (S := F2_sort_on _ O _ _ _ (map (@sorder_spec T relname) lo) k1 k2 l1 l2 H K).
+assert (L := F2_length _ _ _ _ _ S).
+assert (Af : Forall2 RP (match off with Some k => skipn (N.to_nat k) (sort_on O (map (@sorder_spec T relname) lo) k1 l1)
+                         | None => sort_on O (map (@sorder_spec T relname) lo) k1 l1 end)
+                        (match off with Some k => skipn (N.to_nat k) (sort_on O (map (@sorder_spec T relname) lo) k2 l2)
+                         | None => sort_on O (map (@sorder_spec T relname) lo) k2 l2 end))
+  by (destruct off; [apply F2_skipn | ]; exact S).
+rewrite L.
+match goal with |- RL (keep_errors O (map _ (?F1 ++ ?E1)) _) (keep_errors O (map _ (?F2 ++ ?E2)) _) =>
+  assert (Fi : Forall2 RP F1 F2) by (apply F2_firstn; exact Af);
+  assert (Ex : Forall2 RP E1 E2) end.
+- destruct ties; [ | constructor].
+  assert (Rv := F2_rev' _ _ _ _ _ Fi); destruct Rv as [ | x y r1 r2 Hxy _]; [constructor | ].
+  apply F2_take; [apply F2_skipn; exact Af | ].
+  intros a b Hab; rewrite (K x y Hxy), (K a b Hab); reflexivity.
+- apply keep_errors_R; apply RP_fst; [apply F2_app; assumption | exact H].
+Qed.
+
+Lemma q_fetch : forall q lo off ties pct n, Eqr q -> (forall sp, q = SQ_Select sp -> Es sp) -> LO T relname Ee lo ->
+  Eqr (SQ_Fetch q lo off ties pct n).
+Proof.
+intros q lo off ties pct n Hq Hs Ho ce' ce env' env Hc He; cbn [r_q]; fold r_q r_e.
+rewrite !eval_fetch; apply fetch_R; [ | intros x y Hxy; apply ordk_R; assumption].
+exact (flag_R _ _ _ _ (fun x' x => ordk_R lo ce' ce x' x Ho Hc) (ordr_R q lo ce' ce env' env Hc He Hq Hs)).
+Qed.
+
+(** *** Windows *)
+
+Fixpoint r_wf (f : swfun T relname) : swfun T relname :=
+  match f with
+  | W_Agg ag sq e fr => W_Agg ag sq (r_e e) fr
+  | W_Lag e n d => W_Lag (r_e e) n (r_e d)
+  | W_Lead e n d => W_Lead (r_e e) n (r_e d)
+  | W_First_Value e fr => W_First_Value (r_e e) fr
+  | W_Last_Value e fr => W_Last_Value (r_e e) fr
+  | W_Nth_Value e n fr => W_Nth_Value (r_e e) n fr
+  | W_Opts f' ign last => W_Opts (r_wf f') ign last
+  | f => f
+  end.
+
+Lemma F2_nth_error : forall (X Y : Type) (P : X -> Y -> Prop) l1 l2, Forall2 P l1 l2 -> forall j,
+  match nth_error l1 j, nth_error l2 j with Some x, Some y => P x y | None, None => True | _, _ => False end.
+Proof.
+intros X Y P l1 l2 H; induction H as [ | x y l1 l2 Hxy H IH]; intros [ | j]; simpl; trivial; apply IH.
+Qed.
+
+Lemma frame_rows_R : forall fr s' s gidx rk i, RL s' s -> RL (frame_rows T fr s' gidx rk i) (frame_rows T fr s gidx rk i).
+Proof.
+intros fr s' s gidx rk i H; unfold frame_rows; rewrite (F2_length _ _ _ _ _ H).
+induction (frame_positions fr (length s) gidx rk i) as [ | j l IH]; [constructor | ]; simpl.
+apply RL_app; [ | exact IH].
+generalize (F2_nth_error _ _ _ _ _ H j); destruct (nth_error s' j); destruct (nth_error s j); intro K; try contradiction;
+  constructor; [exact K | constructor].
+Qed.
+
+Section WSem.
+
+Variables arg' arg : tuple T -> value T.
+Variable a : attribute T.
+Hypothesis Harg : forall t' t, RT t' t -> arg' t' = arg t.
+
+Lemma head_R : forall l' l, RL l' l ->
+  match l' with t' :: _ => arg' t' | nil => null_of T (rho a) end = match l with t :: _ => arg t | nil => null_of T a end.
+Proof. intros l' l H; destruct H; [apply null_of_rho | apply Harg; assumption]. Qed.
+
+Lemma nth_R : forall l' l n, RL l' l ->
+  match nth_error l' n with Some t' => arg' t' | None => null_of T (rho a) end =
+  match nth_error l n with Some t => arg t | None => null_of T a end.
+Proof.
+intros l' l n H; generalize (F2_nth_error _ _ _ _ _ H n); destruct (nth_error l' n); destruct (nth_error l n); intro K;
+  try contradiction; [apply Harg; exact K | apply null_of_rho].
+Qed.
+
+Lemma nth_d_R : forall (d' d : tuple T -> value T) t' t l' l n, RL l' l -> d' t' = d t ->
+  match nth_error l' n with Some x => arg' x | None => d' t' end = match nth_error l n with Some x => arg x | None => d t end.
+Proof.
+intros d' d t' t l' l n H E; generalize (F2_nth_error _ _ _ _ _ H n); destruct (nth_error l' n); destruct (nth_error l n); intro K;
+  try contradiction; [apply Harg; exact K | exact E].
+Qed.
+
+Lemma keep_R : forall (ign : bool) l' l, RL l' l ->
+  RL (if ign then filter (fun t' => negb (is_null O (arg' t'))) l' else l') (if ign then filter (fun t' => negb (is_null O (arg t'))) l else l).
+Proof. intros ign l' l H; destruct ign; [ | exact H]; apply F2_filter; [exact H | intros x y Hxy; rewrite (Harg _ _ Hxy); reflexivity]. Qed.
+
+End WSem.
+
+Lemma wsem_R : forall f (ev1 ev2 : SqlFull.sexpr T relname -> tuple T -> value T),
+  (forall e, In e (wexprs T relname f) -> forall t' t, RT t' t -> ev1 (re e) t' = ev2 e t) ->
+  forall a s' s gidx rk i t' t, RL s' s -> RT t' t ->
+  eval_wsem O (rho a) (wcomp T relname ev1 (r_wf f)) s' gidx rk i t' = eval_wsem O a (wcomp T relname ev2 f) s gidx rk i t.
+Proof.
+intros f ev1 ev2; induction f as [ag sq e fr | | | | k | | | e k d | e k d | e fr | e fr | e k fr | f IHf ign last];
+  intros He att s' s gidx rk i t' t Hs Ht; cbn [r_wf wcomp eval_wsem wexprs] in *;
+  rewrite ?(F2_length _ _ _ _ _ Hs); try reflexivity.
+- rewrite (F2_eq_map _ _ _ RT (ev1 (re e)) (ev2 e) _ _ (frame_rows_R fr s' s gidx rk i Hs)); [reflexivity | ].
+  intros; apply He; [left; reflexivity | assumption].
+- destruct k; [apply null_of_rho | reflexivity].
+- cbv zeta; destruct (if Nat.leb k i then Some (i - k) else None) as [j | ].
+  + apply nth_d_R; [intros; apply He; [left; reflexivity | assumption] | exact Hs | apply He; [right; left; reflexivity | exact Ht]].
+  + apply He; [right; left; reflexivity | exact Ht].
+- cbv zeta; apply nth_d_R; [intros; apply He; [left; reflexivity | assumption] | exact Hs | apply He; [right; left; reflexivity | exact Ht]].
+- apply head_R; [intros; apply He; [left; reflexivity | assumption] | apply frame_rows_R; exact Hs].
+- apply head_R; [intros; apply He; [left; reflexivity | assumption] | apply F2_rev', frame_rows_R; exact Hs].
+- destruct k; [apply null_of_rho | ].
+  apply nth_R; [intros; apply He; [left; reflexivity | assumption] | apply frame_rows_R; exact Hs].
+- destruct f as [ag sq e fr | | | | k | | | e k d | e k d | e fr | e fr | e k fr | f ign0 last0];
+    cbn [r_wf wcomp wexprs] in *; try (apply IHf; assumption).
+  + assert (Ha : forall t' t, RT t' t -> ev1 (re e) t' = ev2 e t) by (intros; apply He; [left; reflexivity | assumption]).
+    destruct k; [apply He; [left; reflexivity | exact Ht] | ]; cbv zeta.
+    apply nth_d_R; [exact Ha | | apply He; [right; left; reflexivity | exact Ht]].
+    apply keep_R; [exact Ha | apply F2_rev', F2_firstn; exact Hs].
+  + assert (Ha : forall t' t, RT t' t -> ev1 (re e) t' = ev2 e t) by (intros; apply He; [left; reflexivity | assumption]).
+    destruct k; [apply He; [left; reflexivity | exact Ht] | ]; cbv zeta.
+    apply nth_d_R; [exact Ha | | apply He; [right; left; reflexivity | exact Ht]].
+    apply keep_R; [exact Ha | apply F2_skipn; exact Hs].
+  + assert (Ha : forall t' t, RT t' t -> ev1 (re e) t' = ev2 e t) by (intros; apply He; [left; reflexivity | assumption]).
+    cbv zeta; apply head_R; [exact Ha | ]; apply keep_R; [exact Ha | ].
+    destruct last; [apply F2_rev' | ]; apply frame_rows_R; exact Hs.
+  + assert (Ha : forall t' t, RT t' t -> ev1 (re e) t' = ev2 e t) by (intros; apply He; [left; reflexivity | assumption]).
+    cbv zeta; apply head_R; [exact Ha | ]; apply keep_R; [exact Ha | ].
+    destruct last; [ | apply F2_rev']; apply frame_rows_R; exact Hs.
+  + assert (Ha : forall t' t, RT t' t -> ev1 (re e) t' = ev2 e t) by (intros; apply He; [left; reflexivity | assumption]).
+    destruct k; [apply null_of_rho | ]; cbv zeta.
+    apply nth_R; [exact Ha | ]; apply keep_R; [exact Ha | ].
+    destruct last; [apply F2_rev' | ]; apply frame_rows_R; exact Hs.
+Qed.
+
+Lemma extend_RT : forall t' t a v, RT t' t -> RT (extend_tuple O t' (rho a) v) (extend_tuple O t a v).
+Proof.
+intros t' t a v H; unfold extend_tuple; apply RT_mk_tuple.
+- apply RS_union; [apply RT_labels; exact H | ].
+  rewrite Fset.equal_spec; intro b; rewrite (Fset.mem_eq_2 _ _ _ (rs_singleton a)); reflexivity.
+- intros x _; rewrite rho_eqb, store_rho, (RT_dot_all _ _ _ H); reflexivity.
+Qed.
+
+Lemma F2_indexed_rec : forall (X Y : Type) (P : X -> Y -> Prop) l1 l2 i, Forall2 P l1 l2 ->
+  Forall2 (fun p q => fst p = fst q /\ P (snd p) (snd q)) (indexed_rec i l1) (indexed_rec i l2).
+Proof. intros X Y P l1 l2 i H; revert i; induction H; intro i; simpl; constructor; [split; trivial | apply IHForall2]. Qed.
+
+Lemma eval_window_R : forall (part' part keys' keys : tuple T -> list (value T)) specs a w' w rows' rows,
+  (forall t' t, RT t' t -> part' t' = part t) -> (forall t' t, RT t' t -> keys' t' = keys t) ->
+  (forall s' s gidx rk i t' t, RL s' s -> RT t' t -> eval_wsem O (rho a) w' s' gidx rk i t' = eval_wsem O a w s gidx rk i t) ->
+  RL rows' rows -> RL (eval_window O part' specs keys' (rho a) w' rows') (eval_window O part specs keys a w rows).
+Proof.
+intros part' part keys' keys specs a w' w rows' rows Hp Hk Hw H; unfold eval_window.
+apply (F2_flat_map _ _ _ _ RL); [apply F2_group_on; assumption | ].
+intros g' g Hg; cbv zeta.
+assert (S := F2_sort_on _ O _ _ _ specs keys' keys g' g Hg Hk).
+rewrite (F2_eq_map _ _ _ _ keys' keys _ _ S Hk).
+apply (F2_map2 _ _ _ _ _ _ _ _ _ _ (F2_indexed_rec _ _ _ _ _ 0 S)).
+intros [i t'] [j t] [E Ht]; simpl in E, Ht; subst j; simpl.
+rewrite (Hw _ _ _ _ _ _ _ S Ht); apply extend_RT; exact Ht.
+Qed.
+
+Notation wfun' := (wfun T relname ORN basesort' instance' O).
+Notation wfun_ := (wfun T relname ORN basesort instance O).
+
+Lemma wfun_R : forall f lp lo a ce' ce env' env rows' rows, RCE ce' ce -> REnv env' env ->
+  LE T relname Ee lp -> LO T relname Ee lo -> LE T relname Ee (wexprs T relname f) -> RL rows' rows ->
+  RL (wfun' ce' env' (W_As (r_wf f) (map re lp) (rlo lo) (rho a)) rows') (wfun_ ce env (W_As f lp lo a) rows).
+Proof.
+intros f lp lo a ce' ce env' env rows' rows Hc He Hp Ho Hf H; unfold wfun; cbv zeta; rewrite spec_re.
+assert (Kp : forall t' t, RT t' t -> map (fun e => ev' ce' (slice_t T relname t' :: env') e) (map re lp) =
+                                     map (fun e => ev ce (slice_t T relname t :: env) e) lp).
+{ intros t' t Ht; rewrite map_map; apply map_ext_in; intros e Ie; apply (Hp e Ie); [exact Hc | apply REnv_t; assumption]. }
+assert (Kk : forall t' t, RT t' t ->
+    map (fun o : sorder T relname => match o with O_By e _ _ => ev' ce' (slice_t T relname t' :: env') e end) (rlo lo) =
+    map (fun o : sorder T relname => match o with O_By e _ _ => ev ce (slice_t T relname t :: env) e end) lo).
+{ intros t' t Ht; rewrite map_map; apply map_ext_in; intros [e d n] Ie; apply (Ho e d n Ie); [exact Hc | apply REnv_t; assumption]. }
+apply eval_window_R; trivial.
+- intros; apply wsem_R; trivial.
+  intros e Ie x' x Hx; apply (Hf e Ie); [exact Hc | apply REnv_t; assumption].
+- apply (F2_map2 _ _ _ _ _ _ _ _ _ _ H); intros t' t Ht; rewrite (Kp _ _ Ht), (Kk _ _ Ht).
+  destruct (existsb _ _); [apply err_row_RT | ]; exact Ht.
+Qed.
+
+Lemma q_window : forall q lw, Eqr q ->
+  (forall f lp lo a, In (W_As f lp lo a) lw -> LE T relname Ee lp /\ LO T relname Ee lo /\ LE T relname Ee (wexprs T relname f)) ->
+  Eqr (SQ_Window q lw).
+Proof.
+intros q lw Hq Hw ce' ce env' env Hc He; cbn [r_q]; fold r_q r_e.
+rewrite !eval_windows.
+apply (F2_fold_left _ _ _ _ RL (fun w' w => forall r' r, RL r' r -> RL (w' r') (w r))); [ | apply Hq; assumption | intros; auto].
+rewrite map_map; apply F2_map; intros [f lp lo a] Hin r' r Hr.
+destruct (Hw f lp lo a Hin) as [Hp [Ho Hf]].
+exact (wfun_R f lp lo a ce' ce env' env r' r Hc He Hp Ho Hf Hr).
+Qed.
+
+(** *** WITH *)
+
+Lemma q_with : forall r q1 q2, Eqr q1 -> Eqr q2 -> Eqr (SQ_With r q1 q2).
+Proof.
+open_e; intros r q1 q2 IH1 IH2 ce' ce env' env Hc He; unf.
+apply IH2; [ | exact He].
+apply RCE_cons; [exact Hc | apply sort_rename, RCE_Rsort; exact Hc | apply IH1; assumption].
+Qed.
+
+Lemma rec_loop_R : forall (step' step : list (tuple T) -> list (tuple T)) d sa' sa,
+  (forall w' w, RL w' w -> RL (step' w') (step w)) -> sa' =S= rs sa ->
+  forall n acc' acc work' work, RL acc' acc -> RL work' work ->
+  RL (rec_loop O step' d sa' n acc' work') (rec_loop O step d sa n acc work).
+Proof.
+intros step' step d sa' sa Hstep Hs n; induction n as [ | n IH]; intros acc' acc work' work Ha Hw; simpl.
+- destruct Hw; [exact Ha | ].
+  apply RL_app; [exact Ha | constructor; [apply err_row_RT, null_tuple_RT; exact Hs | constructor]].
+- destruct Hw as [ | x' x w' w Hx Hw]; [exact Ha | ].
+  assert (K : RL (x' :: w') (x :: w)) by (constructor; assumption).
+  assert (N : RL (if d then eval_set_op O Diff Set_Distinct (step' (x' :: w')) acc' else step' (x' :: w'))
+                 (if d then eval_set_op O Diff Set_Distinct (step (x :: w)) acc else step (x :: w)))
+    by (destruct d; [apply set_op_R; [apply Hstep; exact K | exact Ha] | apply Hstep; exact K]).
+  apply IH; [apply RL_app; assumption | exact N].
+Qed.
+
+Lemma q_withrec : forall sq r q1 q2 q3, Eqr q1 -> Eqr q2 -> Eqr q3 -> Eqr (SQ_WithRec sq r q1 q2 q3).
+Proof.
+open_e; intros sq r q1 q2 q3 IH1 IH2 IH3 ce' ce env' env Hc He; unf; cbv zeta.
+assert (R0 := RCE_Rsort _ _ Hc); assert (S1 := sort_rename q1 ce' ce R0).
+assert (B : RL (if is_distinct sq then eval_set_op O Union Set_Distinct (eq' ce' env' (rq q1)) nil else eq' ce' env' (rq q1))
+               (if is_distinct sq then eval_set_op O Union Set_Distinct (eq_ ce env q1) nil else eq_ ce env q1)).
+{ destruct (is_distinct sq); [apply set_op_R; [apply IH1; assumption | constructor] | apply IH1; assumption]. }
+apply IH3; [ | exact He].
+apply RCE_cons; [exact Hc | exact S1 | ].
+apply rec_loop_R; trivial.
+intros w' w Hw; apply IH2; [apply RCE_cons; assumption | exact He].
 Qed.
 End Sec.
