@@ -13,7 +13,10 @@ options.
 
 ## I1. Two deviations from SQL in the core semantics of `Sql.v`
 
-**Status: the multi-column `IN` is fixed; the empty-table aggregate is open.**
+**Status: `IN` is fixed (and compared by position since A7, TODO 6.1); the empty-table aggregate is documented, not
+changed in `Sql.v` (A4 in `docs/SQL_COVERAGE.md`).** `SqlFull.v` returns the one row of SQL, and is the reference
+semantics (option 2 below); the theorems which relate the two (`sql_full_agree3`) cover the grouped blocks with at
+least one grouping term.
 
 - **Fixed**: `(a, b) [NOT] IN (subquery)` is now compared component-wise
   (`in_match` in `src/logic/Formula.v`): the result is the conjunction of the
@@ -48,7 +51,12 @@ evaluator of `Sql.v` returns the empty tuple.
 
 ## I2. No theorem relates `SqlFull.v` to the existing results
 
-**Current state**: `SqlFull.v` is a new syntax and executable semantics. Its
+**Status: resolved (TODO 6.1).** `src/data/sql/SqlRelate.v`, `SqlRelateSelect.v`, `SqlRelateAlg.v`: the queries of
+`Sql.v` (tables, set operations, selections, grouped blocks, subqueries in formulas) translate to `SqlFull.v` with
+the same bag (`sql_full_agree3`), which is also the bag of the relational algebra (`sql_full_alg3`). Not done, and
+not planned: an algebra for outer joins, ordering and windows; merging `SqlExt.v` into `SqlFull.v`.
+
+**Former state**: `SqlFull.v` is a new syntax and executable semantics. Its
 correctness currently rests on about 130 examples checked by computation
 (`Test_SqlFull.v`, `Test_Audit.v`) and on the properties of
 `SqlFullFacts.v`. Its relation to `Sql.v` and to the relational algebra is
@@ -93,7 +101,11 @@ and state the theorems for the queries which satisfy it.
 
 ## I4. Named tuples vs. the positional semantics of SQL
 
-**Current state**: a tuple is a finite map from attribute names to values.
+**Status: resolved as decided in I10 (TODO 6.3).** The tuples stay named; the front end names the columns by
+position (`src/data/sql/SqlPositional.v`, `src/data/dialects/Positional.v`), and `eval_rename`
+(`src/data/sql/SqlRename.v`) proves that the evaluation does not depend on the names.
+
+**Former state**: a tuple is a finite map from attribute names to values.
 Consequently:
 - set operations require the same attribute names on both sides (SQL matches
   columns by position);
@@ -109,7 +121,11 @@ form, together with a statement of its correctness.
 
 ## I5. No static typing, no well-formedness check
 
-**Current state**: queries have no type system. A comparison between values
+**Status: resolved (TODO 6.2).** Well-formedness (`SqlWellFormed.v`), the sorts of the results (`SqlSorts.v`),
+scoping (`SqlScoping.v`, `SqlScopeQuery.v`) and static types per dialect (`Typing.v`, `TypeOf.v`). The block of an
+aggregate is the innermost block which binds one of its columns, in `SqlFull.v` and, since A8, in `Sql.v`.
+
+**Former state**: queries have no type system. A comparison between values
 of different types is UNKNOWN, arithmetic over a non-number is NULL, and a
 non-grouped column in the `SELECT` of a grouped query takes its value from the
 first row of the group. NULLs are typed (`Value_Z None` and
@@ -132,7 +148,12 @@ source code of OceanBase, and from results recorded by real engines (`docs/DIALE
 `docs/CONFORMANCE.md`): 545 OceanBase queries (7 known deviations), and 9600 `random/expr`
 queries of sqllogictest per dialect with no failure.
 
-Still open:
+Since then: the decimal scale (TODO 1.2.1), floating-point numbers and integer ranges (1.2.2, 1.2.3), dates and
+times, JSON, regular expressions (1.5, 1.6, 2.4), `ORDER BY` inside aggregates (2.6, `E_AggX`) and the functional
+dependencies of declared keys (`group_covered`, 6.2) are modelled. Still open: the value of a bare column in SQLite
+(an arbitrary row of the group, TODO 3.10), and Oracle mode has no recorded results of an engine.
+
+Former list of what was open:
 - **Decimal scale**: a decimal keeps the number of decimals of its literal (`length(0.00)` is 4).
   `Value_Q` is a rational and forgets it; a value which carries its scale would also fix the
   display of `4/3` and the type of `sum` and `avg`.
@@ -152,6 +173,9 @@ Still open:
 
 ## I7. SQL features which are not covered
 
+**Status: every item of this list is done** (the last ones by TODO 1.3 collations, 1.5 dates and times, 1.2.2
+floating point, 2.6 ordered-set aggregates and `ORDER BY` inside aggregates).
+
 In the expected order of difficulty; priorities are to be decided:
 - (done) recursive CTEs: `SQ_WithRec` iterates the step on the working table (`UNION ALL` appends, `UNION` keeps only new rows and stops on a fixpoint); the number of steps is bounded by `rec_fuel` (1000, as MySQL's `cte_max_recursion_depth`), so a non-terminating recursion returns the rows of the first 1000 steps instead of an error; mutual and multiple recursion are not modelled;
 - (done) `GROUPING SETS` / `ROLLUP` / `CUBE` / `GROUPING()`: grouping expressions that a set does not group read as NULL;
@@ -163,21 +187,19 @@ In the expected order of difficulty; priorities are to be decided:
 
 ## I8. Build and repository maintenance
 
-**Status: resolved, except for `FreshAttr.v`.**
+**Status: resolved.**
 
 - Resolved: `make` at the top level now generates `src/Makefile` from
   `src/_CoqProject`; the generated `src/CoqMakeFile*` are no longer tracked.
 - Resolved: the opam file requires Coq 8.15, as the README says.
 - Resolved: a GitHub Actions workflow builds the library and checks the
   examples on every push to `main` and on every pull request.
-- Open: `src/data/proof_of_concept/FreshAttr.v` contains an `Admitted`
-  (`fresh_attr_is_fresh`) and is not in `_CoqProject`. Proving it needs the
-  injectivity of the decimal printing of natural numbers and a pigeonhole
-  argument; nothing in the build depends on it.
+- Resolved (TODO 6.5): `fresh_attr_is_fresh` is proved and `src/data/proof_of_concept/FreshAttr.v` is in
+  `_CoqProject`. The only `Admitted` left is in a scratch file kept out of the build (`src/testing/legacy/`).
 
 ## D1. Scope of further engines (TODO 4.11): decision needed from the maintainers
 
-Status: **awaiting a decision**. No work on these engines starts before it is answered.
+Status: **decided** (by the maintainer's standing instruction to follow the recommendations without further questions): DuckDB first, then CockroachDB; ClickHouse, Snowflake and BigQuery stay out of scope; Oracle Database and SQL Server are deferred. Tracked as TODO 8.7.
 
 | Engine | Source open? | Distance from the current dialects | Cost of a dialect | Recommendation |
 |---|---|---|---|---|

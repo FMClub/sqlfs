@@ -651,3 +651,28 @@ For each dialect, a closeout is: the engine's SQL reference read end to end for 
 5. Phase 6 (6.1–6.7) once the value model is stable; Phase 7 throughout.
 
 Stop condition: every item of `docs/CHECKLIST.md` is `[x]` or is marked out of scope with a reason accepted by the user, and each dialect's conformance table in `docs/CONFORMANCE.md` has no unexplained failure.
+
+## Phase 8 — Audit backlog
+
+Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item says which iteration found it.
+
+- **8.1 Tracked build products** (iteration 2): two `__pycache__/*.pyc` files were tracked although `.gitignore`
+  excludes them. **Status: DONE** (removed from the index).
+- **8.2 Legacy files outside the build** (iteration 2): `Pokus2_Radim.v` (with an `Admitted`), `Test_NaturalJoin.v`
+  and `Test_SqlExt.v` were in `src/testing` without being in `_CoqProject`. **Status: DONE** (moved to
+  `src/testing/legacy/` with a README; they still compile).
+- **8.3 Stale statuses in `docs/OPEN_ISSUES.md`** (iteration 2): I1, I2, I4, I5, I6, I7 and I8 described work as open
+  which TODO 1.x, 2.x, 6.1, 6.2, 6.3 and 6.5 have done. **Status: DONE** (each entry has its current status and keeps
+  its former text).
+- **8.4 README** (iteration 2): it describes the state before the dialects, the conformance harness, the tools and
+  the theorems of Phase 6. Rewrite it with a map of the repository, the main results and the checks to run.
+- **8.5 `eval_rename` is not instantiated** (iteration 2): no concrete renaming shows that its hypotheses can be
+  met (an order-preserving bijection which is not the identity, `Hdot` for the tuples of the instance), and it is
+  stated for the list of rows only: add an instance checked by computation, and the corollaries for
+  `eval_query_result` (the same failure) and for the bags.
+- **8.6 `docs/TODO.md` statuses are single paragraphs** (iteration 2): the status of 6.1, 6.2, 6.4 is one paragraph
+  of several thousand characters each. Restructure them as lists, without changing their content.
+- **8.7 Further engines** (D1, decided in iteration 2): a DuckDB dialect, then CockroachDB.
+- **8.8 Old `TODO` comments** (iteration 2): `SqlExt.v` ignores the join type of a `Join_Item` (line 214);
+  `SqlAlgebraExt.v` duplicates `sql_formula_to_alg` (line 133). Fix or document each.
+
