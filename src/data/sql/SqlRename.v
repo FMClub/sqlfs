@@ -2,10 +2,20 @@
 
     The evaluation of [SqlFull.v] does not depend on the names of the attributes: for a bijection [rho] of
     the attributes which preserves their order, their types and their affinities, and fixes the attribute of
-    the failed rows, the rows of the renamed query over the renamed database are the renamed rows of the query
-    ([eval_rename]). The front end names the columns of each item of a [FROM] clause and of each derived table
-    by their positions, so that the named semantics of [SqlFull.v] is a positional semantics in which two
-    columns never share a name; this theorem says that the choice of the names does not matter. *)
+    the failed rows, the rows of the renamed query over the renamed database are the renamed rows of the query,
+    in the same order ([eval_rename]), for the whole syntax. The front end names the columns of each item of a
+    [FROM] clause and of each derived table by their positions, so that the named semantics of [SqlFull.v] is a
+    positional semantics in which two columns never share a name; this theorem says that the choice of the names
+    does not matter.
+    - The tuples: [rt], the renamed tuple; [RT t' t], [t'] is [rt t] up to the equality of tuples; [RL], lists of
+      related tuples. [Hdot]: a missing attribute of a tuple has the default value of its type.
+    - The syntax: [r_q] renames every attribute of a query.
+    - The static functions commute with the renaming: the sorts ([sort_rename]), the columns read from outside
+      ([cols_q]), the placement of the aggregates ([foreign_q], [has_agg_e]), the equality of expressions
+      ([eqb_rename]).
+    - The evaluation: related environments ([REnv], [RCE]) give equal values to the expressions and the
+      conditions and related rows to the queries, by the induction principle of [SqlInduction.v], with one
+      lemma for each operation on rows (set operations, joins, sorting, grouping, windows, [WITH RECURSIVE]). *)
 Require Import List Bool Sorting ZArith NArith QArith.
 Require Import BasicFacts ListFacts OrderedSet FiniteSet FiniteBag FiniteCollection FlatData SqlFull SqlInduction
         SqlFullFacts SqlGroupFacts SqlCongruence SqlScopeQuery Bool3 Formula.
@@ -1032,8 +1042,6 @@ intros cols env' env H; unfold agg_env; assert (K := agg_env_rec_R cols env' env
 destruct K; [exact H | constructor; assumption].
 Qed.
 
-Lemma first_error_eq : forall l, first_error O l = first_error O l.
-Proof. reflexivity. Qed.
 
 
 (** ** Expressions and conditions *)
@@ -1571,4 +1579,335 @@ apply RCE_cons; [exact Hc | exact S1 | ].
 apply rec_loop_R; trivial.
 intros w' w Hw; apply IH2; [apply RCE_cons; assumption | exact He].
 Qed.
+
+(** ** FROM *)
+
+Lemma rename_RT : forall r t' t, RT t' t -> RT (SqlFull.rename_tuple O (r_ren r) t') (SqlFull.rename_tuple O r t).
+Proof.
+intros [ | l] t' t H; [exact H | ]; unfold SqlFull.rename_tuple, r_ren; apply RT_mk_tuple.
+- rewrite Fset.equal_spec; intro b; rewrite (Fset.mem_eq_2 _ _ _ (rs_mk_set _)), !map_map; reflexivity.
+- intros b _; induction l as [ | [x y] l IH]; simpl; [apply null_of_rho | ].
+  rewrite rho_eqb; destruct (Oset.eq_bool (OAtt T) b y); [rewrite store_rho, (RT_dot_all _ _ _ H); reflexivity | exact IH].
+Qed.
+
+Lemma fr_query : forall q r, Eqr q -> Ef (Fr_Query q r).
+Proof.
+open_e; intros q r IH ce' ce env' env Hc He; unf.
+apply (F2_map2 _ _ _ _ _ RT); [apply IH; assumption | ].
+intros t' t Ht; cbv zeta; assert (K := rename_RT r _ _ Ht).
+rewrite (row_error_RT _ _ Ht), (row_error_RT _ _ K); destruct (_ && _); [apply err_row_RT | ]; exact K.
+Qed.
+
+Lemma nil_or_R : forall l' l x' x, RL l' l -> RL x' x ->
+  RL (match l' with nil => x' | t :: l0 => t :: l0 end) (match l with nil => x | t :: l0 => t :: l0 end).
+Proof. intros l' l x' x H K; destruct H; [exact K | constructor; assumption]. Qed.
+
+Lemma join_R : forall jt s1' s1 s2' s2 l1' l1 (right' right : tuple T -> list (tuple T)) l2' l2 (on' on : tuple T -> bool)
+  (mark' mark : tuple T -> tuple T),
+  s1' =S= rs s1 -> s2' =S= rs s2 -> RL l1' l1 -> (forall t' t, RT t' t -> RL (right' t') (right t)) -> RL l2' l2 ->
+  (forall t' t, RT t' t -> on' t' = on t) -> (forall t' t, RT t' t -> RT (mark' t') (mark t)) ->
+  RL (eval_join T jt s1' s2' l1' right' l2' on' mark') (eval_join T jt s1 s2 l1 right l2 on mark).
+Proof.
+intros jt s1' s1 s2' s2 l1' l1 right' right l2' l2 on' on mark' mark S1 S2 H1 Hr H2 Hon Hm; unfold eval_join; cbv zeta.
+assert (M : forall t' t, RT t' t -> RL (map mark' (filter on' (map (join_tuple T t') (right' t'))))
+                                       (map mark (filter on (map (join_tuple T t) (right t))))).
+{ intros t' t Ht; apply (F2_map2 _ _ _ _ _ RT); [ | exact Hm]; apply F2_filter; [ | exact Hon].
+  apply (F2_map2 _ _ _ _ _ RT); [apply Hr; exact Ht | intros; apply RT_join; assumption]. }
+assert (I : RL (flat_map (fun t1 => map mark' (filter on' (map (join_tuple T t1) (right' t1)))) l1')
+               (flat_map (fun t1 => map mark (filter on (map (join_tuple T t1) (right t1)))) l1))
+  by (apply (F2_flat_map _ _ _ _ RT); assumption).
+assert (L : RL (flat_map (fun t1 => match map mark' (filter on' (map (join_tuple T t1) (right' t1))) with
+                                    | nil => join_tuple T t1 (null_tuple T s2') :: nil | l => l end) l1')
+               (flat_map (fun t1 => match map mark (filter on (map (join_tuple T t1) (right t1))) with
+                                    | nil => join_tuple T t1 (null_tuple T s2) :: nil | l => l end) l1)).
+{ apply (F2_flat_map _ _ _ _ RT); [exact H1 | intros t' t Ht].
+  apply nil_or_R; [apply M; exact Ht | constructor; [apply RT_join; [exact Ht | apply null_tuple_RT; exact S2] | constructor]]. }
+assert (P : RL (map (fun t2 => join_tuple T (null_tuple T s1') t2)
+                    (filter (fun t2 => negb (existsb (fun t1 => on' (join_tuple T t1 t2)) l1')) l2'))
+               (map (fun t2 => join_tuple T (null_tuple T s1) t2)
+                    (filter (fun t2 => negb (existsb (fun t1 => on (join_tuple T t1 t2)) l1)) l2))).
+{ apply (F2_map2 _ _ _ _ _ RT); [ | intros; apply RT_join; [apply null_tuple_RT; exact S1 | assumption]].
+  apply F2_filter; [exact H2 | intros x y Hxy; f_equal].
+  apply (F2_existsb _ _ RT); [exact H1 | intros a b Hab; apply Hon, RT_join; assumption]. }
+destruct jt; trivial; apply RL_app; assumption.
+Qed.
+
+Lemma fr_join : forall jt lat f1 f2 c, Ef f1 -> Ef f2 -> Ec c -> Ef (Fr_Join jt lat f1 f2 c).
+Proof.
+open_e; intros jt lat f1 f2 c IH1 IH2 IH ce' ce env' env Hc He; prep; unf; cbv zeta.
+assert (R0 := RCE_Rsort _ _ Hc).
+assert (K1 := IH1 ce' ce env' env Hc He); assert (K2 := IH2 ce' ce env' env Hc He).
+assert (E : lat || existsb (row_error O) (ef' ce' env' (rf f1) ++ ef' ce' env' (rf f2)) =
+            lat || existsb (row_error O) (ef ce env f1 ++ ef ce env f2))
+  by (f_equal; apply (F2_existsb _ _ RT); [apply RL_app; assumption | apply row_error_RT]).
+rewrite E.
+match goal with |- RL (if ?b then keep_errors O ?j' _ else _) (if _ then keep_errors O ?j _ else _) => assert (J : RL j' j) end.
+- apply join_R; trivial; try (apply sort_rename_f; exact R0).
+  + intros t' t Ht; destruct lat; [apply IH2; [exact Hc | apply REnv_t; assumption] | exact K2].
+  + intros t' t Ht; rewrite (row_error_RT _ _ Ht), (IHr ce' ce _ _ Hc (REnv_t _ _ _ _ Ht He)), (IHc ce' ce _ _ Hc (REnv_t _ _ _ _ Ht He)).
+    reflexivity.
+  + intros t' t Ht; rewrite (IHr ce' ce _ _ Hc (REnv_t _ _ _ _ Ht He)); destruct (er _ _ _); [apply err_row_RT | ]; exact Ht.
+- clear E; remember (lat || existsb (row_error O) (ef ce env f1 ++ ef ce env f2)) as b; destruct b;
+    [apply keep_errors_R; [exact J | apply RL_app; assumption] | exact J].
+Qed.
+
+Lemma frow_RT : forall atts l,
+  RT (mk_tuple T (Fset.mk_set (A T) (map rho atts))
+        (fun a => match find (fun p : attribute T * value T => Oset.eq_bool (OAtt T) (fst p) a) (combine (map rho atts) l) with
+                  | Some (_, v) => v | None => null_of T a end))
+     (mk_tuple T (Fset.mk_set (A T) atts)
+        (fun a => match find (fun p : attribute T * value T => Oset.eq_bool (OAtt T) (fst p) a) (combine atts l) with
+                  | Some (_, v) => v | None => null_of T a end)).
+Proof.
+intros atts l; apply RT_mk_tuple.
+- rewrite Fset.equal_spec; intro b; rewrite (Fset.mem_eq_2 _ _ _ (rs_mk_set _)); reflexivity.
+- intros a _; revert l; induction atts as [ | b atts IH]; intros [ | v l]; simpl; try apply null_of_rho.
+  rewrite rho_eqb; destruct (Oset.eq_bool (OAtt T) b a); [reflexivity | apply IH].
+Qed.
+
+Lemma fr_fun : forall name args ord atts, LE T relname Ee args -> Ef (Fr_Fun name args ord atts).
+Proof.
+open_e; intros name args ord atts IH ce' ce env' env Hc He; unf; cbv zeta.
+assert (M : map (ev' ce' env') (map re args) = map (ev ce env) args) by rcong.
+assert (C : forall v : value T, map (fun _ : attribute T => v) (map rho atts) = map (fun _ : attribute T => v) atts)
+  by (intro v; rewrite map_map; reflexivity).
+rewrite M.
+destruct (first_error O (map (ev ce env) args)) as [e | ].
+- rewrite C; constructor; [apply err_row_RT, frow_RT | constructor].
+- destruct (table_fun O name) as [f | ]; [ | rewrite C; constructor; [apply err_row_RT, frow_RT | constructor]].
+  apply F2_map; intros [i l] _; apply frow_RT.
+Qed.
+
+(** ** SELECT blocks *)
+
+Definition r_g (g : sgroup T relname) : sgroup T relname :=
+  match g with
+  | G_Fine _ _ => G_Fine T relname
+  | G_By l => G_By (map r_e l)
+  | G_Sets ss => G_Sets (map (map r_e) ss)
+  | G_Rollup l => G_Rollup (map r_e l)
+  | G_Cube l => G_Cube (map r_e l)
+  end.
+
+Definition r_sel (s : sselect T relname) : sselect T relname :=
+  match s with
+  | S_Star _ _ => S_Star T relname
+  | S_List l => S_List (map (fun it => match it with S_As e a => S_As (r_e e) (rho a) end) l)
+  end.
+
+Lemma from_sort_R : forall lf ce' ce, Rsort ce' ce ->
+  Fset.Union (A T) (map (sfrom_sort ORN basesort' ce') (map rf lf)) =S= rs (Fset.Union (A T) (map (sfrom_sort ORN basesort ce) lf)).
+Proof.
+intros lf ce' ce R0; rewrite (Fset.equal_eq_2 _ _ _ _ (rs_Union _)), map_map, map_map; apply Union_eq_F2.
+apply F2_map; intros f _; apply sort_rename_f; exact R0.
+Qed.
+
+Lemma where_R : forall lf w ce' ce env' env, RCE ce' ce -> REnv env' env -> (forall f, In f lf -> Ef f) -> Ec w ->
+  RL (where_rows ORN O basesort' instance' ce' env' (map rf lf) (rc w)) (where_rows ORN O basesort instance ce env lf w).
+Proof.
+intros lf w ce' ce env' env Hc He Hf Hw; unfold where_rows; cbv zeta.
+apply (F2_flat_map _ _ _ _ RT).
+- apply (F2_fold_left _ _ _ _ RL RL).
+  + rewrite map_map; apply F2_map; intros f If; apply (Hf f If); assumption.
+  + constructor; [apply RT_empty | constructor].
+  + intros a1 a2 x1 x2 Ha Hx; apply keep_errors_R; [ | apply RL_app; assumption].
+    unfold cross_product; apply (F2_flat_map _ _ _ _ RT); [exact Ha | intros t' t Ht].
+    apply (F2_map2 _ _ _ _ _ RT); [exact Hx | intros; apply RT_join; assumption].
+- intros t' t Ht; destruct (Hw ce' ce _ _ Hc (REnv_t _ _ _ _ Ht He)) as [E1 E2].
+  rewrite (row_error_RT _ _ Ht), E1, E2; destruct (_ || _); [constructor; [apply err_row_RT; exact Ht | constructor] | ].
+  destruct (is_true3 T _); constructor; [exact Ht | constructor].
+Qed.
+
+Definition gE (g : sgroup T relname) : Prop :=
+  match g with
+  | G_Fine _ _ => True
+  | G_By l | G_Rollup l | G_Cube l => LE T relname Ee l
+  | G_Sets ss => forall l, In l ss -> LE T relname Ee l
+  end.
+
+Lemma gk_R : forall g ce' ce env' env t' t, gE g -> RCE ce' ce -> REnv env' env -> RT t' t ->
+  gkeys_of ORN O basesort' instance' ce' env' (r_g g) t' = gkeys_of ORN O basesort instance ce env g t /\
+  row_vals_of ORN O basesort' instance' ce' env' (r_g g) t' = row_vals_of ORN O basesort instance ce env g t.
+Proof.
+intros g ce' ce env' env t' t Hg Hc He Ht; assert (E := REnv_t _ _ _ _ Ht He).
+assert (M : forall l, LE T relname Ee l ->
+   map (ev' ce' (slice_t T relname t' :: env')) (map re l) = map (ev ce (slice_t T relname t :: env)) l)
+  by (intros l Hl; rewrite map_map; apply map_ext_in; intros y Hy; apply (Hl y Hy); assumption).
+destruct g as [ | l | ss | l | l]; simpl in Hg; unfold gkeys_of, row_vals_of, r_g; try (split; trivial; apply M; exact Hg).
+assert (G : (fix go (ss : list (list (SqlFull.sexpr T relname))) : list (value T) :=
+               match ss with nil => nil | l :: r => map (ev' ce' (slice_t T relname t' :: env')) l ++ go r end) (map (map re) ss) =
+            (fix go (ss : list (list (SqlFull.sexpr T relname))) : list (value T) :=
+               match ss with nil => nil | l :: r => map (ev ce (slice_t T relname t :: env)) l ++ go r end) ss).
+{ induction ss as [ | l0 ss IH]; [reflexivity | ]; cbn [map]; f_equal;
+    [apply M; apply Hg; left; reflexivity | apply IH; intros l1 Hl1; apply Hg; right; exact Hl1]. }
+split; exact G.
+Qed.
+
+Lemma implicit_R : forall ce' ce sa' sa s h ex, Rsort ce' ce -> sa' =S= rs sa ->
+  implicit_group ORN basesort' ce' sa' (r_sel s) (rc h) (map re ex) = implicit_group ORN basesort ce sa s h ex.
+Proof.
+intros ce' ce sa' sa s h ex R0 Hs; unfold implicit_group.
+rewrite (has_agg_c h ce' ce sa' sa R0 Hs); f_equal; [f_equal | ].
+- destruct s as [ | l]; [reflexivity | ]; simpl; rewrite existsb_map'; apply existsb_ext'; intros [e a].
+  apply has_agg_e; assumption.
+- rewrite existsb_map'; apply existsb_ext'; intro e; apply has_agg_e; assumption.
+Qed.
+
+Lemma filter_map_re : forall (p' p : SqlFull.sexpr T relname -> bool) l, (forall x, p' (re x) = p x) ->
+  filter p' (map re l) = map re (filter p l).
+Proof. intros p' p l H; induction l as [ | x l IH]; simpl; [reflexivity | rewrite H; destruct (p x); simpl; rewrite IH; reflexivity]. Qed.
+
+Lemma sdedup_re : forall l seen, sdedup (map re seen) (map re l) = map re (sdedup seen l).
+Proof.
+intro l; induction l as [ | e l IH]; intro seen; simpl; [reflexivity | ].
+rewrite existsb_eqb_re; destruct (existsb (sexpr_eqb e) seen); [apply IH | ].
+simpl; f_equal; exact (IH (e :: seen)).
+Qed.
+
+Lemma F2_flat_map_same : forall (X X' Y' : Type) (Q : X' -> Y' -> Prop) (f : X -> list X') (g : X -> list Y') l,
+  (forall x, In x l -> Forall2 Q (f x) (g x)) -> Forall2 Q (flat_map f l) (flat_map g l).
+Proof.
+intros X X' Y' Q f g l H; induction l as [ | x l IH]; simpl; [constructor | ].
+apply Forall2_app; [apply H; left; reflexivity | apply IH; intros; apply H; right; assumption].
+Qed.
+
+(** the groups, with the grouping expressions which they hide *)
+Definition RG (p' p : list (tuple T) * list (SqlFull.sexpr T relname)) := RL (fst p') (fst p) /\ snd p' = map re (snd p).
+
+Lemma set_groupings_R : forall (rv' rv : tuple T -> list (value T)) univ positions rows' rows,
+  (forall t' t, RT t' t -> rv' t' = rv t) -> RL rows' rows ->
+  Forall2 RG (set_groupings O rv' (map re univ) positions rows') (set_groupings O rv univ positions rows).
+Proof.
+intros rv' rv univ positions rows' rows Hrv H; unfold set_groupings.
+apply F2_flat_map_same; intros pos _; cbv zeta.
+assert (S : map (fun i => nth i (map re univ) (E_Const T relname (null O))) pos =
+            map re (map (fun i => nth i univ (E_Const T relname (null O))) pos)).
+{ rewrite map_map; apply map_ext; intro i.
+  change (E_Const T relname (null O)) with (re (E_Const T relname (null O))) at 1; apply map_nth. }
+rewrite S.
+rewrite (filter_map_re _ (fun e => negb (existsb (sexpr_eqb e) (map (fun i => nth i univ (E_Const T relname (null O))) pos))))
+  by (intro x; rewrite existsb_eqb_re; reflexivity).
+rewrite (sdedup_re _ nil).
+apply (F2_map2 _ _ _ _ _ RL); [ | intros x y Hxy; split; [exact Hxy | reflexivity]].
+destruct pos as [ | i pos]; [constructor; [exact H | constructor] | ].
+apply F2_group_on; [exact H | intros x y Hxy; rewrite (Hrv _ _ Hxy); reflexivity].
+Qed.
+
+Lemma grouping_R' : forall g (gk' gk rv' rv : tuple T -> list (value T)) imp rows' rows,
+  (forall t' t, RT t' t -> gk' t' = gk t) -> (forall t' t, RT t' t -> rv' t' = rv t) -> RL rows' rows ->
+  Forall2 RG (grouping_part O (r_g g) gk' rv' imp rows') (grouping_part O g gk rv imp rows).
+Proof.
+intros g gk' gk rv' rv imp rows' rows Hgk Hrv H; unfold grouping_part; cbv zeta.
+assert (K : RL (map (fun t => if existsb (is_error O) (gk' t) then err_row O t else t) rows')
+               (map (fun t => if existsb (is_error O) (gk t) then err_row O t else t) rows)).
+{ apply (F2_map2 _ _ _ _ _ _ _ _ _ _ H); intros t' t Ht; rewrite (Hgk _ _ Ht); destruct (existsb _ _); [apply err_row_RT | ]; exact Ht. }
+assert (N : forall (l' l : list (list (tuple T))), Forall2 RL l' l ->
+  Forall2 RG (map (fun grp => (grp, @nil (SqlFull.sexpr T relname))) l') (map (fun grp => (grp, @nil (SqlFull.sexpr T relname))) l))
+  by (intros l' l Hl; apply (F2_map2 _ _ _ _ _ _ _ _ _ _ Hl); intros x y Hxy; split; [exact Hxy | reflexivity]).
+destruct g as [ | l | ss | l | l]; cbn [r_g].
+- apply N; destruct imp; [constructor; [exact K | constructor] | ].
+  apply (F2_map2 _ _ _ _ _ _ _ _ _ _ K); intros; constructor; [assumption | constructor].
+- apply N; destruct l as [ | e l]; [constructor; [exact K | constructor] | ].
+  apply F2_group_on; [exact K | exact Hgk].
+- rewrite <- concat_map.
+  replace ((fix go (off : nat) (ss0 : list (list (SqlFull.sexpr T relname))) : list (list nat) :=
+              match ss0 with nil => nil | l :: r => seq off (length l) :: go (off + length l)%nat r end) 0%nat (map (map re) ss))
+    with ((fix go (off : nat) (ss0 : list (list (SqlFull.sexpr T relname))) : list (list nat) :=
+              match ss0 with nil => nil | l :: r => seq off (length l) :: go (off + length l)%nat r end) 0%nat ss).
+  + apply set_groupings_R; assumption.
+  + generalize 0%nat; induction ss as [ | l ss IH]; intro off; [reflexivity | ]; cbn [map]; rewrite map_length; f_equal; apply IH.
+- rewrite map_length; apply set_groupings_R; assumption.
+- rewrite map_length; apply set_groupings_R; assumption.
+Qed.
+
+Lemma mk_row_RT : forall l : list (attribute T * value T), RT (mk_row O (map (fun p => (rho (fst p), snd p)) l)) (mk_row O l).
+Proof.
+intro l; unfold mk_row; apply RT_mk_tuple.
+- rewrite Fset.equal_spec; intro b; rewrite (Fset.mem_eq_2 _ _ _ (rs_mk_set _)), !map_map; reflexivity.
+- intros a _; induction l as [ | [b v] l IH]; simpl; [apply null_of_rho | ].
+  rewrite rho_eqb; destruct (Oset.eq_bool (OAtt T) a b); [apply store_rho | exact IH].
+Qed.
+
+Definition sE (s : sselect T relname) : Prop :=
+  match s with S_Star _ _ => True | S_List l => forall e a, In (S_As e a) l -> Ee e end.
+
+Lemma group_error_R : forall ge' ge, REnv ge' ge ->
+  match ge' with (_, gr, _) :: _ => existsb (row_error O) gr | nil => false end =
+  match ge with (_, gr, _) :: _ => existsb (row_error O) gr | nil => false end.
+Proof.
+intros ge' ge H; destruct H as [ | [[sa' g'] h'] [[sa g] h] X Y [_ [S2 _]] _]; [reflexivity | ].
+apply (F2_existsb _ _ RT); [exact S2 | apply row_error_RT].
+Qed.
+
+Lemma select_rest_R : forall s h sa' sa sq gs' gs ce' ce env' env, RCE ce' ce -> REnv env' env -> sa' =S= rs sa ->
+  sE s -> Ec h -> Forall2 RG gs' gs ->
+  Forall2 RP (select_rest ORN O basesort' instance' ce' env' sa' sq (r_sel s) (rc h) gs')
+             (select_rest ORN O basesort instance ce env sa sq s h gs).
+Proof.
+intros s h sa' sa sq gs' gs ce' ce env' env Hc He Hsa Hs Hh Hg; unfold select_rest; cbv zeta.
+assert (G : Forall2 REnv (map (fun gh => slice_gs sa' (fst gh) (snd gh) :: env') gs') (map (fun gh => slice_gs sa (fst gh) (snd gh) :: env) gs)).
+{ apply (F2_map2 _ _ _ _ _ _ _ _ _ _ Hg); intros [g' h'] [g0 h0] [E1 E2]; simpl in E1, E2; subst h'; apply REnv_gs; assumption. }
+match goal with |- Forall2 RP match sq with Set_All => ?o' | _ => _ end match sq with Set_All => ?o | _ => _ end =>
+  assert (K : Forall2 RP o' o) end.
+- apply (F2_map2 _ _ _ _ _ (fun x y : SqlFull.senv T relname * bool => REnv (fst x) (fst y) /\ snd x = snd y)).
+  + apply F2_filter.
+    * apply (F2_map2 _ _ _ _ _ _ _ _ _ _ G); intros x y Hxy; split; [exact Hxy | cbn [snd]].
+      f_equal; [exact (group_error_R _ _ Hxy) | exact (proj2 (Hh ce' ce _ _ Hc Hxy))].
+    * intros x y [Hxy E]; rewrite E, (proj1 (Hh ce' ce _ _ Hc Hxy)); reflexivity.
+  + intros [x b'] [y b] [Hxy E]; simpl in Hxy, E; subst b'; simpl; split; [ | exact Hxy].
+    assert (W : RT match r_sel s with
+                   | S_Star _ _ => match x with (_, t :: _, _) :: _ => t | _ => null_tuple T sa' end
+                   | S_List l => mk_row O (map (fun it => match it with S_As e a => (a, ev' ce' x e) end) l)
+                   end
+                   match s with
+                   | S_Star _ _ => match y with (_, t :: _, _) :: _ => t | _ => null_tuple T sa end
+                   | S_List l => mk_row O (map (fun it => match it with S_As e a => (a, ev ce y e) end) l)
+                   end).
+    { destruct s as [ | l]; cbn [r_sel].
+      - destruct Hxy as [ | [[sx gx] hx] [[sy gy] hy] X Y [_ [S2 _]] _]; [apply null_tuple_RT; exact Hsa | ].
+        simpl in S2; destruct S2; [apply null_tuple_RT; exact Hsa | assumption].
+      - replace (map (fun it => match it with S_As e a => (a, ev' ce' x e) end)
+                     (map (fun it => match it with S_As e a => S_As (re e) (rho a) end) l))
+          with (map (fun p : attribute T * value T => (rho (fst p), snd p))
+                    (map (fun it => match it with S_As e a => (a, ev ce y e) end) l)); [apply mk_row_RT | ].
+        rewrite !map_map; apply map_ext_in; intros [e a] Hea; simpl; f_equal; symmetry; apply (Hs e a Hea); assumption. }
+    destruct b; [apply err_row_RT | ]; exact W.
+- destruct sq; [exact K | ].
+  apply F2_dedup_on; [intros x y [Hxy _]; exact Hxy | exact K].
+Qed.
+
+Lemma s_spec : forall sq s lf w g h,
+  match s with S_Star _ _ => True | S_List l => forall e a, In (S_As e a) l -> Ee e end ->
+  (forall f, In f lf -> Ef f) -> Ec w ->
+  match g with
+  | G_Fine _ _ => True
+  | G_By l | G_Rollup l | G_Cube l => LE T relname Ee l
+  | G_Sets ss => forall l, In l ss -> LE T relname Ee l
+  end -> Ec h -> Es (Select sq s lf w g h).
+Proof.
+intros sq s lf w g h Hs Hf Hw Hg Hh ce' ce env' env ex Hc He.
+change (rsp (Select sq s lf w g h)) with (Select sq (r_sel s) (map rf lf) (rc w) (r_g g) (rc h)).
+rewrite !eval_select; cbv zeta.
+assert (R0 := RCE_Rsort _ _ Hc); assert (Sa := from_sort_R lf ce' ce R0).
+rewrite (implicit_R ce' ce _ _ s h ex R0 Sa).
+apply select_rest_R; trivial.
+apply grouping_R'; [ | | apply where_R; assumption].
+- intros t' t Ht; exact (proj1 (gk_R g ce' ce env' env t' t Hg Hc He Ht)).
+- intros t' t Ht; exact (proj2 (gk_R g ce' ce env' env t' t Hg Hc He Ht)).
+Qed.
+
+(** * The theorem *)
+
+Theorem eval_rename_gen : forall q, Eqr q.
+Proof.
+intro q; exact (ind_q T relname Ee Ec Eqr Es Ef e_const e_col e_fun e_agg e_aggx e_case e_cond e_sub e_grouping
+                  e_conj e_not e_true e_pred e_expr e_quant e_in e_exists q_table q_set q_select q_order q_fetch
+                  q_window q_with q_withrec s_spec fr_query fr_join fr_fun q).
+Qed.
+
+(** The rows of the renamed query, over the renamed database, are the renamed rows of the query, in the same
+    order. *)
+Theorem eval_rename : forall q,
+  RL (eval_query_list ORN O basesort' instance' (rq q)) (eval_query_list ORN O basesort instance q).
+Proof. intro q; unfold eval_query_list; apply eval_rename_gen; constructor. Qed.
 End Sec.
