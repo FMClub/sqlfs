@@ -348,11 +348,37 @@ Definition pg_array_funs : list (string * (list value -> value)) :=
                         | _ => Value_Err "function does not exist" end)
   :: nil.
 
+(** the array of [x op ANY (a)]: an array, or a string literal ['{e1,e2,...}'], which PostgreSQL reads as an array of
+    the type of [x] (the literal has the type [unknown]); an unquoted [NULL] is a NULL element *)
+Definition pg_array_arg (x a : value) : option (list value) :=
+  match arr_elems a with
+  | Some xs => Some xs
+  | None =>
+    match a with
+    | Value_string (Some t) =>
+      match pg_text_array t with
+      | Some es =>
+        let is_int := match x with Value_Z _ | Value_I _ => true | _ => false end in
+        let elem (e : string) : option value :=
+            if String.eqb (lower_s e) "null" then Some (Value_Z None)
+            else if is_int
+                 then match int_of_text e with
+                      | Some z => Some (match x with Value_I (Some (_, w)) => Value_I (Some (z, w)) | _ => Value_Z (Some z) end)
+                      | None => None
+                      end
+                 else Some (Value_string (Some e)) in
+        fold_right (fun e acc => match elem e, acc with Some v, Some l => Some (v :: l) | _, _ => None end) (Some nil) es
+      | None => None
+      end
+    | _ => None
+    end
+  end.
+
 (** [x op ANY (array)], [x op ALL (array)]; [@>], [<@], [&&] of arrays *)
 Definition pg_quant_array (all : bool) (op : string) (l : list value) : bool3 :=
   match l with
   | x :: a :: nil =>
-    match arr_elems a, string_assoc _ op predicate_table with
+    match pg_array_arg x a, string_assoc _ op predicate_table with
     | Some xs, Some p => let rs := map (fun e => p (x :: e :: nil)) xs in
                          if all then fold_left andb3 rs true3 else fold_left orb3 rs false3
     | _, _ => unknown3

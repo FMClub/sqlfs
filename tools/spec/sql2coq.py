@@ -1519,8 +1519,11 @@ class Tr:
         if k == 'bin':
             op = e[1]
             if op in ('and', 'or', 'xor', '||'):
-                return '(e_cond %s)' % self.cond(e) if op in ('and', 'or') and False else \
-                       '(fn "%s" [%s; %s])' % (op, self.ex(e[2]), self.ex(e[3]))
+                # PostgreSQL: [AND] and [OR] are conditions (their value is a boolean); the MySQL family and SQLite
+                # have them as functions on numbers
+                if op in ('and', 'or') and ENGINE == 'postgresql':
+                    return '(e_cond %s)' % self.cond_raw(e)
+                return '(fn "%s" [%s; %s])' % (op, self.ex(e[2]), self.ex(e[3]))
             name = {'+': '+', '-': '-', '*': '*', '/': '/', '%': '%', 'div': 'div', 'mod': 'mod',
                     '&': '&', '|': '|', '<<': '<<', '>>': '>>',
                     # [^] is the exclusive or of the MySQL family, [#] that of PostgreSQL
@@ -1529,7 +1532,7 @@ class Tr:
                 name = 'power'
             return '(fn "%s" [%s; %s])' % (name, self.ex(e[2]), self.ex(e[3]))
         if k in ('cmp', 'is', 'in', 'like', 'between', 'not', 'exists', 'insub', 'quant', 'regexp', 'similar', 'cmp_array'):
-            return '(e_cond %s)' % self.cond(e)
+            return '(e_cond %s)' % self.cond_raw(e)
         if k == 'subq':
             cq, n = self.sub(e[1], 1)
             return '(e_sub %s)' % cq
@@ -1632,6 +1635,15 @@ class Tr:
         raise Skip('expr ' + k)
 
     def cond(self, e):
+        """A condition. In a block with grouping sets ([self.hide]) every condition is written as the truth of
+        the expression [e_cond c], so that a condition which is a grouping expression is NULL in the groups of the
+        sets which do not group it, as the expression is (the evaluation hides expressions, [is_hidden])."""
+        r = self.cond_raw(e)
+        if getattr(self, 'hide', False) and e[0] != 'bool' and not r.startswith('(c_expr '):
+            return '(c_expr (e_cond %s))' % r
+        return r
+
+    def cond_raw(self, e):
         k = e[0]
         if k == 'bool':
             return 'c_true' if e[1] else '(c_not c_true)'
@@ -2094,6 +2106,7 @@ class QTr:
         if frm:
             fr = [self.frm(frm, ctx)]
         tr = Tr(ctx, self)
+        tr.hide = isinstance(group, tuple) and group[0] == 'sets'
         sel = []
         exprs = []
         for it in items:
