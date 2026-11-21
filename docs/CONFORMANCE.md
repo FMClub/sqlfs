@@ -198,6 +198,15 @@ one column was read as the header of an empty result, so that such cases expecte
 
 **MySQL**, run 3 (same changes): **1211** translated, **95** fail.
 
+Runs 4 (iterations 10 to 15): the queries which the engine rejects are cases (`mk_case_error`); the result files of
+the same name are all checked; the fixes of the JSON functions, of the typed literals, of `DAYNAME`, of `INTERVAL`.
+**TiDB**: **2102** translated (53 expect an error), **50** fail (8 of them expect an error), 1 file over the memory
+limit. **MySQL**: **1314** translated (103 expect an error), **124** fail (31 of them expect an error): 39 regular
+expressions (inline flags scoped to a group, invalid patterns which must be errors), 9 roles, 8 locks, and others of
+the session and of the server. **MariaDB**, run 5: **428** translated (32 expect an error), **16** fail (9 of them
+expect an error; they pass since iteration 17), `subselect` not run. **OceanBase**, run 21: **775** translated,
+none fails, 1 file over the time limit.
+
 Found and fixed by the MySQL-family runs: digit strings read as dates (`'20050606'`), the exponent of numeric strings
 (`'123e-2'`), leading inline regular-expression flags, executable comments `/*!NNNNN ... */`, TiDB's error lines
 (`Error 1582 (42000): ...`) and warning tables.

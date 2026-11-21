@@ -5,10 +5,16 @@ for the suites, the method and the explanation of each failure).
 
 | Suite | Dialect | Translated | Failing | Not run (time or memory limit) | Pass |
 |---|---|---|---|---|---|
-| OceanBase test suite (run 20) | `OceanBaseMySQL` | 775 | 0 | 1 | 774 |
+| OceanBase test suite (run 21) | `OceanBaseMySQL` | 775 | 0 | 1 | 774 |
 | PostgreSQL regression tests (run 11) | `PostgreSQL` | 514 | 53 | 0 | 461 |
-| MariaDB mysql-test, 44 files (run 4) | `MariaDB` | 396 | 7 | 23 | 366 |
-| TiDB integrationtest (run 3) | `TiDB` | 2095 | 128 | 13 | 1954 |
-| MySQL mysql-test (run 3) | `MySQL` | 1211 | 95 | 0 | 1116 |
+| MariaDB mysql-test, 44 files (run 5) | `MariaDB` | 428 | 16 | 23 | 389 |
+| TiDB integrationtest (run 4) | `TiDB` | 2102 | 50 | 13 | 2039 |
+| MySQL mysql-test (run 4) | `MySQL` | 1314 | 124 | 0 | 1190 |
 
 "Not run" counts the cases of the files whose compilation stopped at the time or memory limit of the runner; "Pass" is the rest of the translated cases minus the failing ones.
+
+Since run 4 of TiDB and MySQL and run 5 of MariaDB, the translated cases include the queries which the engine
+rejects (TiDB 53, MySQL 103, MariaDB 32): such a case passes when the dialect does not accept the query or its
+evaluation fails. The runs are those of the commit `187fe5d` (iteration 15); the acceptance rules of iterations 16
+and 17 make 9 more cases of MariaDB pass (checked on their files, not counted here).
+
