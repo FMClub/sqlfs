@@ -118,6 +118,25 @@ Proof. check. Qed.
 Example str_24 : text PostgreSQL (fn "format" [s "INSERT INTO %I VALUES(%L)"; s "Foo bar"; s "O'Reilly"]) = "INSERT INTO ""Foo bar"" VALUES('O''Reilly')".
 Proof. check. Qed.
 
+(** the widths of [format] (PostgreSQL regression test [text]): a number, [*] (the next argument), [*n$]; [-] and a
+    negative width pad on the right; a NULL width is 0 *)
+Example str_24a : text PostgreSQL (fn "format" [s ">>%10s<<"; s "Hello"]) = ">>     Hello<<".
+Proof. check. Qed.
+Example str_24b : text PostgreSQL (fn "format" [s ">>%-10s<<"; s "Hello"]) = ">>Hello     <<".
+Proof. check. Qed.
+Example str_24c : text PostgreSQL (fn "format" [s ">>%1$-10I<<"; s "Hello"]) = ">>""Hello""   <<".
+Proof. check. Qed.
+Example str_24d : text PostgreSQL (fn "format" [s ">>%2$*1$L<<"; int 10; s "Hello"]) = ">>   'Hello'<<".
+Proof. check. Qed.
+Example str_24e : text PostgreSQL (fn "format" [s ">>%2$*1$L<<"; int (-10); cst (NullValues.Value_string None)]) = ">>NULL      <<".
+Proof. check. Qed.
+Example str_24f : text PostgreSQL (fn "format" [s ">>%*s<<"; int 10; s "Hello"]) = ">>     Hello<<".
+Proof. check. Qed.
+Example str_24g : text PostgreSQL (fn "format" [s ">>%2$*1$L<<"; cst (NullValues.Value_Z None); s "Hello"]) = ">>'Hello'<<".
+Proof. check. Qed.
+Example str_24h : text PostgreSQL (fn "format" [s ">>%-s<<"; s "Hello"]) = ">>Hello<<".
+Proof. check. Qed.
+
 Example str_25 : text PostgreSQL (fn "ascii" [s "x"]) = "120".
 Proof. check. Qed.
 

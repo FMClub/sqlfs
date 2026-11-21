@@ -407,8 +407,24 @@ Definition pg_json_funs : list (string * (list value -> value)) :=
                                                                | None => Value_Err "malformed array literal" end
                                  | _, _, _ => Value_J None end
                                | _ => Value_Err "function does not exist" end)
-  :: ("jsonb_strip_nulls", fun l => match l with v :: nil => match json_of_J v with Some j => VJ 0 (strip_nulls j) | None => Value_J None end | _ => Value_J None end)
-  :: ("json_strip_nulls", fun l => match l with v :: nil => match json_of_J v with Some j => VJ 1 (strip_nulls j) | None => Value_J None end | _ => Value_J None end)
+  :: ("jsonb_strip_nulls", fun l => match l with
+                                    | v :: rest =>
+                                      let arr := match rest with Value_bool (Some true) :: _ => true | _ => false end in
+                                      match my_json_doc v with
+                                      | Some (Some j) => VJ 0 (strip_nulls_arr arr j)
+                                      | Some None => Value_J None
+                                      | None => Value_Err "invalid input syntax for type json"
+                                      end
+                                    | _ => Value_J None end)
+  :: ("json_strip_nulls", fun l => match l with
+                                    | v :: rest =>
+                                      let arr := match rest with Value_bool (Some true) :: _ => true | _ => false end in
+                                      match my_json_doc v with
+                                      | Some (Some j) => VJ 1 (strip_nulls_arr arr j)
+                                      | Some None => Value_J None
+                                      | None => Value_Err "invalid input syntax for type json"
+                                      end
+                                    | _ => Value_J None end)
   :: ("jsonb_pretty", fun l => match l with v :: nil => match json_of_J v with Some j => Value_string (Some (pretty 4 j)) | None => Value_string None end | _ => Value_string None end)
   :: ("#-", fun l => match l with
                      | t :: p :: nil => match json_of_J t, text_of p with
@@ -526,7 +542,8 @@ Definition pg_json_rows (as_text : bool) (kind : nat) (each : bool) (keys : bool
     let out (j : json) : value :=
         if as_text then match j with JStr t => Value_string (Some t) | JNull => Value_string None | _ => Value_string (Some (text_spaced j)) end
         else VJ kind j in
-    match json_of_J v with
+    (* a string literal is read as JSON, as PostgreSQL does for a literal of unknown type *)
+    match match my_json_doc v with Some o => o | None => None end with
     | Some (JArr xs) => if each || keys then nil else map (fun x => out x :: nil) xs
     | Some (JObj ms) => if keys then map (fun m => Value_string (Some (fst m)) :: nil) ms
                         else if each then map (fun m => Value_string (Some (fst m)) :: out (snd m) :: nil) ms else nil

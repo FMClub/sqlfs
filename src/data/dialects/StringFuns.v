@@ -222,8 +222,62 @@ Definition format_number (q : Qc) (d : Z) : string :=
   if neg && negb (forallb (fun c => Ascii.eqb c "0"%char || Ascii.eqb c "."%char || Ascii.eqb c ","%char) (list_ascii_of_string r))
   then ("-" ++ r)%string else r.
 
-(** * PostgreSQL [format (fmt, args...)]: [%s] (NULL is empty), [%I] ([quote_ident]), [%L] ([quote_literal],
-    NULL is [NULL]), [%%], and the positions [%n$]; the widths and flags are not modelled (an error) *)
+(** * PostgreSQL [format (fmt, args...)] ([text_format] in [varlena.c]): [%s] (NULL is empty), [%I]
+    ([quote_ident]; NULL is an error), [%L] ([quote_literal], NULL is [NULL]), [%%]; a specifier is
+    [%[n$][-][width]type], where the width is a number, [*] (the next argument) or [*n$] (the argument [n]); a
+    number which is not followed by [$] right after [%] is a width. A negative width, like the flag [-], pads on
+    the right; a NULL width is 0. *)
+Fixpoint cp_digits (l : list Z) (acc : Z) (k : nat) : Z * nat :=
+  match l with
+  | c :: l' => if is_digit_cp c then cp_digits l' (acc * 10 + c - 48) (S k) else (acc, k)
+  | nil => (acc, k)
+  end.
+
+(** the integer which a text denotes ([pg_strtoint32], without surrounding spaces) *)
+Definition cp_int (l : list Z) : option Z :=
+  let '(neg, l) := match l with 45 :: r => (true, r) | 43 :: r => (false, r) | _ => (false, l) end in
+  match l with
+  | nil => None
+  | _ => let '(n, k) := cp_digits l 0 0%nat in
+         if Nat.eqb k (List.length l) then Some (if neg then - n else n) else None
+  end.
+
+Definition pg_pad (s : list Z) (minus : bool) (width : Z) : list Z :=
+  let sp := repeat 32 (Z.to_nat (Z.abs width) - List.length s)%nat in
+  if minus || (width <? 0) then s ++ sp else sp ++ s.
+
+(** the optional parts of a specifier: the position of the argument, the position of the width ([Some None]: the
+    next argument), the flag [-], the direct width, and the rest of the format (which starts with the type) *)
+Definition pg_format_spec (r : list Z) : option (option nat * option (option nat) * bool * Z * list Z) :=
+  let '(n, k) := cp_digits r 0 0%nat in
+  let first :=
+      match k, skipn k r with
+      | O, _ => Some (None, None, r)
+      | _, 36 :: r' => if (0 <? n) then Some (Some (Z.to_nat n - 1)%nat, None, r') else None
+      | _, r' => Some (None, Some n, r')
+      end in
+  match first with
+  | None => None
+  | Some (argpos, Some w, r) => Some (argpos, None, false, w, r)
+  | Some (argpos, None, r) =>
+    let fix minus (fuel : nat) (l : list Z) (b : bool) : bool * list Z :=
+        match fuel, l with
+        | S f, 45 :: l' => minus f l' true
+        | _, _ => (b, l)
+        end in
+    let '(m, r) := minus (List.length r) r false in
+    match r with
+    | 42 :: r' =>
+      let '(n, k) := cp_digits r' 0 0%nat in
+      match k, skipn k r' with
+      | O, _ => Some (argpos, Some None, m, 0, r')
+      | _, 36 :: r'' => if (0 <? n) then Some (argpos, Some (Some (Z.to_nat n - 1)%nat), m, 0, r'') else None
+      | _, _ => None
+      end
+    | _ => let '(n, k) := cp_digits r 0 0%nat in Some (argpos, None, m, n, skipn k r)
+    end
+  end.
+
 Fixpoint pg_format_aux (fuel : nat) (fmt : list Z) (args : list (option (list Z))) (next : nat) : option (list Z) :=
   match fuel with
   | O => None
@@ -232,33 +286,39 @@ Fixpoint pg_format_aux (fuel : nat) (fmt : list Z) (args : list (option (list Z)
     | nil => Some nil
     | 37 :: 37 :: r => option_map (cons 37) (pg_format_aux f r args next)
     | 37 :: r =>
-      (* an optional position [n$] *)
-      let digits := firstn (List.length (List.filter (fun _ => true) r)) r in
-      let fix num (l : list Z) (acc : Z) (k : nat) :=
-          match l with
-          | c :: l' => if is_digit_cp c then num l' (acc * 10 + c - 48) (S k) else (acc, k)
-          | nil => (acc, k)
-          end in
-      let '(n, k) := num digits 0 0%nat in
-      let '(pos, r) := match skipn k r with
-                       | 36 :: r' => if (0 <? n)%Z then (Z.to_nat n - 1, r')%nat else (next, r)
-                       | _ => (next, r)
-                       end in
-      match r with
-      | c :: r' =>
-        match nth_error args pos with
-        | Some a =>
-          let piece := if c =? 115 then Some (match a with Some s => s | None => nil end)
-                       else if c =? 73 then match a with Some s => Some (quote_ident_cp s) | None => None end
-                       else if c =? 76 then Some (match a with Some s => quote_literal_cp s | None => cps "NULL" end)
-                       else None in
-          match piece with
-          | Some p => option_map (app p) (pg_format_aux f r' args (S pos))
+      match pg_format_spec r with
+      | Some (argpos, wpos, m, w, c :: r') =>
+        if (c =? 115) || (c =? 73) || (c =? 76)
+        then
+          (* the width, and the position after it *)
+          let wn := match wpos with
+                    | None => Some (w, next)
+                    | Some p =>
+                      let i := match p with Some i => i | None => next end in
+                      match nth_error args i with
+                      | Some None => Some (0, S i)
+                      | Some (Some t) => match cp_int t with Some z => Some (z, S i) | None => None end
+                      | None => None
+                      end
+                    end in
+          match wn with
+          | Some (w, next) =>
+            let pos := match argpos with Some i => i | None => next end in
+            match nth_error args pos with
+            | Some a =>
+              let piece := if c =? 115 then Some (match a with Some s => s | None => nil end)
+                           else if c =? 73 then match a with Some s => Some (quote_ident_cp s) | None => None end
+                           else Some (match a with Some s => quote_literal_cp s | None => cps "NULL" end) in
+              match piece with
+              | Some p => option_map (app (pg_pad p m w)) (pg_format_aux f r' args (S pos))
+              | None => None
+              end
+            | None => None
+            end
           | None => None
           end
-        | None => None
-        end
-      | nil => None
+        else None
+      | _ => None
       end
     | c :: r => option_map (cons c) (pg_format_aux f r args next)
     end

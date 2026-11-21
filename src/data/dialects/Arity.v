@@ -71,7 +71,7 @@ Definition pg_arities : list arity :=
    range "to_timestamp" 1 2; fixed "make_time" 3; fixed "make_timestamp" 6; range "make_interval" 0 7;
    fixed "make_date" 3; fixed "date_bin" 3; fixed "justify_days" 1; fixed "justify_hours" 1;
    fixed "justify_interval" 1; fixed "isfinite" 1; fixed "date_trunc" 2; fixed "date_part" 2; fixed "to_char" 2;
-   range "jsonb_set" 3 4; range "jsonb_insert" 3 4; fixed "jsonb_strip_nulls" 1; fixed "json_strip_nulls" 1;
+   range "jsonb_set" 3 4; range "jsonb_insert" 3 4; range "jsonb_strip_nulls" 1 2; range "json_strip_nulls" 1 2;
    fixed "jsonb_pretty" 1; fixed "array_length" 2; fixed "cardinality" 1; fixed "array_append" 2;
    fixed "array_prepend" 2; fixed "array_cat" 2; range "array_position" 2 3; fixed "array_positions" 2;
    fixed "array_remove" 2; fixed "array_replace" 3; range "array_to_string" 2 3; range "string_to_array" 2 3;
