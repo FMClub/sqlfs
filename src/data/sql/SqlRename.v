@@ -426,14 +426,53 @@ Proof.
   + rewrite (Fset.equal_eq_2 _ _ _ _ (rs_mk_set _)); apply Fset.equal_refl.
 Qed.
 
+(** the equality of the grouping expressions *)
+Definition Be (x : SqlFull.sexpr T relname) := forall y, sexpr_eqb (re x) (re y) = sexpr_eqb x y.
+Definition Bc (c : SqlFull.scond T relname) := forall d, scond_eqb (rc c) (rc d) = scond_eqb c d.
+Definition Bt {X : Type} (x : X) := True.
+
+Lemma eqb_list : forall l, LE T relname Be l -> forall l',
+  (fix eqs (l1 l2 : list (SqlFull.sexpr T relname)) {struct l1} : bool :=
+     match l1, l2 with nil, nil => true | x :: r1, y :: r2 => sexpr_eqb x y && eqs r1 r2 | _, _ => false end) (map re l) (map re l') =
+  (fix eqs (l1 l2 : list (SqlFull.sexpr T relname)) {struct l1} : bool :=
+     match l1, l2 with nil, nil => true | x :: r1, y :: r2 => sexpr_eqb x y && eqs r1 r2 | _, _ => false end) l l'.
+Proof.
+intro l; induction l as [ | x l IHl]; intros Hl [ | y l']; try reflexivity.
+cbn [map]; rewrite (Hl x (or_introl eq_refl) y), IHl; [reflexivity | intros z Hz; apply Hl; right; exact Hz].
+Qed.
+
+Ltac beq y := intro y; destruct y; cbn [r_e r_c sexpr_eqb scond_eqb]; fold r_e r_c; try reflexivity.
+
+Lemma b_const : forall v, Be (E_Const T relname v). Proof. intro v; beq y. Qed.
+Lemma b_col : forall a, Be (E_Col T relname a). Proof. intro a; beq y; apply rho_eqb. Qed.
+Lemma b_fun : forall f l, LE T relname Be l -> Be (E_Fun f l).
+Proof. intros f l Hl; beq y; f_equal; apply eqb_list; exact Hl. Qed.
+Lemma b_agg : forall ag sq e c, Be e -> Bc c -> Be (E_Agg ag sq e c). Proof. intros ag sq e c _ _; beq y. Qed.
+Lemma b_aggx : forall ag sq e sep lo c, Be e -> (forall s, sep = Some s -> Be s) -> LO T relname Be lo -> Bc c ->
+  Be (E_AggX ag sq e sep lo c).
+Proof. intros ag sq e sep lo c _ _ _ _; beq y. Qed.
+Lemma b_case : forall c e1 e2, Bc c -> Be e1 -> Be e2 -> Be (E_Case c e1 e2).
+Proof. intros c e1 e2 Hc H1 H2; beq y; rewrite Hc, H1, H2; reflexivity. Qed.
+Lemma b_cond : forall c, Bc c -> Be (E_Cond c). Proof. intros c Hc; beq y; apply Hc. Qed.
+Lemma b_sub : forall q, @Bt (SqlFull.squery T relname) q -> Be (E_Sub q). Proof. intros q _; beq y. Qed.
+Lemma b_grouping : forall x, Be x -> Be (E_Grouping x). Proof. intros x _; beq y. Qed.
+Lemma b_conj : forall a c1 c2, Bc c1 -> Bc c2 -> Bc (C_Conj a c1 c2).
+Proof. intros a c1 c2 H1 H2; beq d; rewrite H1, H2; reflexivity. Qed.
+Lemma b_not : forall c, Bc c -> Bc (C_Not c). Proof. intros c Hc; beq d; apply Hc. Qed.
+Lemma b_true : Bc (C_True T relname). Proof. beq d. Qed.
+Lemma b_pred : forall p l, LE T relname Be l -> Bc (C_Pred p l).
+Proof. intros p l Hl; beq d; f_equal; apply eqb_list; exact Hl. Qed.
+Lemma b_expr : forall e, Be e -> Bc (C_Expr e). Proof. intros e He; beq d; apply He. Qed.
+Lemma b_quant : forall qtf p l q la, LE T relname Be l -> @Bt (SqlFull.squery T relname) q -> Bc (C_Quant qtf p l q la).
+Proof. intros qtf p l q la _ _; beq d. Qed.
+Lemma b_in : forall l q la, LE T relname Be l -> @Bt (SqlFull.squery T relname) q -> Bc (C_In l q la).
+Proof. intros l q la _ _; beq d. Qed.
+Lemma b_exists : forall q, @Bt (SqlFull.squery T relname) q -> Bc (C_Exists q). Proof. intros q _; beq d. Qed.
+
 Lemma eqb_rename : forall x y : SqlFull.sexpr T relname, sexpr_eqb (re x) (re y) = sexpr_eqb x y.
 Proof.
-fix IH 1; intros [v | a | f l | ag sq e c | ag sq e sep lo c | c e1 e2 | c | q | x'] y;
-  destruct y as [v' | a' | f' l' | ag' sq' e' c' | ag' sq' e' sep' lo' c' | c' e1' e2' | c' | q' | y']; try reflexivity.
-- cbn [r_e sexpr_eqb]; apply rho_eqb.
-- cbn [r_e sexpr_eqb]; f_equal.
-  revert l'; induction l as [ | x l IHl]; intros [ | y l']; try reflexivity.
-  cbn [map]; rewrite IH, IHl; reflexivity.
+refine (ind_e T relname Be Bc Bt Bt Bt b_const b_col b_fun b_agg b_aggx b_case b_cond b_sub b_grouping b_conj b_not
+  b_true b_pred b_expr b_quant b_in b_exists _ _ _ _ _ _ _ _ _ _ _ _); intros; exact I.
 Qed.
 
 (** the columns which are read *)

@@ -323,15 +323,18 @@ Definition pg_minus_idx (j : json) (i : Z) : json :=
   | _ => j
   end.
 
-(** [jsonb_strip_nulls]: the members whose value is [null], recursively *)
-Fixpoint strip_nulls_aux (fuel : nat) (j : json) : json :=
+(** [jsonb_strip_nulls]: the members whose value is [null], recursively; with [arr] (the second argument of
+    PostgreSQL 18, [strip_in_arrays]) also the [null] elements of the arrays *)
+Fixpoint strip_nulls_aux (arr : bool) (fuel : nat) (j : json) : json :=
   match fuel with
   | O => j
   | S f =>
     match j with
-    | JObj ms => JObj (flat_map (fun m => match snd m with JNull => nil | v => [(fst m, strip_nulls_aux f v)] end) ms)
-    | JArr l => JArr (map (strip_nulls_aux f) l)
+    | JObj ms => JObj (flat_map (fun m => match snd m with JNull => nil | v => [(fst m, strip_nulls_aux arr f v)] end) ms)
+    | JArr l => JArr (map (strip_nulls_aux arr f)
+                          (if arr then filter (fun v => match v with JNull => false | _ => true end) l else l))
     | _ => j
     end
   end.
-Definition strip_nulls (j : json) : json := strip_nulls_aux (json_size j) j.
+Definition strip_nulls_arr (arr : bool) (j : json) : json := strip_nulls_aux arr (json_size j) j.
+Definition strip_nulls (j : json) : json := strip_nulls_arr false j.

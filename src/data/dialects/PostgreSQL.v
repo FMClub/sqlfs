@@ -348,11 +348,37 @@ Definition pg_array_funs : list (string * (list value -> value)) :=
                         | _ => Value_Err "function does not exist" end)
   :: nil.
 
+(** the array of [x op ANY (a)]: an array, or a string literal ['{e1,e2,...}'], which PostgreSQL reads as an array of
+    the type of [x] (the literal has the type [unknown]); an unquoted [NULL] is a NULL element *)
+Definition pg_array_arg (x a : value) : option (list value) :=
+  match arr_elems a with
+  | Some xs => Some xs
+  | None =>
+    match a with
+    | Value_string (Some t) =>
+      match pg_text_array t with
+      | Some es =>
+        let is_int := match x with Value_Z _ | Value_I _ => true | _ => false end in
+        let elem (e : string) : option value :=
+            if String.eqb (lower_s e) "null" then Some (Value_Z None)
+            else if is_int
+                 then match int_of_text e with
+                      | Some z => Some (match x with Value_I (Some (_, w)) => Value_I (Some (z, w)) | _ => Value_Z (Some z) end)
+                      | None => None
+                      end
+                 else Some (Value_string (Some e)) in
+        fold_right (fun e acc => match elem e, acc with Some v, Some l => Some (v :: l) | _, _ => None end) (Some nil) es
+      | None => None
+      end
+    | _ => None
+    end
+  end.
+
 (** [x op ANY (array)], [x op ALL (array)]; [@>], [<@], [&&] of arrays *)
 Definition pg_quant_array (all : bool) (op : string) (l : list value) : bool3 :=
   match l with
   | x :: a :: nil =>
-    match arr_elems a, string_assoc _ op predicate_table with
+    match pg_array_arg x a, string_assoc _ op predicate_table with
     | Some xs, Some p => let rs := map (fun e => p (x :: e :: nil)) xs in
                          if all then fold_left andb3 rs true3 else fold_left orb3 rs false3
     | _, _ => unknown3
@@ -407,8 +433,24 @@ Definition pg_json_funs : list (string * (list value -> value)) :=
                                                                | None => Value_Err "malformed array literal" end
                                  | _, _, _ => Value_J None end
                                | _ => Value_Err "function does not exist" end)
-  :: ("jsonb_strip_nulls", fun l => match l with v :: nil => match json_of_J v with Some j => VJ 0 (strip_nulls j) | None => Value_J None end | _ => Value_J None end)
-  :: ("json_strip_nulls", fun l => match l with v :: nil => match json_of_J v with Some j => VJ 1 (strip_nulls j) | None => Value_J None end | _ => Value_J None end)
+  :: ("jsonb_strip_nulls", fun l => match l with
+                                    | v :: rest =>
+                                      let arr := match rest with Value_bool (Some true) :: _ => true | _ => false end in
+                                      match my_json_doc v with
+                                      | Some (Some j) => VJ 0 (strip_nulls_arr arr j)
+                                      | Some None => Value_J None
+                                      | None => Value_Err "invalid input syntax for type json"
+                                      end
+                                    | _ => Value_J None end)
+  :: ("json_strip_nulls", fun l => match l with
+                                    | v :: rest =>
+                                      let arr := match rest with Value_bool (Some true) :: _ => true | _ => false end in
+                                      match my_json_doc v with
+                                      | Some (Some j) => VJ 1 (strip_nulls_arr arr j)
+                                      | Some None => Value_J None
+                                      | None => Value_Err "invalid input syntax for type json"
+                                      end
+                                    | _ => Value_J None end)
   :: ("jsonb_pretty", fun l => match l with v :: nil => match json_of_J v with Some j => Value_string (Some (pretty 4 j)) | None => Value_string None end | _ => Value_string None end)
   :: ("#-", fun l => match l with
                      | t :: p :: nil => match json_of_J t, text_of p with
@@ -495,7 +537,8 @@ Definition pg_generate_series (l : list value) : list (list value) :=
       | _, _ => nil
       end
     | _, _, _ =>
-      if existsb is_D (a :: b :: rest) then
+      (* [numeric] arguments: decimals, and the rationals which a cast to [numeric] of an integer gives *)
+      if existsb (fun v => is_D v || match v with Value_Q (Some _) => true | _ => false end) (a :: b :: rest) then
         match dec_of_value a, dec_of_value b, match rest with s :: nil => dec_of_value s | _ => Some (Qc_of_Z 1, 0%nat, 0%nat) end with
         | Some (x, _, s1), Some (y, _, s2), Some (st, _, s3) =>
           if Qc_is_zero st then (Value_Err "step size cannot equal zero" :: nil) :: nil
@@ -526,7 +569,8 @@ Definition pg_json_rows (as_text : bool) (kind : nat) (each : bool) (keys : bool
     let out (j : json) : value :=
         if as_text then match j with JStr t => Value_string (Some t) | JNull => Value_string None | _ => Value_string (Some (text_spaced j)) end
         else VJ kind j in
-    match json_of_J v with
+    (* a string literal is read as JSON, as PostgreSQL does for a literal of unknown type *)
+    match match my_json_doc v with Some o => o | None => None end with
     | Some (JArr xs) => if each || keys then nil else map (fun x => out x :: nil) xs
     | Some (JObj ms) => if keys then map (fun m => Value_string (Some (fst m)) :: nil) ms
                         else if each then map (fun m => Value_string (Some (fst m)) :: out (snd m) :: nil) ms else nil

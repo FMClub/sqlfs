@@ -1339,7 +1339,9 @@ Definition cast_Q v :=
   match v with
   | Value_F _ => float_to_numeric v
   | Value_Q q => Value_Q q
-  | Value_Z (Some z) => Value_Q (Some (Qc_of_Z z))
+  (* an integer is a [numeric] of scale 0 *)
+  | Value_Z (Some z) => VDec (Qc_of_Z z) 0 0
+  | Value_I (Some (z, _)) => VDec (Qc_of_Z z) 0 0
   | Value_D d => Value_D d
   | Value_string (Some s) => 
     let t := string_rtrim (string_ltrim s) in
@@ -1582,12 +1584,17 @@ Definition pg_extract (field : string) (v : value) : value :=
                        | _ => (ts_days n, ts_usec n) end in
     let '(y, m, d) := civil_from_days days in
     match f with
-    | "year" => num y | "month" => num m | "day" => num d
+    (* there is no year 0: the years before the common era are negative ([extract_date] of [date.c]) *)
+    | "year" => num (if Z.ltb 0 y then y else y - 1) | "month" => num m | "day" => num d
     | "quarter" => num ((m - 1) / 3 + 1)
-    | "decade" => num (Z.div y 10) | "century" => num (if Z.leb y 0 then (y - 100) / 100 else (y + 99) / 100)
-    | "millennium" => num (if Z.leb y 0 then (y - 1000) / 1000 else (y + 999) / 1000)
+    | "decade" => num (if Z.leb 0 y then y / 10 else - ((8 - (y - 1)) / 10))
+    | "century" => num (if Z.ltb 0 y then (y + 99) / 100 else - ((99 - (y - 1)) / 100))
+    | "millennium" => num (if Z.ltb 0 y then (y + 999) / 1000 else - ((999 - (y - 1)) / 1000))
     | "dow" => num (day_of_week days) | "isodow" => num (iso_weekday days) | "doy" => num (day_of_year days)
-    | "week" => num (snd (iso_week_year days)) | "isoyear" => num (fst (iso_week_year days))
+    | "week" => num (snd (iso_week_year days))
+    | "isoyear" => let iy := fst (iso_week_year days) in num (if Z.ltb 0 iy then iy else iy - 1)
+    (* the Julian day: the days since 1970-01-01 are the day 2440588 *)
+    | "julian" => match k with 0%nat => num (days + 2440588) | _ => Value_Err "unit not supported" end
     | "hour" => num (us / 3600000000) | "minute" => num ((us / 60000000) mod 60)
     | "second" => micro (us mod 60000000)
     | "milliseconds" => VDec (Qcdiv (Qc_of_Z (us mod 60000000)) (Qc_of_Z 1000)) 3 3
@@ -1767,6 +1774,59 @@ Definition Qc_lt_bool (a b : Qc) : bool := match Qccompare a b with Lt => true |
 Definition Qc_le_bool (a b : Qc) : bool := match Qccompare a b with Gt => false | _ => true end.
 Definition Qc_eq_bool (a b : Qc) : bool := match Qccompare a b with Eq => true | _ => false end.
 
+(** [power] of [double precision] ([dpow] of [float.c]): [NaN ^ 0] and [1 ^ NaN] are 1, the other powers of or by a
+    NaN are NaN; zero to a negative power and a negative number to a non-integer power are errors; an infinite
+    exponent gives 1 for [|x| = 1], an infinity or 0 by the side of [|x|] around 1; a power of an infinity is 1
+    for the exponent 0, an infinity or 0 by the sign of the exponent, and for [-Infinity] the sign of the result
+    is that of an odd exponent. *)
+Definition pg_dpow (conv : value -> option num) (dom bad : value) (l : list value) : value :=
+  match l with
+  | a :: b :: nil =>
+    if is_null a || is_null b then Value_F None
+    else match math_arg conv a, math_arg conv b with
+         | Some (sa, x), Some (sb, y) =>
+           let one := VF false (F_Finite, Qc_of_Z 1) in
+           let zero := VF false (F_Finite, Qc_of_Z 0) in
+           let nan := VF false (F_NaN, Qc_of_Z 0) in
+           let pinf := VF false (F_PosInf, Qc_of_Z 0) in
+           let fin (s : fspecial) := match s with F_Finite | F_NegZero => true | _ => false end in
+           let neg (s : fspecial) (q : Q) := match s with F_NegInf => true | F_PosInf | F_NaN => false | _ => Z.ltb (Qnum q) 0 end in
+           let is0 (s : fspecial) (q : Q) := fin s && Z.eqb (Qnum q) 0 in
+           let yred := Qred y in
+           let yint := fin sb && Pos.eqb (Qden yred) 1 in
+           match sa, sb with
+           | F_NaN, F_NaN => nan
+           | F_NaN, _ => if is0 sb y then one else nan
+           | _, F_NaN => if fin sa && Qeq_bool x 1 then one else nan
+           | _, _ =>
+             if is0 sa x && neg sb y then Value_Err "zero raised to a negative power is undefined"
+             else if neg sa x && fin sb && negb yint then dom
+             else
+               match sb with
+               | F_PosInf | F_NegInf =>
+                 let c := match sa with F_PosInf | F_NegInf => Gt | _ => Qcompare (Qabs x) 1 end in
+                 match c, sb with
+                 | Eq, _ => one
+                 | Gt, F_PosInf | Lt, F_NegInf => pinf
+                 | _, _ => zero
+                 end
+               | _ =>
+                 match sa with
+                 | F_PosInf => if is0 sb y then one else if neg sb y then zero else pinf
+                 | F_NegInf =>
+                   let odd := Z.odd (Qnum yred) in
+                   if is0 sb y then one
+                   else if neg sb y then (if odd then VF false (F_NegZero, Qc_of_Z 0) else zero)
+                   else if odd then VF false (F_NegInf, Qc_of_Z 0) else pinf
+                 | _ => match pow_c x y with Some r => VF false r | None => dom end
+                 end
+               end
+           end
+         | _, _ => bad
+         end
+  | _ => Value_Err "function does not exist"
+  end.
+
 Definition pg_clamp_scale (r : Z) (sc : nat) : nat := Z.to_nat (Z.min (Z.max (Z.max r (Z.of_nat sc)) 0) 1000).
 
 (** [estimate_ln_dweight]: the decimal weight of [ln x] *)
@@ -1793,7 +1853,8 @@ Definition pg_num_exp (q : Qc) (sc : nat) : value :=
   let r := pg_clamp_scale (16 - Z.quot (Qnum v) (Zpos (Qden v))) sc in
   match exp_exact (this q) with
   | Some e => VDec (dec_round (Q2Qc e) r) r r
-  | None => Value_Err "value overflows numeric format"
+  (* an underflow is 0 with the largest scale ([exp_var]); an overflow is an error *)
+  | None => if Z.ltb (Qnum (this q)) 0 then VDec (Qc_of_Z 0) 1000 1000 else Value_Err "value overflows numeric format"
   end.
 
 Definition pg_num_log (b : Qc * nat) (x : Qc * nat) : value :=
@@ -1812,6 +1873,64 @@ Definition pg_num_ln (q : Qc) (sc : nat) : value :=
     (if Qc_is_zero q then Value_Err "cannot take logarithm of zero" else Value_Err "cannot take logarithm of a negative number")
   else let r := pg_clamp_scale (16 - pg_ln_dweight (this q)) sc in
        VDec (dec_round (Q2Qc (ln_exact (this q))) r) r r.
+
+(** [(a / b) ^ n] rounded to [r] decimals (half away from zero), on integers: no fraction is reduced *)
+Fixpoint zpow_pos (a : Z) (p : positive) : Z :=
+  match p with
+  | xH => a
+  | xO p' => let h := zpow_pos a p' in h * h
+  | xI p' => let h := zpow_pos a p' in h * h * a
+  end.
+
+Definition pow_round (a : Z) (b : positive) (n : Z) (r : nat) : Qc :=
+  let '(num, den) :=
+      match n with
+      | Z0 => (1, 1)
+      | Zpos p => (zpow_pos a p, zpow_pos (Zpos b) p)
+      | Zneg p => (zpow_pos (Zpos b) p * (if Z.ltb a 0 && Z.odd (Zpos p) then -1 else 1), zpow_pos (Z.abs a) p)
+      end in
+  let m := (2 * Z.abs num * Z.pow 10 (Z.of_nat r) + den) / (2 * den) in
+  Qcdiv (Qc_of_Z (if Z.ltb num 0 then - m else m)) (Qc_pow10 r).
+
+(** [power] of [numeric] ([power_var], [power_var_int] of [numeric.c]): the scale of the result gives it 16
+    significant digits, and at least the scales of the arguments: [16 - trunc (log10 (x ^ y))], between the larger
+    scale of the arguments and 1000. An integer exponent is exact before the rounding ([0 ^ 0] is 1, zero to a
+    negative power is a division by zero); otherwise the base must not be negative ([0 ^ y] is 0 with 16
+    decimals) and the power is [exp (y ln x)]. The estimate of the weight is computed here on exact values, where
+    the engine uses a double. *)
+Definition pg_num_power (b : Qc * nat) (e : Qc * nat) : value :=
+  let (x, sx) := b in
+  let (y, sy) := e in
+  let sc := Nat.max sx sy in
+  let l10 := ln_exact 10 in
+  let trunc (q : Q) := Z.quot (Qnum q) (Zpos (Qden q)) in
+  let over := Value_Err "value overflows numeric format" in
+  if Pos.eqb (Qden (this y)) 1 then
+    let n := Qnum (this y) in
+    let f := if Qc_is_zero x then 0%Q else Qmult (inject_Z n) (Qdiv (ln_exact (Qabs.Qabs (this x))) l10) in
+    if Qle_bool 131073 f then over
+    else if Qle_bool (f + 1) (-1001) then VDec (Qc_of_Z 0) 1000 1000
+    else
+      let r := pg_clamp_scale (16 - trunc f) sc in
+      if Z.eqb n 0 then VDec (Qc_of_Z 1) r r
+      else if Qc_is_zero x then (if Z.ltb n 0 then Value_Err "division by zero" else VDec (Qc_of_Z 0) r r)
+      else
+        if Z.ltb (Z.abs n) 20000 then VDec (pow_round (Qnum (this x)) (Qden (this x)) n r) r r
+        else match exp_exact (Qmult (inject_Z n) (ln_exact (Qabs.Qabs (this x)))) with
+             | Some p => VDec (dec_round (Q2Qc (if Z.ltb (Qnum (this x)) 0 && Z.odd n then Qopp p else p)) r) r r
+             | None => over
+             end
+  else if Qc_is_zero x then VDec (Qc_of_Z 0) 16 16
+  else if Z.ltb (Qnum (this x)) 0 then Value_Err "a negative number raised to a non-integer power yields a complex result"
+  else
+    let lnv := Qmult (this y) (ln_exact (this x)) in
+    if Qle_bool 6020 (Qabs.Qabs lnv) then (if Qle_bool 0 lnv then over else VDec (Qc_of_Z 0) 1000 1000)
+    else
+      let r := pg_clamp_scale (16 - trunc (Qdiv lnv l10)) sc in
+      match exp_exact lnv with
+      | Some p => VDec (dec_round (Q2Qc p) r) r r
+      | None => over
+      end.
 
 (** a function with a [numeric] and a [double precision] version: an integer argument takes the
     double one, the preferred type of the numeric category *)
@@ -1859,10 +1978,18 @@ Definition pg_math_table (num_power : list value -> value) : list (string * (lis
   let dsqrt := dbl_fun1 c (fun q => if Z.ltb (Qnum q) 0 then None else Some (sqrt_q binary64 q))
                         (pg_dom "cannot take square root of a negative number")
                         (fun s => match s with F_NegInf => pg_dom "cannot take square root of a negative number" | _ => pg_sp_same s end) bad in
-  let dexp l := pg_exp_check (dbl_fun1 c pg_exp_dbl bad (fun s => match s with F_NegInf => VF false (F_Finite, Qc_of_Z 0) | _ => pg_sp_same s end) bad l) in
+  (* [exp] of an infinity is not an overflow: [dexp] of [float.c] returns [Infinity] and [0] *)
+  let dexp l := match l with
+                | v :: nil => match math_arg c v with
+                              | Some (F_PosInf, _) => VF false (F_PosInf, Qc_of_Z 0)
+                              | Some (F_NegInf, _) => VF false (F_Finite, Qc_of_Z 0)
+                              | _ => pg_exp_check (dbl_fun1 c pg_exp_dbl bad (fun s => match s with F_NegInf => VF false (F_Finite, Qc_of_Z 0) | _ => pg_sp_same s end) bad l)
+                              end
+                | _ => pg_exp_check (dbl_fun1 c pg_exp_dbl bad (fun s => match s with F_NegInf => VF false (F_Finite, Qc_of_Z 0) | _ => pg_sp_same s end) bad l)
+                end in
   let trig f := dbl_fun1 c (fun q => Some (f binary64 q)) bad pg_sp_range bad in
   let atrig (f : format -> Q -> option (fspecial * Qc)) := dbl_fun1 c (f binary64) (pg_dom "input is out of range") pg_sp_range bad in
-  let dpow := dbl_fun2 c pow_c (pg_dom "a negative number raised to a non-integer power yields a complex result") bad in
+  let dpow := pg_dpow c (pg_dom "a negative number raised to a non-integer power yields a complex result") bad in
   let numeric_log l := match l with
                        | b :: x :: nil =>
                          if is_null b || is_null x then Value_D None
@@ -1894,7 +2021,19 @@ Definition pg_math_table (num_power : list value -> value) : list (string * (lis
   :: ("radians", dbl_fun1 c (fun q => Some (radians_pg q)) bad pg_sp_same bad)
   :: ("pi", fun l => match l with nil => VF false (F_Finite, pi_double) | _ => bad end)
   (* [power] of two non-[numeric] arguments is the one of [double precision] *)
-  :: ("power", fun l => if existsb is_D l then num_power l
+  :: ("power", fun l => if existsb is_D l
+                        then
+                          (* a string literal by a [numeric] is a [numeric] *)
+                          let dv (v : value) := dec_of_value (match v with Value_string _ => cast_Q v | _ => v end) in
+                          match l with
+                          | a :: b :: nil =>
+                            if is_null a || is_null b then Value_D None
+                            else match dv a, dv b with
+                                 | Some (qa, _, sa), Some (qb, _, sb) => pg_num_power (qa, sa) (qb, sb)
+                                 | _, _ => num_power l
+                                 end
+                          | _ => num_power l
+                          end
                         else dpow l)
   :: nil.
 
@@ -1920,7 +2059,9 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
   (** division and modulo by zero are errors ([ERRCODE_DIVISION_BY_ZERO], [src/backend/utils/adt/int.c], [numeric.c]) *)
   let by_zero (f : list value -> value) (l : list value) :=
       match l with
-      | _ :: b :: nil => 
+      | a :: b :: nil => 
+        (* a NaN divided by zero is NaN ([float8_div]) *)
+        if match a with Value_F (Some (_, k)) => Nat.eqb (Nat.div (Nat.modulo k 10) 2) 4 | _ => false end then f l else
         match num_of_value b with
         | Some (Num_Z z) => if Z.eqb z 0 then Value_Err "division by zero" else f l
         | Some (Num_Q q) => if Qc_is_zero q then Value_Err "division by zero" else f l

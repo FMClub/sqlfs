@@ -211,7 +211,9 @@ with eval_sql_ext_from_item env x :=
        end
 with eval_sql_ext_join_item env ji br :=
         match ji with
-        | Join_Item jt sqj sj f => (** TODO: join type *)
+        | Join_Item jt sqj sj f =>
+            (** the two join types are evaluated alike: a cross join is an inner join whose condition is
+                [Sql_True]; the outer joins are in [SqlFull.v] ([Fr_Join]) *)
             List.filter 
             (fun t => 
                 Bool.is_true 

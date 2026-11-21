@@ -165,3 +165,20 @@ Example order_by_masked_key :
   [["Bar"; "L"; "5"]; ["Bar"; "M"; "15"]; ["Bar"; "NULL"; "20"]; 
    ["Foo"; "L"; "10"]; ["Foo"; "M"; "20"]; ["Foo"; "NULL"; "30"]; ["NULL"; "NULL"; "50"]].
 Proof. check. Qed.
+
+(** A grouping expression which is a condition (PostgreSQL regression test [groupingsets]):
+    [SELECT sales > 12 FROM items_sold GROUP BY ROLLUP (sales > 12) HAVING sales > 12]. In the group of the grand
+    total the condition is not grouped, so it is NULL there, in the [SELECT] list and in [HAVING]: the row of the
+    total is filtered, and the group where the condition is false too ([shown_rows] prints a boolean as 0 or 1,
+    and three columns). *)
+Definition big := e_cond (pred ">" [col sales; int 12]).
+
+Example rollup_of_a_condition :
+  shown_rows PostgreSQL (select_full Set_All (s_list [as_ big c0]) items c_true (g_rollup [big]) c_true) =
+  [["0"; "NULL"; "NULL"]; ["1"; "NULL"; "NULL"]; ["NULL"; "NULL"; "NULL"]].
+Proof. check. Qed.
+
+Example having_a_grouped_condition :
+  shown_rows PostgreSQL (select_full Set_All (s_list [as_ big c0]) items c_true (g_rollup [big]) (c_expr big)) =
+  [["1"; "NULL"; "NULL"]].
+Proof. check. Qed.

@@ -101,9 +101,21 @@ Fixpoint match_ordered (rs : list (list NullValues.value)) (es : list (list stri
 
 Definition out_attr (i : nat) : attribute TNull := Attr_Z ("c" ++ NullValues.string_of_Z (Z.of_nat i)).
 
+(** The value as the client of the dialect shows it: a double of PostgreSQL is printed by [float8out] ([pg_text]:
+    [NaN], [Infinity], the exponents [e+20]), the others as the MySQL family prints them ([text_of]). *)
+Definition client_value (d : vsem) (v : NullValues.value) : NullValues.value :=
+  match v with
+  | NullValues.Value_F (Some (x, k)) =>
+    if String.eqb (vs_name d) "PostgreSQL"
+    then NullValues.Value_string
+           (Some (IEEE.pg_text (NullValues.fmt_of (Nat.odd k)) (IEEE.special_of_tag (Nat.div (Nat.modulo k 10) 2)) x))
+    else v
+  | _ => v
+  end.
+
 Definition run_rows (d : vsem) (c : spec_case) (ncols : nat) : list (list NullValues.value) :=
   let db := build_db (sc_tables c) in
-  map (fun t => map (fun i => dot (TD d) t (out_attr i)) (seq 0 ncols))
+  map (fun t => map (fun i => client_value d (dot (TD d) t (out_attr i))) (seq 0 ncols))
       (eval_query_list ORN (dialect_of d) (_basesort _ db) (_instance _ db) (to_dialect d (sc_query c))).
 
 (** the expected rows [e] are rows of [rs], each a different one *)
@@ -129,7 +141,7 @@ Definition ties_ok (d : vsem) (c : spec_case) (ncols : nat) : bool :=
   let db := build_db (sc_tables c) in
   match order_groups ORN (dialect_of d) (_basesort _ db) (_instance _ db) (to_dialect d (sc_query c)) with
   | Some (gs, lim) =>
-    let vgs := map (map (fun t => map (fun i => dot (TD d) t (out_attr i)) (seq 0 ncols))) gs in
+    let vgs := map (map (fun t => map (fun i => client_value d (dot (TD d) t (out_attr i))) (seq 0 ncols))) gs in
     let total := List.length (List.concat vgs) in
     let n := match lim with Some n => Nat.min (N.to_nat n) total | None => total end in
     Nat.eqb (List.length (sc_expected c)) n && groups_ok vgs (sc_expected c)

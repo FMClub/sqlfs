@@ -92,6 +92,24 @@ test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 
+Run 9 (iteration 7, TODO 8.13): the dates before the common era (`BC`, `EXTRACT` of negative years, the Julian
+day): **120** fail (13 fewer than run 8; the files `date` and `timestamp` were run again, the others are those of
+run 8). The calendar conversions were off by one day before 0000-03-01: fixed.
+
+Run 8 (iteration 6 of `docs/ITERATIONS.md`, TODO 8.9; `strings` and `jsonb` are now read): **514** queries
+translated, **133** fail (238 of the same 514 failed before the fixes of this run). Fixed, each from the source of
+PostgreSQL: the widths of `format` (`text_format`, 17 cases); `json_strip_nulls` of a literal and its second argument
+(14); `x = ANY ('{1,2,3}')`, a literal read as an array of the type of `x` (8); the doubles are compared as
+`float8out` prints them, and `power`, `exp` and the division follow `dpow`, `dexp` and `float8_div` on NaN and the
+infinities (40); `power` of `numeric` has the scale of `power_var` and non-integer exponents (20); a grouping
+expression which is a condition is hidden in the groups which do not group it, also in `HAVING` (2;
+`sexpr_eqb` compared only constants, columns and functions); `generate_series` of an integer cast to `numeric` (3:
+the cast gave a rational, it gives a `numeric` of scale 0). What still fails: 45 `NaN` / `Infinity` of `numeric`
+and 16 `infinity` dates and timestamps (not representable), 28 `to_char` with numeric format models, 12 BC dates,
+14 aggregates over `NaN` / `Infinity`, 3 window results which depend on the order of the peers, 2 `concat` of a date
+(`DateStyle`), and 13 others (`exp` of a `numeric` with more than 77 digits, the type of an `unknown` literal,
+`EXTRACT (JULIAN ...)`, the order of `json_object_agg`, psql's display).
+
 Run 6, after TODO 5.1 (window functions, `VALUES`, grouping sets, views, typed literals, `COPY ... FROM stdin`):
 **459** queries translated, **234** fail (run 7, after the fixes of numeric modulo and casts: **215**); 103 of them are `NaN`/`Infinity` (not representable), 67 the scale of `power` on
 `numeric` (the precision rule of `power_var` is not modelled), 26 `to_char` with numeric format models, 17 `format` widths,

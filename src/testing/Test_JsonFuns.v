@@ -127,6 +127,14 @@ Proof. check. Qed.
 Example jf_27 : text PostgreSQL (fn "jsonb_insert" [jb "{""a"": [0,1,2]}"; s "{a,1}"; jb """new_value"""; cst (Value_bool (Some true))]) = "{""a"": [0, 1, ""new_value"", 2]}".
 Proof. check. Qed.
 
+(** [json_strip_nulls] of a string literal, and its second argument (the [null] elements of the arrays too) *)
+Example jf_27a : text PostgreSQL (fn "json_strip_nulls" [str "{""a"":1,""b"":null,""c"":[2,null,3],""d"":{""e"":4,""f"":null}}"]) =
+  "{""a"":1,""c"":[2,null,3],""d"":{""e"":4}}".
+Proof. check. Qed.
+Example jf_27b : text PostgreSQL (fn "json_strip_nulls" [str "{""a"":1,""b"":null,""c"":[2,null,3],""d"":{""e"":4,""f"":null}}"; cst (NullValues.Value_bool (Some true))]) =
+  "{""a"":1,""c"":[2,3],""d"":{""e"":4}}".
+Proof. check. Qed.
+
 Example jf_28 : text PostgreSQL (fn "jsonb_strip_nulls" [jb "[{""f1"":1, ""f2"":null}, 2, null, 3]"]) = "[{""f1"": 1}, 2, null, 3]".
 Proof. check. Qed.
 

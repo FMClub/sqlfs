@@ -472,8 +472,9 @@ Definition group_exprs (g : sgroup) : list sexpr :=
   | G_Sets ss => List.concat ss
   end.
 
-(** Equality of the expressions which can be grouping expressions: constants, columns and
-    functions of them. *)
+(** Equality of the expressions which can be grouping expressions: constants, columns, functions of them, and
+    the conditions built on them (comparisons, [AND], [OR], [NOT], [CASE]): [GROUP BY ROLLUP (a < b)] groups
+    by a condition. Aggregates and subqueries are equal to nothing. *)
 Fixpoint sexpr_eqb (e1 e2 : sexpr) {struct e1} : bool :=
   match e1, e2 with
   | E_Const v1, E_Const v2 => Oset.eq_bool (OVal T) v1 v2
@@ -486,6 +487,26 @@ Fixpoint sexpr_eqb (e1 e2 : sexpr) {struct e1} : bool :=
        | x :: r1, y :: r2 => sexpr_eqb x y && eqs r1 r2
        | _, _ => false
        end) l1 l2
+  | E_Case c1 x1 y1, E_Case c2 x2 y2 => scond_eqb c1 c2 && sexpr_eqb x1 x2 && sexpr_eqb y1 y2
+  | E_Cond c1, E_Cond c2 => scond_eqb c1 c2
+  | _, _ => false
+  end
+
+with scond_eqb (c1 c2 : scond) {struct c1} : bool :=
+  match c1, c2 with
+  | C_Conj a1 x1 y1, C_Conj a2 x2 y2 =>
+    match a1, a2 with And_F, And_F | Or_F, Or_F => true | _, _ => false end && scond_eqb x1 x2 && scond_eqb y1 y2
+  | C_Not x1, C_Not x2 => scond_eqb x1 x2
+  | C_True, C_True => true
+  | C_Pred p1 l1, C_Pred p2 l2 =>
+    Oset.eq_bool (OPred T) p1 p2 &&
+    (fix eqs (l1 l2 : list sexpr) {struct l1} : bool :=
+       match l1, l2 with
+       | nil, nil => true
+       | x :: r1, y :: r2 => sexpr_eqb x y && eqs r1 r2
+       | _, _ => false
+       end) l1 l2
+  | C_Expr x1, C_Expr x2 => sexpr_eqb x1 x2
   | _, _ => false
   end.
 
