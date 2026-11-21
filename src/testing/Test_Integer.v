@@ -85,3 +85,22 @@ Example lite_sum_overflow :
   | _ => false
   end = true.
 Proof. check. Qed.
+
+(** The text of an integer in PostgreSQL ([pg_strtoint32_safe]; the regression test [int4.sql]): the bases
+    [0x], [0o], [0b], underscores between digits, a sign, spaces around. *)
+Example pg_int_input :
+  (text PostgreSQL (fn "cast_int" [str "0b100101"]), text PostgreSQL (fn "cast_int" [str "0o273"]),
+   text PostgreSQL (fn "cast_int" [str "0x42F"]), text PostgreSQL (fn "cast_int" [str "-0x80000000"]),
+   text PostgreSQL (fn "cast_int" [str "1_000_000"]), text PostgreSQL (fn "cast_int" [str "0x1EEE_FFFF"]),
+   text PostgreSQL (fn "cast_int" [str "0b_10_0101"]), text PostgreSQL (fn "cast_bigint" [str "+4567890123456789"]),
+   text PostgreSQL (fn "cast_int" [str "  12  "]))
+  = ("37", "187", "1071", "-2147483648", "1000000", "518979583", "37", "4567890123456789", "12").
+Proof. check. Qed.
+
+Example pg_int_input_errors :
+  (fails PostgreSQL (fn "cast_int" [str "_100"]), fails PostgreSQL (fn "cast_int" [str "100_"]),
+   fails PostgreSQL (fn "cast_int" [str "1__000"]), fails PostgreSQL (fn "cast_int" [str "0x"]),
+   fails PostgreSQL (fn "cast_int" [str "0b12"]), fails PostgreSQL (fn "cast_int" [str "0x80000000"]),
+   fails PostgreSQL (fn "cast_int" [str "1 2"]), fails PostgreSQL (fn "cast_int" [str ""]))
+  = (true, true, true, true, true, true, true, true).
+Proof. check. Qed.

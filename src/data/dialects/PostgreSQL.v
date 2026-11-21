@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns PgNumFormat Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -731,6 +731,15 @@ Definition pg_with_overrides (t : list (string * (list value -> value))) : list 
   let over (n : string) (f : (list value -> value) -> list value -> value) :=
       match string_assoc _ n t with Some g => (n, f g) :: nil | None => nil end in
   over "concat" (fun g l => g (map pg_out_text l))
+  (* [to_char (number, format)]: [PgNumFormat.v] *)
+  ++ over "to_char" (fun g l => match l with
+                                | v :: Value_string (Some fmt) :: nil =>
+                                  match v with
+                                  | Value_D (Some _) | Value_Q (Some _) | Value_Z (Some _) | Value_I (Some _)
+                                  | Value_F (Some _) => pg_num_to_char v fmt
+                                  | _ => g l
+                                  end
+                                | _ => g l end)
   ++ over "concat_ws" (fun g l => g (map pg_out_text l))
   (* [text || anynonarray]: the other operand is converted to text *)
   ++ over "||" (fun g l => match l with

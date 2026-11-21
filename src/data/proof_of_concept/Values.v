@@ -1322,6 +1322,53 @@ Definition cast_float (w32 : bool) (v : value) : value :=
   | _ => Value_F None
   end.
 
+(** The text of an integer in PostgreSQL ([pg_strtoint32_safe] in [numutils.c]): spaces, a sign, then
+    decimal digits, or [0x], [0o], [0b] and digits of the base; an underscore may separate two digits, and
+    follow the prefix of a base; spaces at the end. *)
+Definition int_digit (base : Z) (c : ascii) : option Z :=
+  let n := Z.of_nat (nat_of_ascii c) in
+  let v := (if (48 <=? n) && (n <=? 57) then n - 48
+            else if (97 <=? n) && (n <=? 102) then n - 87
+            else if (65 <=? n) && (n <=? 70) then n - 55 else 99)%Z in
+  if (v <? base)%Z then Some v else None.
+
+Fixpoint int_digits (base : Z) (l : list ascii) (acc : Z) (seen first : bool) : option Z :=
+  match l with
+  | nil => if seen then Some acc else None
+  | c :: r =>
+    match int_digit base c with
+    | Some v => int_digits base r (acc * base + v)%Z true false
+    | None =>
+      if Ascii.eqb c "_" && negb (first && (base =? 10)%Z)
+      then match r with
+           | c' :: _ => match int_digit base c' with Some _ => int_digits base r acc seen false | None => None end
+           | nil => None
+           end
+      else None
+    end
+  end.
+
+Definition is_c_space (c : ascii) : bool :=
+  let n := nat_of_ascii c in Nat.eqb n 32 || (Nat.leb 9 n && Nat.leb n 13).
+
+Fixpoint drop_c_spaces (l : list ascii) : list ascii :=
+  match l with c :: r => if is_c_space c then drop_c_spaces r else l | nil => nil end.
+
+Definition pg_int_of_string (s : string) : option Z :=
+  let l := rev (drop_c_spaces (rev (drop_c_spaces (list_ascii_of_string s)))) in
+  let (neg, l) := match l with
+                  | "-"%char :: r => (true, r)
+                  | "+"%char :: r => (false, r)
+                  | _ => (false, l)
+                  end in
+  let r := match l with
+           | "0"%char :: ("x" | "X")%char :: r => int_digits 16%Z r 0%Z false true
+           | "0"%char :: ("o" | "O")%char :: r => int_digits 8%Z r 0%Z false true
+           | "0"%char :: ("b" | "B")%char :: r => int_digits 2%Z r 0%Z false true
+           | _ => int_digits 10%Z l 0%Z false true
+           end in
+  match r with Some z => Some (if neg then (- z)%Z else z) | None => None end.
+
 Definition cast_Z v :=
   match v with
   | Value_F _ => float_to_Z v
@@ -1330,7 +1377,7 @@ Definition cast_Z v :=
   (* a [numeric] is rounded ([numeric_int4]: half away from zero), then checked against the range *)
   | Value_D (Some (q, _, _)) => Value_Z (Some (Qc_round q))
   | Value_string (Some s) => 
-    match Z_of_string (string_rtrim (string_ltrim s)) with
+    match pg_int_of_string s with
     | Some z => Value_Z (Some z)
     | None => Value_Err "invalid input syntax for type integer"
     end

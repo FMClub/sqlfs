@@ -133,6 +133,24 @@ SERVER_VERSION = 80400
 VIEWS = {}
 
 
+def values_types(rows):
+    """The type of a column of VALUES in PostgreSQL (select_common_type): a string literal has no type of
+    its own and takes the type of the other entries of its column. Here: when all the entries which are not
+    string literals are casts to one type, the literals are cast to it too ((VALUES ('0'::numeric), ('4.2'))
+    is a column of numerics)."""
+    rows = [list(r) for r in rows]
+    for j in range(len(rows[0])):
+        col = [r[j] for r in rows]
+        typed = [e for e in col if not (isinstance(e, tuple) and e[0] == 'str')]
+        if len(typed) == len(col) or not typed:
+            continue
+        if all(isinstance(e, tuple) and e[0] == 'cast' for e in typed) and len(set(repr(e[1]) for e in typed)) == 1:
+            for r in rows:
+                if r[j][0] == 'str':
+                    r[j] = ('cast', typed[0][1], r[j])
+    return rows
+
+
 class P:
     def __init__(self, toks):
         self.t = toks
@@ -259,6 +277,8 @@ class P:
                     break
             if len(set(len(r) for r in rows)) != 1:
                 raise Skip('values arity')
+            if ENGINE == 'postgresql':
+                rows = values_types(rows)
             return ('values', rows)
         return self.select()
 

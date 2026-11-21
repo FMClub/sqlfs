@@ -750,6 +750,12 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   `tomorrow`, `yesterday`, `epoch`, `now`. PostgreSQL: 53 failing cases of 514.
 - **8.12 `to_char` of numbers** (iteration 6): the numeric format models (`9`, `0`, `FM`, `EEEE`, `RN`, `V`, ...): 28
   failing cases.
+  **Status: DONE** (iteration 20). `src/data/dialects/PgNumFormat.v` follows `formatting.c`: the parser of the format
+  (`NUM_keywords`, the quoted texts), the description of the format with its syntax errors (`NUMDesc_prepare`), the
+  text of the number by type (`int4_to_char`, `numeric_to_char`, `float8_to_char`: rounding, `V`, `EEEE`, Roman
+  numerals, `#` on overflow) and the processor (`NUM_processor_to_char`, `NUM_numpart_to_char`: signs, `FM`, `PR`,
+  `S`, `MI`, `PL`, `SG`, `TH`, the group separator). The locale is C. Tests: `src/testing/Test_NumFormat.v` (the
+  examples of the manual which do not depend on the locale, queries of `numeric.sql`).
 - **8.13 BC dates** (iteration 6): the date parser reads years of the common era only: 12 failing cases.
   **Status: DONE** (iteration 7). `parse_date` reads the eras `AD` and `BC`, `date_text` prints `BC`, `EXTRACT` gives
   the negative years, decades, centuries and millennia of `extract_date`, and `JULIAN`. Found on the way, and
@@ -858,3 +864,16 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   where `SqlFull.v` does not normalise the NULLs. To relate them for the dialects of the engines, the statement has
   to be up to the type of the NULLs.
 
+- **8.31 The type of `PERCENT_RANK` and `CUME_DIST`** (iteration 20): the window functions give an exact rational
+  (`value_of_rat` is `Value_Q` for every dialect), where the engines give a double (PostgreSQL, the MySQL family,
+  SQLite), of 10 decimals in MariaDB (`Item_sum_percent_rank`), or a `NUMBER` (Oracle). Seen on MariaDB
+  `win_percent_cume` (`0.2222222222` expected, 40 digits given).
+- **8.32 The texts of the numbers of PostgreSQL** (iteration 20, found with the cases of `to_char`): an integer
+  is read with `0x`, `0o`, `0b` and underscores (`pg_strtoint32_safe`); a `numeric` with an exponent (`'4.2e9'`);
+  a string literal in a column of `VALUES` takes the type of the other entries (the translator kept it a string).
+  Also open: `'nan'::numeric % 0` is NaN (NULL given); `power ('-inf'::numeric, -3)` is `0` (`-0` given).
+- **8.33 The padding of the psql tables** (iteration 20): the converter of the PostgreSQL results removed the
+  spaces at the start of every cell; in a column aligned on the left they are data (`to_char (485, '999')` is
+  `' 485'`).
+  **Status: DONE** (iteration 20): `aligned_cells` in `tools/spec/pg2result.py` tells the alignment of a column from
+  its padding; a test in `tools/spec/test_sql2coq.py`.

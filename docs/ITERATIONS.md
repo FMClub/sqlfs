@@ -25,3 +25,4 @@ next item. One entry per iteration, newest last.
 | 17 | TODO 8.25 (windows) | acceptance: `NTILE (0)`, frames which start after their end, `LAG` / `LEAD` without `ORDER BY` in MariaDB; the extracted interpreter still builds and agrees with `vm_compute` on two files | — |
 | 18 | TODO 8.25 (regular expressions) | syntax errors of the regular expressions (`a**`, `{37,17}`, ICU: unknown group, unbounded lookbehind); scoped `(?-i)`, atomic groups, comments, `\10`, groups of a lookahead; an example of `Test_Closeout.v` gave PostgreSQL an option inside an expression, which it rejects | — |
 | 19 | TODO 8.22 | JSON paths of the MySQL family: `.*`, `[*]`, ranges, `last`, `**`, the wrapping of a non-array; `JSON_EXTRACT` with several paths | — |
+| 20 | TODO 8.12 | PostgreSQL `to_char (number, format)`: a model of `formatting.c` (`PgNumFormat.v`), checked on the examples of the manual and on `numeric.sql` | — |

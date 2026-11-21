@@ -14,7 +14,7 @@ UTC: a query is evaluated at one instant, and the session time zone is UTC.
 | arithmetic with intervals, `date_add`/`date_sub`/`adddate`/`subdate`, `INTERVAL n unit` | M | M | M (modifiers) | M (`date ± n`) |
 | `extract`, `date_part` | M | M (`EXTRACT(unit FROM t)` with composite units) | — (`strftime`) | M |
 | `date_trunc` | M | — | — | M (`TRUNC(d, fmt)`) |
-| `date_format`, `to_char`, `strftime` | M (`to_char`) | M | M | M (`TO_CHAR`) |
+| `date_format`, `to_char`, `strftime` | M (`to_char`; of a number: `PgNumFormat.v`, after `formatting.c`, in the C locale) | M | M | M (`TO_CHAR`) |
 | `str_to_date`, `to_date`, `to_timestamp` | M (`to_date`, `to_timestamp(text, fmt)`, `to_timestamp(epoch)`) | M (`STR_TO_DATE`: `DATE`, `TIME` or `DATETIME` by the format) | — | M (`TO_DATE`) |
 | `datediff`, `timestampdiff`, `months_between`, `age` | M (`age`, PostgreSQL's borrowing) | M | — (`julianday` differences) | M |
 | `now`, `current_*`, `sysdate`, `utc_*`, `clock_timestamp`… | M (the statement time) | M | M | M |

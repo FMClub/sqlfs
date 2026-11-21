@@ -200,6 +200,34 @@ def result_files_of_the_same_name():
         assert 'mk_case "executor_integration:0"' in open(os.path.join(out, 'Spec_executor_integration.v')).read()
 
 
+@test
+def padding_of_a_psql_table():
+    """Iteration 20: the spaces at the start of a cell are data in a column aligned on the left (texts) and
+    padding in a column aligned on the right (numbers)."""
+    sys.path.insert(0, HERE)
+    import pg2result
+    conv = pg2result.convert_output
+    # a text wider than its header, alone: no padding at all
+    assert conv([' to_char ', '----------', '  1.2e+03', '(1 row)']) == ['to_char', ' 1.2e+03']
+    # a number under a wider header
+    assert conv([' ?column? ', '----------', '       37', '(1 row)']) == ['?column?', '37']
+    # texts of different lengths, then numbers
+    out = conv([' t      | n  ', '--------+----', '  .00   |  5', ' - 4.20 | 10', '(2 rows)'])
+    assert out == ['t\tn', ' .00\t5', '- 4.20\t10'], out
+    # a text under a wider header
+    assert conv([' to_char ', '---------', '  485', '(1 row)']) == ['to_char', ' 485']
+
+
+@test
+def string_literals_of_values():
+    """Iteration 21: in a column of VALUES whose other entries are casts to one type, a string literal of
+    PostgreSQL is of this type."""
+    out = translate('PostgreSQL', {'a': (
+        "WITH v(x) AS (VALUES('0'::numeric),('4.2')) SELECT x FROM v;\nx\n0\n4.2\n")})['a']
+    c = case(out, 'a:0')
+    assert c.count('fn "cast_numeric"') == 2, c
+
+
 def main():
     failed = 0
     for t in TESTS:
