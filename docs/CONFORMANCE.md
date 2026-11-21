@@ -93,7 +93,7 @@ block, a routine, a data-modifying `WITH` or an inheritance child makes the tabl
 skipping the file.
 
 Run 9 (iteration 7, TODO 8.13): the dates before the common era (`BC`, `EXTRACT` of negative years, the Julian
-day): **121** fail (12 fewer than run 8; the files `date` and `timestamp` were run again, the others are those of
+day): **120** fail (13 fewer than run 8; the files `date` and `timestamp` were run again, the others are those of
 run 8). The calendar conversions were off by one day before 0000-03-01: fixed.
 
 Run 8 (iteration 6 of `docs/ITERATIONS.md`, TODO 8.9; `strings` and `jsonb` are now read): **514** queries

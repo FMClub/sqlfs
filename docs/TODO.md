@@ -732,7 +732,7 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   **Status: IN PROGRESS.**
   - PostgreSQL (iteration 6): 238 failing cases of 514 became 133 (`docs/CONFORMANCE.md`, run 8). Remaining classes:
     `NaN` / `Infinity` of `numeric`, infinite dates, `to_char` with numeric formats (TODO 8.11, 8.12); after iteration 7
-    (BC dates) 121 fail.
+    (BC dates, `EXTRACT (JULIAN ...)`) 120 fail.
   - TiDB, MySQL, MariaDB: not classified again yet.
 - **8.10 Storage order and names** (iteration 4, I11): the order in which a stored table is read depends on the
   names of its columns. Decide between the options of I11 and do it.
