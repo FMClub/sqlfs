@@ -261,8 +261,27 @@ syntax (subqueries, grouping, joins, windows, `WITH`), or is the full migration 
 
 Decision (maintainer): keep the tuples of `SqlFull.v` named and prove, for the whole syntax, that the evaluation does
 not depend on the names. Done in `src/data/sql/SqlRename.v` (`eval_rename`): the rows of a query renamed by an
-order-preserving bijection of the attributes, over the renamed database, are the renamed rows of the query. The
+bijection of the attributes (which preserves their types), over the renamed database, are the renamed rows of the query. The
 compiled positional language of `SqlPositional.v` stays as the example of the front end's naming.
 
 Related, for TODO 6.1: `IN (subquery)` and grouped blocks inside formulas needed two fixes of `Sql.v` (A7, A8 in
 `docs/SQL_COVERAGE.md`); both are fixed and the relation covers them (`sql_full_agree3`).
+
+## I11 — The order in which a stored table is read depends on the names of its columns — OPEN
+
+Found by iteration 4 (`docs/ITERATIONS.md`). A stored table is a bag (`instance : relname -> bagT`), and
+`eval_squery` reads its rows with `Febag.elements`, in the order of the tuples; the order of the tuples of the
+instance compares the values in the order of the attributes, which is the order of their types and names. So the
+same rows stored under other column names may be read in another order, and a query whose result depends on the
+order of the rows (`LIMIT` without `ORDER BY`, ties of an `ORDER BY`, `string_agg` without order) may give another
+result. Consequences:
+- `eval_rename` needs the hypothesis that the rows of each table are related one by one in the same order
+  (`Hinst`); `src/testing/Test_Rename.v` uses a table for which the two orders coincide.
+- The conformance harness compares such results as bags or with the allowed results of TODO 3.10, so it is not
+  affected.
+
+Options: (a) keep it, documented (the order of an unordered table is implementation-defined in SQL as well); (b)
+store tables as lists (insertion order, as the engines without a clustered key do), which changes
+`instance` in `SqlFull.v` and every statement which mentions `Febag.elements`; (c) prove the bag version of
+`eval_rename` for the queries whose result does not depend on the order of the stored rows. Tracked as TODO 8.10.
+

@@ -91,6 +91,7 @@ data/dialects/Percona.v
 data/dialects/PolarDB.v
 data/dialects/Versions.v
 data/dialects/Refinement.v
+data/dialects/Renaming.v
 data/dialects/ResultText.v
 data/dialects/Positional.v
 data/dialects/Typing.v
@@ -153,6 +154,7 @@ testing/Test_WellFormed.v
 testing/Test_ResultText.v
 testing/Test_Positional.v
 testing/Test_SqlPositional.v
+testing/Test_Rename.v
 testing/Test_Typing.v
 testing/Test_TypeOf.v
 testing/Test_Refinement.v

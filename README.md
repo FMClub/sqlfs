@@ -32,7 +32,7 @@ make install
 | `eval_sorts` | `SqlSorts.v` | the rows of a query have the attributes of its sort |
 | `scope_query` | `SqlScopeQuery.v` | a query depends on the enclosing blocks only through the columns it names |
 | `eval_congruence`, `dialect_refinement` | `SqlCongruence.v`, `dialects/Refinement.v` | two dialects which agree on what a query uses give it the same rows |
-| `eval_rename` | `SqlRename.v` | the evaluation does not depend on the names of the attributes |
+| `eval_rename`, `eval_rename_names` | `SqlRename.v`, `dialects/Renaming.v` | the evaluation does not depend on the names of the attributes |
 | `rollup_as_grouping_sets`, frame and set-operation laws | `SqlGroupFacts.v`, `SqlFullFacts.v` | laws of the constructs |
 | TLP, NoREC, containment | `Oracles.v`, `SqlFullFacts.v` | the oracles of the testing tools hold in the semantics |
 
