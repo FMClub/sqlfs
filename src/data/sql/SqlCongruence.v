@@ -452,34 +452,30 @@ Proof.
     destruct (first_error O1 _); [reflexivity | ].
     agr.
   + ihc cong_c c; ihe cong_e e.
-    unf; same_helpers.
-    destruct (is_hidden env _); [reflexivity | ].
-    destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | ].
-    cong. all: try agr.
+    clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; same_helpers; destruct (is_hidden env _); [reflexivity | ];
+      destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr]).
   + ihc cong_c c; ihe cong_e e. ih_o cong_e lo.
     destruct sep as [s0 | ]; split_ok; [ihe cong_e s0 | ].
-    all: unf; same_helpers.
-    all: destruct (is_hidden env _); [reflexivity | ].
-    all: destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | ].
-    all: cong. all: try agr.
+    all: clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; same_helpers; destruct (is_hidden env _); [reflexivity | ];
+      destruct (agg_env _ env) as [ | [[sa g] hid] env']; [agr | cong; try agr]).
   + ihc cong_c c; ihe cong_e e1; ihe cong_e e2.
     unf; same_helpers; rw_ih; reflexivity.
   + ihc cong_c c. unf; same_helpers; rw_ih; reflexivity.
   + ihq cong_q q. unf; same_helpers; rw_ih; reflexivity.
   + unf; same_helpers; reflexivity.
 - destruct c as [a c1 c2 | c | | p l | e | qtf p l q la | l q la | q]; intros H; split_ok.
-  + ihc cong_c c1; ihc cong_c c2; split; intros ce env; unf; cong.
-  + ihc cong_c c; split; intros ce env; unf; cong.
+  + ihc cong_c c1; ihc cong_c c2; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
+  + ihc cong_c c; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
   + split; intros ce env; reflexivity.
-  + ih_l cong_e l; split; intros ce env; unf; cong.
-  + ihe cong_e e; split; intros ce env; unf; cong.
-  + ih_l cong_e l; ihq cong_q q; split; intros ce env; unf; cong.
-  + ih_l cong_e l; ihq cong_q q; split; intros ce env; unf; cong.
-  + ihq cong_q q; split; intros ce env; unf; cong.
+  + ih_l cong_e l; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
+  + ihe cong_e e; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
+  + ih_l cong_e l; ihq cong_q q; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
+  + ih_l cong_e l; ihq cong_q q; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
+  + ihq cong_q q; split; intros ce env; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
 - destruct q as [r | o sq q1 q2 | sp | q lo off lim | q lo off ties pct n | q lw | r q1 q2 | sq r q1 q2 q3]; intros H ce env;
   split_ok.
   + reflexivity.
-  + ihq cong_q q1; ihq cong_q q2; unf; cong.
+  + ihq cong_q q1; ihq cong_q q2; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
   + assert (E := cong_s sp ltac:(assumption)); unf; rw_ih; reflexivity.
   + ih_o cong_e lo.
     assert (R : forall ce env, ord_rows O2 ce env q lo = ord_rows O1 ce env q lo).
@@ -509,7 +505,7 @@ Proof.
           match goal with Hy : In y (swfun_exprs ?g) |- _ => exact (gof g ltac:(assumption) y Hy) end. }
       apply wfun_cong; assumption. }
     f_equal; apply map_ext_in; intros w Hw; apply W; exact Hw.
-  + ihq cong_q q1; ihq cong_q q2; unf; cong.
+  + ihq cong_q q1; ihq cong_q q2; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
   + ihq cong_q q1; ihq cong_q q2; ihq cong_q q3; unf; rw_ih.
     assert (S : forall r sa, (fun work => eq2 ((r, (sa, work)) :: ce) env q2) = (fun work => eq1 ((r, (sa, work)) :: ce) env q2))
       by (intros; extensionality work; rw_ih; reflexivity).
@@ -531,9 +527,9 @@ Proof.
   rewrite (where_rows_cong lf w IHf Ec Rc), (gkeys_cong g Hg), (row_vals_cong g Hg), (select_rest_cong s h Hs Ec0 Rc0).
   same_helpers; reflexivity.
 - destruct f as [q rho | jt lat f1 f2 c | name args ord atts]; intros H ce env; split_ok.
-  + ihq cong_q q; unf; cong.
-  + ihf cong_f f1; ihf cong_f f2; ihc cong_c c; unf; cong.
-  + ih_l cong_e args; unf; cong.
+  + ihq cong_q q; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
+  + ihf cong_f f1; ihf cong_f f2; ihc cong_c c; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
+  + ih_l cong_e args; clear cong_e cong_c cong_q cong_s cong_f; abstract (unf; cong).
 Qed.
 
 (** * The congruence
