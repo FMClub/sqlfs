@@ -191,3 +191,36 @@ Example pg_ceiling : text PostgreSQL (fn "ceiling" [cst (VD 25 1)]) = "3".
 Proof. check. Qed.
 Example pg_random : fails PostgreSQL (fn "random" []) = true.
 Proof. check. Qed.
+
+(** [power] of [numeric] (PostgreSQL regression test [numeric]): the scale gives 16 significant digits and at least
+    the scales of the arguments; an integer exponent is exact; a string literal by a [numeric] is a [numeric] *)
+Example pg_pow_1 : text PostgreSQL (fn "power" [cst (VD 12 2); cst (VD (-20) 0)]) = "2608405330458882702.55".
+Proof. check. Qed.
+Example pg_pow_2 : text PostgreSQL (fn "power" [cst (VD 123 1); cst (VD 456 1)]) = "50081010321492803393171165777624533697036806969694.9".
+Proof. check. Qed.
+Example pg_pow_3 : text PostgreSQL (fn "power" [fn "cast_numeric" [str "-2"]; str "-1"]) = "-0.5000000000000000".
+Proof. check. Qed.
+Example pg_pow_4 : text PostgreSQL (fn "power" [cst (VD 0 1); cst (VD 0 1)]) = "1.0000000000000000".
+Proof. check. Qed.
+Example pg_pow_5 : fails PostgreSQL (fn "power" [cst (VD (-1234) 2); cst (VD 5 1)]) = true.
+Proof. check. Qed.
+
+(** [power] and [exp] of [double precision] on NaN and the infinities ([dpow], [dexp] of [float.c]) *)
+Definition f8 (t : string) := fn "cast_float8" [str t].
+Example pg_dpow_1 : text PostgreSQL (fn "power" [f8 "NaN"; f8 "0"]) = "1".
+Proof. check. Qed.
+Example pg_dpow_2 : text PostgreSQL (fn "power" [f8 "1"; f8 "NaN"]) = "1".
+Proof. check. Qed.
+Example pg_dpow_3 : text PostgreSQL (fn "power" [f8 "-inf"; f8 "3"]) = "-Infinity".
+Proof. check. Qed.
+Example pg_dpow_4 : text PostgreSQL (fn "power" [f8 "0.1"; f8 "-inf"]) = "Infinity".
+Proof. check. Qed.
+Example pg_dpow_5 : text PostgreSQL (fn "power" [f8 "-1"; f8 "inf"]) = "1".
+Proof. check. Qed.
+Example pg_dexp_inf : text PostgreSQL (fn "exp" [f8 "inf"]) = "Infinity" /\ text PostgreSQL (fn "exp" [f8 "-inf"]) = "0".
+Proof. split; check. Qed.
+Example pg_nan_by_zero : text PostgreSQL (fn "/" [f8 "nan"; f8 "0"]) = "NaN".
+Proof. check. Qed.
+Example pg_series_numeric :
+  List.length (run PostgreSQL (select_star_where [from_fun "generate_series" [fn "cast_numeric" [int 1]; fn "cast_numeric" [int 3]] false [c0]] c_true)) = 3%nat.
+Proof. check. Qed.

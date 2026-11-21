@@ -537,7 +537,8 @@ Definition pg_generate_series (l : list value) : list (list value) :=
       | _, _ => nil
       end
     | _, _, _ =>
-      if existsb is_D (a :: b :: rest) then
+      (* [numeric] arguments: decimals, and the rationals which a cast to [numeric] of an integer gives *)
+      if existsb (fun v => is_D v || match v with Value_Q (Some _) => true | _ => false end) (a :: b :: rest) then
         match dec_of_value a, dec_of_value b, match rest with s :: nil => dec_of_value s | _ => Some (Qc_of_Z 1, 0%nat, 0%nat) end with
         | Some (x, _, s1), Some (y, _, s2), Some (st, _, s3) =>
           if Qc_is_zero st then (Value_Err "step size cannot equal zero" :: nil) :: nil

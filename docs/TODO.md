@@ -729,9 +729,21 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
 - **8.9 Failing conformance cases** (iteration 3): `docs/CONFORMANCE_SUMMARY.md` lists 215 failing cases for the
   PostgreSQL regression tests, 125 for TiDB, 118 for MySQL, 6 for MariaDB. Classify them again (model gap,
   translator gap, engine-specific output) and fix the model gaps, most frequent first.
+  **Status: IN PROGRESS.**
+  - PostgreSQL (iteration 6): 238 failing cases of 514 became 133 (`docs/CONFORMANCE.md`, run 8). Remaining classes:
+    `NaN` / `Infinity` of `numeric`, infinite dates, `to_char` with numeric formats, BC dates (TODO 8.11–8.13).
+  - TiDB, MySQL, MariaDB: not classified again yet.
 - **8.10 Storage order and names** (iteration 4, I11): the order in which a stored table is read depends on the
   names of its columns. Decide between the options of I11 and do it.
   **Status: DONE** (iteration 5), by decision: option (a) of I11. The order of an unordered table is
   implementation-defined in SQL, the harness compares such results as bags or with the allowed results of TODO
   3.10, and `eval_rename` states its hypothesis on the order explicitly.
-
+- **8.11 `NaN` and `Infinity` of `numeric`, infinite dates and timestamps** (iteration 6): PostgreSQL has them, the
+  model does not (`Value_D` is finite, a date is a number of days): 75 failing cases of the regression tests.
+- **8.12 `to_char` of numbers** (iteration 6): the numeric format models (`9`, `0`, `FM`, `EEEE`, `RN`, `V`, ...): 28
+  failing cases.
+- **8.13 BC dates** (iteration 6): the date parser reads years of the common era only: 12 failing cases.
+- **8.14 `INSERT IGNORE` of a NULL into a `NOT NULL` string column** (iteration 6): the OceanBase suite expects the
+  implicit default `''`; the replay gives NULL (`insert_ignore:117`).
+- **8.15 Speed of the text of a long decimal** (iteration 6): `1.234 ^ 5678` (519 digits) takes 70 seconds to
+  check, most of it in the conversion to text.

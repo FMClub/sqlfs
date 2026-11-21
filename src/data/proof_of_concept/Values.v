@@ -1339,7 +1339,9 @@ Definition cast_Q v :=
   match v with
   | Value_F _ => float_to_numeric v
   | Value_Q q => Value_Q q
-  | Value_Z (Some z) => Value_Q (Some (Qc_of_Z z))
+  (* an integer is a [numeric] of scale 0 *)
+  | Value_Z (Some z) => VDec (Qc_of_Z z) 0 0
+  | Value_I (Some (z, _)) => VDec (Qc_of_Z z) 0 0
   | Value_D d => Value_D d
   | Value_string (Some s) => 
     let t := string_rtrim (string_ltrim s) in
@@ -1846,7 +1848,8 @@ Definition pg_num_exp (q : Qc) (sc : nat) : value :=
   let r := pg_clamp_scale (16 - Z.quot (Qnum v) (Zpos (Qden v))) sc in
   match exp_exact (this q) with
   | Some e => VDec (dec_round (Q2Qc e) r) r r
-  | None => Value_Err "value overflows numeric format"
+  (* an underflow is 0 with the largest scale ([exp_var]); an overflow is an error *)
+  | None => if Z.ltb (Qnum (this q)) 0 then VDec (Qc_of_Z 0) 1000 1000 else Value_Err "value overflows numeric format"
   end.
 
 Definition pg_num_log (b : Qc * nat) (x : Qc * nat) : value :=
@@ -1865,6 +1868,64 @@ Definition pg_num_ln (q : Qc) (sc : nat) : value :=
     (if Qc_is_zero q then Value_Err "cannot take logarithm of zero" else Value_Err "cannot take logarithm of a negative number")
   else let r := pg_clamp_scale (16 - pg_ln_dweight (this q)) sc in
        VDec (dec_round (Q2Qc (ln_exact (this q))) r) r r.
+
+(** [(a / b) ^ n] rounded to [r] decimals (half away from zero), on integers: no fraction is reduced *)
+Fixpoint zpow_pos (a : Z) (p : positive) : Z :=
+  match p with
+  | xH => a
+  | xO p' => let h := zpow_pos a p' in h * h
+  | xI p' => let h := zpow_pos a p' in h * h * a
+  end.
+
+Definition pow_round (a : Z) (b : positive) (n : Z) (r : nat) : Qc :=
+  let '(num, den) :=
+      match n with
+      | Z0 => (1, 1)
+      | Zpos p => (zpow_pos a p, zpow_pos (Zpos b) p)
+      | Zneg p => (zpow_pos (Zpos b) p * (if Z.ltb a 0 && Z.odd (Zpos p) then -1 else 1), zpow_pos (Z.abs a) p)
+      end in
+  let m := (2 * Z.abs num * Z.pow 10 (Z.of_nat r) + den) / (2 * den) in
+  Qcdiv (Qc_of_Z (if Z.ltb num 0 then - m else m)) (Qc_pow10 r).
+
+(** [power] of [numeric] ([power_var], [power_var_int] of [numeric.c]): the scale of the result gives it 16
+    significant digits, and at least the scales of the arguments: [16 - trunc (log10 (x ^ y))], between the larger
+    scale of the arguments and 1000. An integer exponent is exact before the rounding ([0 ^ 0] is 1, zero to a
+    negative power is a division by zero); otherwise the base must not be negative ([0 ^ y] is 0 with 16
+    decimals) and the power is [exp (y ln x)]. The estimate of the weight is computed here on exact values, where
+    the engine uses a double. *)
+Definition pg_num_power (b : Qc * nat) (e : Qc * nat) : value :=
+  let (x, sx) := b in
+  let (y, sy) := e in
+  let sc := Nat.max sx sy in
+  let l10 := ln_exact 10 in
+  let trunc (q : Q) := Z.quot (Qnum q) (Zpos (Qden q)) in
+  let over := Value_Err "value overflows numeric format" in
+  if Pos.eqb (Qden (this y)) 1 then
+    let n := Qnum (this y) in
+    let f := if Qc_is_zero x then 0%Q else Qmult (inject_Z n) (Qdiv (ln_exact (Qabs.Qabs (this x))) l10) in
+    if Qle_bool 131073 f then over
+    else if Qle_bool (f + 1) (-1001) then VDec (Qc_of_Z 0) 1000 1000
+    else
+      let r := pg_clamp_scale (16 - trunc f) sc in
+      if Z.eqb n 0 then VDec (Qc_of_Z 1) r r
+      else if Qc_is_zero x then (if Z.ltb n 0 then Value_Err "division by zero" else VDec (Qc_of_Z 0) r r)
+      else
+        if Z.ltb (Z.abs n) 20000 then VDec (pow_round (Qnum (this x)) (Qden (this x)) n r) r r
+        else match exp_exact (Qmult (inject_Z n) (ln_exact (Qabs.Qabs (this x)))) with
+             | Some p => VDec (dec_round (Q2Qc (if Z.ltb (Qnum (this x)) 0 && Z.odd n then Qopp p else p)) r) r r
+             | None => over
+             end
+  else if Qc_is_zero x then VDec (Qc_of_Z 0) 16 16
+  else if Z.ltb (Qnum (this x)) 0 then Value_Err "a negative number raised to a non-integer power yields a complex result"
+  else
+    let lnv := Qmult (this y) (ln_exact (this x)) in
+    if Qle_bool 6020 (Qabs.Qabs lnv) then (if Qle_bool 0 lnv then over else VDec (Qc_of_Z 0) 1000 1000)
+    else
+      let r := pg_clamp_scale (16 - trunc (Qdiv lnv l10)) sc in
+      match exp_exact lnv with
+      | Some p => VDec (dec_round (Q2Qc p) r) r r
+      | None => over
+      end.
 
 (** a function with a [numeric] and a [double precision] version: an integer argument takes the
     double one, the preferred type of the numeric category *)
@@ -1955,7 +2016,19 @@ Definition pg_math_table (num_power : list value -> value) : list (string * (lis
   :: ("radians", dbl_fun1 c (fun q => Some (radians_pg q)) bad pg_sp_same bad)
   :: ("pi", fun l => match l with nil => VF false (F_Finite, pi_double) | _ => bad end)
   (* [power] of two non-[numeric] arguments is the one of [double precision] *)
-  :: ("power", fun l => if existsb is_D l then num_power l
+  :: ("power", fun l => if existsb is_D l
+                        then
+                          (* a string literal by a [numeric] is a [numeric] *)
+                          let dv (v : value) := dec_of_value (match v with Value_string _ => cast_Q v | _ => v end) in
+                          match l with
+                          | a :: b :: nil =>
+                            if is_null a || is_null b then Value_D None
+                            else match dv a, dv b with
+                                 | Some (qa, _, sa), Some (qb, _, sb) => pg_num_power (qa, sa) (qb, sb)
+                                 | _, _ => num_power l
+                                 end
+                          | _ => num_power l
+                          end
                         else dpow l)
   :: nil.
 
