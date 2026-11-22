@@ -868,10 +868,24 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   (`value_of_rat` is `Value_Q` for every dialect), where the engines give a double (PostgreSQL, the MySQL family,
   SQLite), of 10 decimals in MariaDB (`Item_sum_percent_rank`), or a `NUMBER` (Oracle). Seen on MariaDB
   `win_percent_cume` (`0.2222222222` expected, 40 digits given).
+  **Status: DONE** (iteration 22). A field `vs_of_rat` of the dialects (`Dialects.v`) gives the value of a rational:
+  a double in PostgreSQL, SQLite and the MySQL family, of 10 decimals in MariaDB, the exact number in Oracle
+  mode; `same_core` (`Refinement.v`) and `at_version` (`Versions.v`) carry it. Tests: `src/testing/Test_Range.v`.
 - **8.32 The texts of the numbers of PostgreSQL** (iteration 20, found with the cases of `to_char`): an integer
   is read with `0x`, `0o`, `0b` and underscores (`pg_strtoint32_safe`); a `numeric` with an exponent (`'4.2e9'`);
   a string literal in a column of `VALUES` takes the type of the other entries (the translator kept it a string).
   Also open: `'nan'::numeric % 0` is NaN (NULL given); `power ('-inf'::numeric, -3)` is `0` (`-0` given).
+  **Status: PARTIAL** (iteration 21). Done: the bases and the underscores of the integers (`pg_int_of_string`,
+  `Values.v`), the exponent of a `numeric` and its scale (`numeric_of_string`), the literals of `VALUES` (translator,
+  `values_types`), `%` on NaN and the infinities (`special_mod`). Tests: `Test_Integer.v`, `Test_Decimal.v`,
+  `tools/spec/test_sql2coq.py`. Open: `power ('-inf'::numeric, -3)`.
+- **8.34 One slow case loses the results of its file** (iteration 21): a file of cases is one `vm_compute`; with
+  the exponents of 8.32, `numeric:754` (`to_char` of `1.2345e131071`) made `numeric.sql` go over the limit of the
+  runner, and its 155 cases were reported as not run.
+  **Status: DONE** (iteration 21). `tools/spec/compile_spec.sh` compiles a file over its limit again case by case
+  (`split_cases.py`); `summary.py` counts as not run only the cases over the limit of a case (`TIMEOUT_CASE`). The
+  slow cases themselves (`numeric:754`, the power `1.234 ^ 5678`, sums over 100,000 rows) are TODO 8.15: the
+  numbers of the model are binary terms, and the normalisation of a fraction of 10^131071 is quadratic.
 - **8.33 The padding of the psql tables** (iteration 20): the converter of the PostgreSQL results removed the
   spaces at the start of every cell; in a column aligned on the left they are data (`to_char (485, '999')` is
   `' 485'`).

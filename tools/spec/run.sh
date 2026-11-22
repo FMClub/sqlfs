@@ -20,4 +20,5 @@ cd "$ROOT/src"
 coqc -R . SQLFS testing/SpecRunner.v
 # a file which takes more than FILE_TIMEOUT seconds (a join of dozens of tables: the tuples of the
 # model are lists, and a row of 200 columns is slow to build) is reported as TIMEOUT
-ls testing/spec/Spec_*.v | xargs -P "${JOBS:-4}" -I{} sh -c 'echo "== {}"; timeout ${FILE_TIMEOUT:-600} coqc -R . SQLFS {} > /tmp/spec_$$.out 2>&1; [ $? -eq 124 ] && echo "TIMEOUT {}"; grep -v "^ *: " /tmp/spec_$$.out | head -${LINES_MAX:-30}; rm -f /tmp/spec_$$.out'
+# reported as TIMEOUT; with CASE_TIMEOUT > 0 its cases are compiled one by one instead (compile_spec.sh)
+ls testing/spec/Spec_*.v | xargs -P "${JOBS:-4}" -I{} sh -c 'o=$(echo "== {}"; FILE_TIMEOUT=${FILE_TIMEOUT:-600} CASE_TIMEOUT=${CASE_TIMEOUT:-0} LINES_MAX=${LINES_MAX:-30} "$0" {}); echo "$o"' "$ROOT/tools/spec/compile_spec.sh"

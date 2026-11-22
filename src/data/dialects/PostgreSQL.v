@@ -805,4 +805,5 @@ Definition PostgreSQL : vsem :=
                   match l with a :: b :: nil => conv b a :: conv a b :: nil | _ => l end
              else l)
           (fun l => l)
-          pg_table_funs.
+          pg_table_funs
+          (fun q => to_float false (Q2Qc q)).

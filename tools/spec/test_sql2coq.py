@@ -209,11 +209,14 @@ def padding_of_a_psql_table():
     conv = pg2result.convert_output
     # a text wider than its header, alone: no padding at all
     assert conv([' to_char ', '----------', '  1.2e+03', '(1 row)']) == ['to_char', ' 1.2e+03']
-    # a number under a wider header
-    assert conv([' ?column? ', '----------', '       37', '(1 row)']) == ['?column?', '37']
+    # a number under a wider header: its padding is kept (SpecRunner ignores the leading spaces of a number)
+    assert conv([' ?column? ', '----------', '       37', '(1 row)']) == ['?column?', '      37']
     # texts of different lengths, then numbers
     out = conv([' t      | n  ', '--------+----', '  .00   |  5', ' - 4.20 | 10', '(2 rows)'])
-    assert out == ['t\tn', ' .00\t5', '- 4.20\t10'], out
+    assert out == ['t\tn', ' .00\t 5', '- 4.20\t10'], out
+    # texts which all fill their column (to_char (x, '9.999EEEE')): the leading spaces are data
+    out = conv([' numeric    ', '------------', '  0.000e+00', ' -4.200e+00', '(2 rows)'])
+    assert out == ['numeric', ' 0.000e+00', '-4.200e+00'], out
     # a text under a wider header
     assert conv([' to_char ', '---------', '  485', '(1 row)']) == ['to_char', ' 485']
 
@@ -226,6 +229,34 @@ def string_literals_of_values():
         "WITH v(x) AS (VALUES('0'::numeric),('4.2')) SELECT x FROM v;\nx\n0\n4.2\n")})['a']
     c = case(out, 'a:0')
     assert c.count('fn "cast_numeric"') == 2, c
+
+
+@test
+def split_of_a_file_of_cases():
+    """Iteration 21: a file over the time limit is compiled again case by case (compile_spec.sh): each file
+    written by split_cases.py has the header, one case and the evaluation; summary.py counts as not run only
+    the cases over the limit."""
+    sys.path.insert(0, HERE)
+    import split_cases
+    import summary
+    out = translate('TiDB', {'a': "select 1;\n1\n1\nselect 2;\n2\n2\nselect 3;\n3\n3\n"})['a']
+    with tempfile.TemporaryDirectory() as d:
+        spec = os.path.join(d, 'Spec_a.v')
+        with open(spec, 'w') as f:
+            f.write(out)
+        files = split_cases.split(spec, os.path.join(d, 'split'))
+        assert len(files) == 3, files
+        one = open(files[1]).read()
+        assert one.count('mk_case') == 1 and 'mk_case "a:1"' in one, one
+        assert one.startswith(out.split('Definition cases_a')[0]), one
+        assert 'Eval vm_compute in (diagnose TiDB cases_a).' in one, one
+        assert '"a:1" false' in one and not re.search(r'\);\n\]', one), one
+        log = os.path.join(d, 'log')
+        with open(log, 'w') as f:
+            f.write('{"translated": 3}\n== testing/x/Spec_a.v\nSPLIT testing/x/Spec_a.v\nTIMEOUT_CASE a:2\n'
+                    '     = ["a:1 | select 2; | expected [2] | got [3]"]\n')
+        n, fails, timeouts, unfinished = summary.read(log, True)
+        assert (n, sorted(fails), unfinished) == (3, ['a:1'], 1), (n, fails, unfinished)
 
 
 def main():

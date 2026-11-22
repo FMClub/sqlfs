@@ -26,3 +26,5 @@ next item. One entry per iteration, newest last.
 | 18 | TODO 8.25 (regular expressions) | syntax errors of the regular expressions (`a**`, `{37,17}`, ICU: unknown group, unbounded lookbehind); scoped `(?-i)`, atomic groups, comments, `\10`, groups of a lookahead; an example of `Test_Closeout.v` gave PostgreSQL an option inside an expression, which it rejects | — |
 | 19 | TODO 8.22 | JSON paths of the MySQL family: `.*`, `[*]`, ranges, `last`, `**`, the wrapping of a non-array; `JSON_EXTRACT` with several paths | — |
 | 20 | TODO 8.12 | PostgreSQL `to_char (number, format)`: a model of `formatting.c` (`PgNumFormat.v`), checked on the examples of the manual and on `numeric.sql` | — |
+| 21 | TODO 8.32, 8.34 | PostgreSQL texts of numbers: integers in bases 16, 8, 2 with underscores, `numeric` with an exponent, string literals of `VALUES`, `%` on NaN; the runners compile a file over its time limit case by case | 8.34 (found: a newly computable case made a whole file time out) |
+| 22 | TODO 8.31 | `PERCENT_RANK` and `CUME_DIST` typed by dialect (`vs_of_rat`): doubles, 10 decimals in MariaDB, exact in Oracle mode | — |

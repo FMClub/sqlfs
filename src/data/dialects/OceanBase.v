@@ -543,4 +543,5 @@ Definition OceanBaseOracle : vsem :=
           (fun _ => false)
           (fun _ _ l => l)
           (fun l => l)
-          (fun _ => None).
+          (fun _ => None)
+          NullValues.value_of_rat.

@@ -1248,7 +1248,10 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           (fun _ => false)
           (fun _ _ l => l)
           my_unify_column
-          my_table_funs.
+          my_table_funs
+          (* a double; of 10 decimals in MariaDB ([Item_sum_percent_rank], [Item_sum_cume_dist]: [decimals = 10]) *)
+          (fun q => let v := to_float false (Q2Qc q) in
+                    if Nat.eqb (ms_regex ss) 1 then with_fdec (Some 10%nat) v else v).
 
 End Session.
 

@@ -31,6 +31,12 @@ success is a query whose result the model reproduces.
   sqllogictest does (`I` integer, `R` `%.3f`, `T` text, `(empty)`, `NULL`), results which are
   only given by their hash are skipped.
 
+- `tools/spec/compile_spec.sh`, `tools/spec/split_cases.py`: a file of cases is compiled as one
+  `vm_compute`, so one slow case used to lose the results of the whole file. A file over `FILE_TIMEOUT`
+  is reported as `SPLIT` and compiled again one case at a time, each within `CASE_TIMEOUT` seconds
+  (default 120; a case over it is reported as `TIMEOUT_CASE id`). `pg_run.sh` and `suite_run.sh` do this;
+  `run.sh` (OceanBase) keeps `CASE_TIMEOUT=0`, which reports the whole file as `TIMEOUT`, unless it is set.
+
 ```
 tools/spec/run.sh     /path/to/oceanbase OceanBaseMySQL
 tools/spec/run_slt.sh /path/to/sqllogictest mysql OceanBaseMySQL 300 /path/to/test/random/expr/slt_good_0.test
@@ -179,6 +185,12 @@ with inline flags scoped to a group (`(?i:a)`, `((?-i)a)`) or back references be
 modelled since this run); 15 views changed through `UPDATE`/`INSERT` (the translator now marks the tables of a view
 unreliable: 2 remain); 9 `CURRENT_ROLE ()` and other session state; `INTERVAL ()` with a NULL bound, `varbinary`
 (binary strings), locks, temporary tables, time zones: not modelled or server state.
+
+Run 5 (iteration 18, the commit `afef183`): **1314** translated (103 of them expect an error), **89** fail (124 in
+run 4, on the same cases). The 35 cases which pass now are regular expressions: the syntax errors of ICU (`a**`,
+`a{37,17}`, a reference to a group which does not exist, a lookbehind without bound), `(?-i)`, atomic groups,
+comments, `\10`, the groups of a lookahead. 4 cases of `regular_expressions_func` remain (`(?x)`, a set operation
+of ICU).
 
 **TiDB integration tests** (`TiDB`, TODO 5.2): `tests/integrationtest/r` (273 files), `suite_run.sh TiDB tidb`; a script
 stops at the first change of `sql_mode`, collation, character set or time zone (the tests of the new collation framework

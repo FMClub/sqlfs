@@ -708,4 +708,5 @@ Definition SQLite : vsem :=
           (fun _ => false)
           lite_cmp_coerce
           (fun l => l)
-          lite_table_funs.
+          lite_table_funs
+          (fun q => to_float false (Q2Qc q)).

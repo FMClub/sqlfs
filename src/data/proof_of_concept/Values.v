@@ -1385,6 +1385,25 @@ Definition cast_Z v :=
   | _ => Value_Z None
   end.
 
+(** The text of a [numeric] ([numeric_in]): a sign, digits with a point, and an exponent [e+n]; its scale
+    is the number of digits after the point less the exponent (not negative). *)
+Definition numeric_of_string (t : string) : option (Qc * nat) :=
+  let t := match t with String "+" r => r | _ => t end in
+  let u := string_map lower_ascii t in
+  let (mant, ex) := match String.index 0 "e" u with
+                    | Some i => (String.substring 0 i u,
+                                 let e := String.substring (S i) (String.length u - S i) u in
+                                 Z_of_string (match e with String "+" r => r | _ => e end))
+                    | None => (u, Some 0%Z)
+                    end in
+  match Qc_of_string mant, ex with
+  | Some q, Some e =>
+    let frac := match String.index 0 "." mant with Some i => (String.length mant - S i)%nat | None => 0%nat end in
+    let q' := if (0 <=? e)%Z then Qcmult q (Qc_of_Z (10 ^ e)) else Qcdiv q (Qc_of_Z (10 ^ (- e))) in
+    Some (q', Z.to_nat (Z.of_nat frac - e))
+  | _, _ => None
+  end.
+
 Definition cast_Q v :=
   match v with
   | Value_F _ => float_to_numeric v
@@ -1395,10 +1414,8 @@ Definition cast_Q v :=
   | Value_D d => Value_D d
   | Value_string (Some s) => 
     let t := string_rtrim (string_ltrim s) in
-    match Qc_of_string t with
-    | Some q => 
-      let sc := match String.index 0 "." t with Some i => (String.length t - S i)%nat | None => 0%nat end in
-      VDec q sc sc
+    match numeric_of_string t with
+    | Some (q, sc) => VDec q sc sc
     | None =>
       (* [NaN], [Infinity], [-Infinity] ([numeric_in]): represented by the special values of the doubles *)
       let u := string_map lower_ascii t in
@@ -2157,6 +2174,25 @@ Definition lit2 (f : list value -> value) (l : list value) : value :=
   | _ => f l
   end.
 
+(** [numeric_mod] on NaN and the infinities (kept as the special values of the doubles): NaN if an operand
+    is NaN; an infinity modulo [y] is NaN (an error if [y] is zero); [x] modulo an infinity is [x] *)
+Definition special_mod (f : list value -> value) (l : list value) : value :=
+  match l with
+  | a :: b :: nil =>
+    if is_special a || is_special b then
+      let nan := VF false (F_NaN, Q2Qc 0) in
+      let is_nan (v : value) := match float_parts v with Some (F_NaN, _, _) => true | _ => false end in
+      if is_nan a || is_nan b then nan
+      else if is_special a
+           then match num_of_value b with
+                | Some n => if Qc_eq_bool (Qc_of_num n) (Qc_of_Z 0) then Value_Err "division by zero" else nan
+                | None => nan
+                end
+           else a
+    else f l
+  | _ => f l
+  end.
+
 Definition symbol_table_raw : list (string * (list value -> value)) :=
   let plus := pg_tm2 false (pg_int2 Z.add (pg_flt2 "+" Qcplus (pg_dec2 pg_dec_plus (arith2 (fun a b => Some (a + b)%Z) (fun a b => Some (Qcplus a b)))))) in
   let minus := pg_tm2 true (pg_int2 Z.sub (pg_flt2 "-" Qcminus (pg_dec2 pg_dec_minus (arith2 (fun a b => Some (a - b)%Z) (fun a b => Some (Qcminus a b)))))) in
@@ -2198,7 +2234,7 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
   :: ("mult", lit2 mult) :: ("*", lit2 mult)
   :: ("opp", opp) :: ("neg", opp)
   :: ("div", lit2 div) :: ("/", lit2 div)
-  :: ("mod", lit2 modulo) :: ("%", lit2 modulo)
+  :: ("mod", lit2 (special_mod modulo)) :: ("%", lit2 (special_mod modulo))
  :: ("abs", fun l => match l with
                       | Value_F (Some (x, k)) :: nil => 
                         let w := Nat.odd k in

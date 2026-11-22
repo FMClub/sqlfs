@@ -54,8 +54,15 @@ Definition build_db (tabs : list table_spec) : db_state :=
 
 (** A value, and the text of a result: NULLs are the same; an integer or a rational is compared as a
     number; a decimal, whose text has the scale of the engine, and the other values are compared as
-    texts. *)
-Definition cell_ok (v : NullValues.value) (s : string) : bool :=
+    texts. The leading spaces of the text of a number are ignored. *)
+Definition cell_ok (v : NullValues.value) (s0 : string) : bool :=
+  (* the leading spaces of a number are the padding of a psql column aligned on the right
+     (pg2result.py, aligned_cells): no engine prints a number with them *)
+  let s := match v with
+           | NullValues.Value_Z _ | NullValues.Value_I _ | NullValues.Value_Q _ | NullValues.Value_D _
+           | NullValues.Value_F _ => NullValues.string_ltrim s0
+           | _ => s0
+           end in
   if String.eqb s "NULL" then NullValues.is_null v
   else match v with
        | NullValues.Value_Z (Some z) => 

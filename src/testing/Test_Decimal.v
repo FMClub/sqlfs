@@ -129,3 +129,24 @@ Example pg_cast_numeric_overflow :
   | _ => false
   end = true.
 Proof. check. Qed.
+
+(** The text of a [numeric] with an exponent ([numeric_in]; [numeric.sql]): the scale is the number of
+    decimals less the exponent, at least 0; [%] on NaN and the infinities (TODO 8.32) *)
+Example pg_numeric_exponent :
+  (text PostgreSQL (fn "cast_numeric" [str "4.2e9"]), text PostgreSQL (fn "cast_numeric" [str "1.2e-5"]),
+   text PostgreSQL (fn "cast_numeric" [str "-7.777E+2"]), text PostgreSQL (fn "cast_numeric" [str "1.50e1"]))
+  = ("4200000000", "0.000012", "-777.7", "15.0").
+Proof. check. Qed.
+(** [show_value] prints NaN as NULL: the special values are checked by their kind *)
+Definition kind (d : vsem) (e : sexpr) : option IEEE.fspecial :=
+  match run d (select_where [as_ e c0] [] c_true) with
+  | t :: nil => match NullValues.float_parts (dot (TD d) t (out_attr 0)) with Some (sp, _, _) => Some sp | None => None end
+  | _ => None
+  end.
+Example pg_numeric_special_mod :
+  (kind PostgreSQL (fn "%" [fn "cast_numeric" [str "nan"]; str "0"]),
+   kind PostgreSQL (fn "%" [fn "cast_numeric" [str "inf"]; str "2"]),
+   text PostgreSQL (fn "%" [fn "cast_numeric" [str "4.2"]; fn "cast_numeric" [str "inf"]]),
+   text PostgreSQL (fn "%" [fn "cast_numeric" [str "inf"]; str "0"]))
+  = (Some IEEE.F_NaN, Some IEEE.F_NaN, "4.2", "ERROR").
+Proof. check. Qed.

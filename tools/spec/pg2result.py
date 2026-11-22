@@ -157,22 +157,18 @@ STATEMENT = re.compile(r'^(select|insert|update|delete|create|drop|alter|set|sho
 def aligned_cells(header, rule, raw):
     """The cells of a psql table. psql aligns the numbers on the right and the other values on the left, so
     the spaces at the start of a cell are padding in a column of numbers and data in a column of texts
-    (to_char (485, '999') is ' 485'). A column is aligned on the left if a cell has padding at its end. If no
-    cell has, the column is aligned on the right, unless it is wider than its header and every cell starts
-    with a space: its widest value would have no padding, so these spaces are data. The spaces at the end of
-    a value cannot be told from the padding: they are dropped."""
+    (to_char (485, '999') is ' 485'). A column is aligned on the left if a cell has padding at its end: the
+    cells keep their leading spaces. If no cell has, either the column is aligned on the right or every value
+    fills it; the cells are kept as they are too, and the comparison of a number ignores its leading spaces
+    (SpecRunner.v, cell_ok). The spaces at the end of a value cannot be told from the padding: they are
+    dropped."""
     widths = [len(seg) - 2 for seg in rule.split('+')]
     if len(widths) != len(header):
         return [[c.strip() for c in r] for r in raw]
     cols = []
     for j, w in enumerate(widths):
         contents = [r[j][1:].ljust(w)[:w] for r in raw]
-        if any(c != c.rstrip() for c in contents):
-            cols.append([c.rstrip() for c in contents])
-        elif contents and w > len(header[j]) and all(c.startswith(' ') for c in contents):
-            cols.append(contents)
-        else:
-            cols.append([c.strip() for c in contents])
+        cols.append([c.rstrip() for c in contents])
     return [list(r) for r in zip(*cols)] if cols and raw else []
 
 

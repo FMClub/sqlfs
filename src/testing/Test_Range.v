@@ -72,3 +72,19 @@ Example cume_dist_values :
   result_is MySQL (ranks w_cume_dist) 2
     [["1"; "0.2"]; ["2"; "0.6"]; ["2"; "0.6"]; ["3"; "0.8"]; ["5"; "1"]] = true.
 Proof. check. Qed.
+
+Require Import MariaDB.
+
+(** the type of the result (TODO 8.31): a double, of 10 decimals in MariaDB ([win_percent_cume.result]); an exact
+    number in Oracle mode *)
+Definition is_double (d : vsem) (q : squery) : bool :=
+  forallb (fun t => match dot (TD d) t (out_attr 1) with NullValues.Value_F _ => true | _ => false end) (run d q).
+Example percent_rank_types :
+  (is_double PostgreSQL (ranks w_percent_rank), is_double MySQL (ranks w_cume_dist),
+   is_double SQLite (ranks w_percent_rank), is_double OceanBaseOracle (ranks w_percent_rank)) = (true, true, true, false).
+Proof. check. Qed.
+Example percent_rank_mariadb :
+  result_is MariaDB (ranks w_percent_rank) 2
+    [["1"; "0.0000000000"]; ["2"; "0.2500000000"]; ["2"; "0.2500000000"]; ["3"; "0.7500000000"]; ["5"; "1.0000000000"]]
+  = true.
+Proof. check. Qed.
