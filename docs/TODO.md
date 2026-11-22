@@ -915,3 +915,20 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   **Status: DONE** (iteration 25). The text of a double of PostgreSQL is tagged as a number (`Value_C` with the
   pseudo-collation `float8out`, `SpecRunner.v`); a test in `Test_Float.v`.
 
+- **8.37 The failures left after iteration 25** (audit after PR 74): the 15 failing cases of PostgreSQL run 14 and
+  the 5 of MariaDB run 7, by cause.
+  - Model, small: `rank ('3') WITHIN GROUP (ORDER BY x)` with an integer `x` (the literal is not converted to the
+    type of the key; `aggregates:429`); `power (float8 '-inf', float8 '-2') = '0'` is NULL (the comparison of a
+    double with an untyped literal; `float8:134`); `SUM` over a frame which holds a `NaN` of `numeric` gives NULL
+    instead of NaN (`window:397`); the text of `json_object_agg` (`{ "k" : "v" }`, `json:425`); `MEDIAN (x) OVER ()`
+    of MariaDB gives NULL (`win_percentile:59, 60`).
+  - Model, larger: `GROUPING` in a scalar subquery of a grouped block (`groupingsets:206`); MariaDB computes the
+    aggregates of a moving frame incrementally (the row which enters is added, the row which leaves subtracted),
+    so that the doubles differ in the last digit from a sum of the frame (`win_avg:3`, `win_sum:3`); the precision
+    of `exp` of a large `numeric` (`numeric:985`).
+  - Representation: the special `numeric` values are doubles (`numeric:563`, `numeric:613`, the `-0`); very long
+    decimals (`numeric:996`, and `numeric:754` over the time limit: TODO 8.15).
+  - Harness: `ROW_NUMBER` / `NTILE` over a window without `ORDER BY`, or among peers of its `ORDER BY`, are
+    implementation-defined and should not be translated (`window:313, 324, 327`, MariaDB `win_empty_over:2`); the
+    spaces at the end of a psql cell are lost (`json:87`); `concat` of a date prints it in the `DateStyle` of the
+    session, which the converter changes only for whole cells (`text:54, 56`).

@@ -142,11 +142,14 @@ settled by the same definition.
 ## I6. Dialect-dependent choices are hard-wired
 
 **Status: the dialects are modelled and checked against real engines; some features remain.**
-PostgreSQL, MySQL, SQLite and OceanBase (MySQL and Oracle modes) are instances of the record
+PostgreSQL, MySQL, MariaDB, TiDB, Percona Server, PolarDB, SQLite and OceanBase (MySQL and Oracle modes) are
+instances of the record
 `vsem` (`src/data/dialects/`). Their behaviour is established from the documentation, from the
 source code of OceanBase, and from results recorded by real engines (`docs/DIALECTS.md`,
-`docs/CONFORMANCE.md`): 545 OceanBase queries (7 known deviations), and 9600 `random/expr`
-queries of sqllogictest per dialect with no failure.
+`docs/CONFORMANCE.md`). At the time of this issue: 545 OceanBase queries (7 known deviations), and 9600
+`random/expr` queries of sqllogictest per dialect with no failure. Now (`docs/CONFORMANCE_SUMMARY.md`): the test
+suites of OceanBase (775 queries, none failing), PostgreSQL (517, 15 failing), MariaDB (402, 5), TiDB (2102, 50)
+and MySQL (1314, 89); the failures left are listed and explained in `docs/CONFORMANCE.md` and TODO 8.9.
 
 Since then: the decimal scale (TODO 1.2.1), floating-point numbers and integer ranges (1.2.2, 1.2.3), dates and
 times, JSON, regular expressions (1.5, 1.6, 2.4), `ORDER BY` inside aggregates (2.6, `E_AggX`) and the functional
