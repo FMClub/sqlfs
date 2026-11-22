@@ -132,8 +132,8 @@ Proof. check. Qed.
 Example runner_padding :
   (cell_ok (client_value PostgreSQL (NullValues.VF false (IEEE.F_NaN, NullValues.Qc_of_Z 0))) "    NaN",
    cell_ok (client_value PostgreSQL (NullValues.VF false (IEEE.F_Finite, NullValues.Qc_of_Z 2))) "  2",
-   cell_ok (NullValues.Value_Z (Some 37%Z)) "   37",
-   cell_ok (NullValues.Value_string (Some " 485")) " 485",
-   cell_ok (NullValues.Value_string (Some "485")) " 485")
+   value_ok (NullValues.Value_Z (Some 37%Z)) "   37",
+   value_ok (NullValues.Value_string (Some " 485")) " 485",
+   value_ok (NullValues.Value_string (Some "485")) " 485")
   = (true, true, true, true, false).
 Proof. check. Qed.

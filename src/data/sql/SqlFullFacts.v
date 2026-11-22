@@ -866,7 +866,8 @@ Fixpoint done_within (step : list tuple -> list tuple) (d : bool) (n : nat) (acc
   | S n' =>
     match work with
     | nil => true
-    | _ => let new := step work in
+    | _ => if existsb (row_error O) work then true else
+           let new := step work in
            let new' := if d then eval_set_op O Diff Set_Distinct new acc else new in
            done_within step d n' (acc ++ new') new'
     end
@@ -880,7 +881,8 @@ Proof.
 intros step d sa n; induction n as [ | n IH]; intros m acc work H; simpl in H.
 - destruct work; [ | discriminate H]; simpl; destruct m; reflexivity.
 - destruct work as [ | x work]; [reflexivity | ].
-  simpl; apply IH; exact H.
+  change (S n + m) with (S (n + m)); cbn [rec_loop]; destruct (existsb (row_error O) (x :: work));
+    [reflexivity | ]; apply IH; exact H.
 Qed.
 
 (** [UNION ALL] is commutative as a bag (TODO 6.4): the rows are the same, in another order *)

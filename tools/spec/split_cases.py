@@ -8,7 +8,7 @@ by one, so that only the slow ones are lost.
 Usage: split_cases.py SPEC_FILE OUTDIR    (prints the paths of the files written, one per line)
 
 The file is: a header (Require ...), "Definition cases_NAME : list spec_case := [", the cases (each
-starts on a line "  mk_case..."), "].", and "Eval vm_compute in (diagnose DIALECT cases_NAME)."
+starts on a line "  mk_case..." or "  with_dialect ..."), "].", and "Eval vm_compute in (diagnose DIALECT cases_NAME)."
 """
 import os
 import re
@@ -16,7 +16,7 @@ import sys
 
 
 def split(path, outdir):
-    lines = open(path).read().split('\n')
+    lines = open(path, encoding='utf-8').read().split('\n')
     start = next(i for i, l in enumerate(lines) if re.match(r'Definition cases_\w+ : list spec_case := \[$', l))
     end = next(i for i in range(start, len(lines)) if lines[i] == '].')
     name = re.match(r'Definition (cases_\w+)', lines[start]).group(1)
@@ -24,7 +24,7 @@ def split(path, outdir):
     header = '\n'.join(lines[:start])
     cases = []
     for l in lines[start + 1:end]:
-        if l.startswith('  mk_case'):
+        if l.startswith('  mk_case') or l.startswith('  with_dialect'):
             cases.append(l)
         elif cases:
             cases[-1] += '\n' + l
@@ -36,7 +36,7 @@ def split(path, outdir):
         if c.endswith(';'):
             c = c[:-1]
         p = os.path.join(outdir, '%s_%d.v' % (base, k))
-        with open(p, 'w') as f:
+        with open(p, 'w', encoding='utf-8') as f:
             f.write('%s\nDefinition %s : list spec_case := [\n%s\n].\n%s\n' % (header, name, c, ev))
         out.append(p)
     return out

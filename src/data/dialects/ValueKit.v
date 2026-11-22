@@ -9,6 +9,7 @@
 Require Import List String Ascii ZArith NArith QArith Qcanon Qround.
 
 Require Import Bool3 OrderedSet IEEE Temporal Json Values.
+Require Collation.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -253,8 +254,10 @@ Definition string_of_dec (q : Qc) : string :=
   (if Z.ltb scaled 0 then "-" else "") ++ string_of_Z ip
   ++ (if Nat.eqb sc 0%nat then "" else "." ++ pad_zeros sc (string_of_Z fp)).
 
-Definition lower_s := string_map lower_ascii.
-Definition upper_s := string_map upper_ascii.
+(** the case of a string: the ASCII letters, and those of Latin-1 and Latin Extended-A in a string of UTF-8
+    ([Collation.lower_utf8]) *)
+Definition lower_s (s : string) : string := match Collation.lower_utf8 s with Some t => t | None => string_map lower_ascii s end.
+Definition upper_s (s : string) : string := match Collation.upper_utf8 s with Some t => t | None => string_map upper_ascii s end.
 
 (** The text of a value, as the dialects which convert implicitly write it. *)
 Definition text_of (v : value) : option string :=
@@ -315,7 +318,7 @@ Definition string_index (sub s : string) : Z :=
 (** [SUBSTRING] with the conventions of MySQL: a negative start counts from the end,
     and 0 gives the empty string. *)
 Definition substr_from_end (s : string) (start : Z) (len : option Z) : string :=
-  let total := Z.of_nat (String.length s) in
+  let total := Z.of_nat (char_length s) in
   if (start =? 0)%Z then EmptyString
   else let st := if (0 <? start)%Z then start else (total + start + 1)%Z in
        match len with
@@ -525,10 +528,22 @@ Definition my_temporal_text (v : value) : option string :=
   | None => None
   end.
 
+(** a year of two digits, [YY-MM-DD]: 2000-2069 below 70, 1970-1999 from 70 ([str_to_datetime] of [my_time.cc];
+    [func_test]: [GREATEST ('95-05-05', DATE '10-10-10')] is [2010-10-10]) *)
+Definition my_yy (t : string) : string :=
+  match t with
+  | String a (String b (String "-" rest)) =>
+    match digit a, digit b with
+    | Some x, Some y => ((if (x * 10 + y <? 70)%Z then "20" else "19") ++ String a (String b (String "-" rest)))%string
+    | _, _ => t end
+  | _ => t
+  end.
+
 (** a date, a datetime, or a string which is one, as a timestamp (and whether it has a time) *)
 Definition my_ts_of (v : value) : option (Z * bool) :=
   match v with
   | Value_string (Some t) => 
+    let t := my_yy t in
     match parse_date t with Some d => Some (ts_of d 0, false) | None =>
     match parse_timestamp t with Some x => Some (x, true) | None =>
     (* a string of digits is read as a number: [YYMMDD], [YYYYMMDD], [YYMMDDhhmmss], [YYYYMMDDhhmmss]
@@ -541,6 +556,9 @@ Definition my_ts_of (v : value) : option (Z * bool) :=
          | Some z => match my_number_to_datetime z with Some x => Some (x, Nat.ltb 8 n) | None => None end
          | None => None end
     else None end end
+  (* an integer is read as a datetime too ([varbinary]: [DATEDIFF (20120519090607, ...)]) *)
+  | Value_Z (Some z) | Value_I (Some (z, _)) =>
+    match my_number_to_datetime z with Some x => Some (x, 99991231 <? z) | None => None end
   | _ => match temporal_parts v with
          | Some (0%nat, d, _) => Some (ts_of d 0, false)
          | Some (1%nat, _, _) => None
@@ -603,11 +621,17 @@ Definition my_timestampdiff (unit : string) (a b : Z) : option Z :=
 Definition my_cast_temporal (kind : nat) (v : value) : value :=
   match v with
   | Value_string (Some t) =>
-    let t := string_rtrim (string_ltrim t) in
+    let t := my_yy (string_rtrim (string_ltrim t)) in
     match kind with
     | 0%nat => match parse_date t with Some d => VDate d | None => 
                match parse_timestamp t with Some x => VDate (ts_days x) | None => Value_T None end end
-    | 1%nat => match parse_time t with Some u => VTime u 0 | None => Value_T None end
+    | 1%nat => match parse_time t with Some u => VTime u 0 | None =>
+               (* [D hh:mm:ss[.ffffff]]: D days ([str_to_time] of [my_time.cc]) *)
+               match index 0 " " t with
+               | Some i => match digits_of (substring 0 i t), parse_time (substring (S i) (String.length t - S i) t) with
+                           | Some dd, Some u => VTime (dd * 86400000000 + u) 0
+                           | _, _ => Value_T None end
+               | None => Value_T None end end
     | _ => match parse_timestamp t with Some u => VTs u 0 | None => Value_T None end
     end
   | _ => match kind, my_ts_of v, temporal_parts v with

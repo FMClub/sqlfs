@@ -47,6 +47,8 @@ Definition pg_string_table : list (string * (list value -> value)) :=
      ("lpad", f_pad k true false) :: ("rpad", f_pad k false false)
   :: ("split_part", f_split_part k) :: ("translate", f_translate k)
   :: ("initcap", f_text1 k initcap_cp)
+  (* the letters of Latin-1 and Latin Extended-A too (TODO 9.7) *)
+  :: ("upper", f_text1 k (map up_cp)) :: ("lower", f_text1 k (map low_cp))
   :: ("overlay", f_overlay k)
   :: ("strpos", f_strpos k)
   :: ("position", fun l => match l with a :: b :: nil => f_strpos k (b :: a :: nil) | _ => Value_Err "wrong number of arguments" end)
@@ -757,6 +759,13 @@ Definition pg_with_overrides (t : list (string * (list value -> value))) : list 
 Definition pg_symbol_table : list (string * (list value -> value)) :=
   pg_with_overrides (with_aliases (pg_closeout_funs ++ pg_symbol_table_base)).
 
+(** the client of PostgreSQL ([psql]): a double is printed by [float8out] ([NaN], [Infinity], the exponents [e+20]) *)
+Definition pg_client (v : value) : client_cell :=
+  match v with
+  | Value_F (Some (x, k)) => Cell_Number (IEEE.pg_text (fmt_of (Nat.odd k)) (IEEE.special_of_tag (Nat.div (Nat.modulo k 10) 2)) x)
+  | _ => Cell_Value v
+  end.
+
 Definition PostgreSQL : vsem :=
   mk_vsem "PostgreSQL"
           (table_of_list (like_table pg_skit false (fun c => c) low_cp (Some 92) ++ pg_regex_preds ++ pg_array_preds ++ pg_json_preds ++ pg_extra_preds ++ predicate_table))
@@ -812,7 +821,8 @@ Definition PostgreSQL : vsem :=
              else l)
           (fun l => l)
           pg_table_funs
-          (fun q => to_float false (Q2Qc q)).
+          (fun q => to_float false (Q2Qc q))
+          pg_client.
 
 (** * The DateStyle [Postgres, MDY] of the regression database
 
@@ -820,8 +830,7 @@ Definition PostgreSQL : vsem :=
     [EncodeDateTime] of [datetime.c] with [USE_POSTGRES_DATES] and [DateOrder = DATEORDER_MDY]): a date is
     [03-09-2010], a timestamp [Tue Mar 09 00:00:00.5 2010], with [BC] before the common era. The dialect
     [PostgreSQL_regress] converts the dates and the timestamps to text in this style ([::text], [concat],
-    [concat_ws], [||], [format]), and its client prints them so ([__client_text], read by [SpecRunner.v]);
-    [__datestyle] gives the setting. Times, intervals and the timestamps with a time zone keep their text (the
+    [concat_ws], [||], [format]), and its client prints them so ([vs_client]). Times, intervals and the timestamps with a time zone keep their text (the
     tests whose cells show a time zone or an interval in the [postgres_verbose] style are not checked). *)
 Definition pg_mdy_date (days : Z) : string :=
   if Z.eqb days date_infinity then "infinity" else if Z.eqb days (- date_infinity) then "-infinity" else
@@ -847,9 +856,7 @@ Definition pg_datestyle_funs : list string := ("cast_string" :: "concat" :: "con
 Definition PostgreSQL_regress : vsem :=
   {| vs_name := vs_name PostgreSQL; vs_pred := vs_pred PostgreSQL;
      vs_symb := fun s =>
-       if String.eqb s "__datestyle" then Some (fun _ => Value_string (Some "Postgres, MDY"%string))
-       else if String.eqb s "__client_text" then Some (fun l => match l with v :: _ => pg_datestyle_value v | nil => Value_string None end)
-       else match vs_symb PostgreSQL s with
+       match vs_symb PostgreSQL s with
             | Some f => Some (if existsb (String.eqb s) pg_datestyle_funs then fun l => f (map pg_datestyle_value l) else f)
             | None => None
             end;
@@ -860,4 +867,10 @@ Definition PostgreSQL_regress : vsem :=
      vs_scalar_first := vs_scalar_first PostgreSQL; vs_pred_error := vs_pred_error PostgreSQL;
      vs_const := vs_const PostgreSQL; vs_truth_error := vs_truth_error PostgreSQL;
      vs_cmp_coerce := vs_cmp_coerce PostgreSQL; vs_unify := vs_unify PostgreSQL;
-     vs_table_fun := vs_table_fun PostgreSQL; vs_of_rat := vs_of_rat PostgreSQL |}.
+     vs_table_fun := vs_table_fun PostgreSQL; vs_of_rat := vs_of_rat PostgreSQL;
+     (* the dates and the timestamps in the DateStyle *)
+     vs_client := fun v => match v with
+                           | Value_T (Some _) => match pg_datestyle_value v with
+                                                 | Value_string (Some t) => Cell_Text t
+                                                 | _ => pg_client v end
+                           | _ => pg_client v end |}.

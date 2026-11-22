@@ -49,6 +49,9 @@ Import NullValues.
     ([ANSI_QUOTES], [NO_BACKSLASH_ESCAPES], [HIGH_NOT_PRECEDENCE]) do not appear: the syntax of
     [SqlFull] is abstract. [ERROR_FOR_DIVISION_BY_ZERO] and the strict modes only concern [INSERT]
     and [UPDATE] (in a [SELECT], a division by zero is NULL with a warning). *)
+(** The engines of the MySQL family whose semantics the model tells apart *)
+Inductive my_engine : Type := Eng_MySQL | Eng_MariaDB | Eng_TiDB.
+
 Record my_session : Type :=
   mk_my_session
     {
@@ -64,13 +67,17 @@ Record my_session : Type :=
       ms_only_full_group_by : bool;
       (** [group_concat_max_len]: the result of [GROUP_CONCAT] is truncated to this length *)
       ms_group_concat_max_len : N;
-      (** the library of the regular expressions: 0 ICU (MySQL 8), 1 PCRE (MariaDB), 2 RE2 (TiDB) *)
-      ms_regex : nat
+      (** the engine of the family where its semantics differ (TODO 9.19): its library of regular expressions
+          is ICU (MySQL 8, Percona, PolarDB, OceanBase's MySQL mode), PCRE (MariaDB) or RE2 (TiDB) *)
+      ms_engine : my_engine
     }.
 
 Section Session.
 
 Variable ss : my_session.
+
+Definition is_mysql : bool := match ms_engine ss with Eng_MySQL => true | _ => false end.
+Definition is_maria : bool := match ms_engine ss with Eng_MariaDB => true | _ => false end.
 
 Let pad := ms_pad ss.
 
@@ -143,6 +150,63 @@ Definition my_order (a b : value) : comparison :=
 
 Definition my_eq3 (a b : value) : bool3 := cmp_pred my_compare is_Eq (a :: b :: nil).
 
+(** the fractional digits of a temporal value, or of the text of one (at most 6) *)
+Definition my_fsp (v : value) : nat :=
+  match v with
+  | Value_string (Some t) => match index 0 "." t with
+                             | Some i => Nat.min 6 (String.length t - S i)
+                             | None => 0 end
+  | _ => match temporal_parts v with Some (_, _, f) => f | None => 0 end
+  end.
+
+(** [ADDTIME (a, b)] / [SUBTIME (a, b)]: [b] is a time (a string is read as one, [D hh:mm:ss] too: [varbinary]);
+    [a] a time, a datetime, a date, a number or a string which is one of them ([func_date_add]: a string of a time
+    gives a time); the result has the fractional digits of both *)
+Definition my_addtime (sign : Z) (l : list value) : value :=
+  match l with
+  | a :: b :: nil =>
+    match temporal_parts (match b with Value_string _ => my_cast_temporal 1 b | _ => b end) with
+    | Some (1%nat, d, _) =>
+      let f := Nat.max (my_fsp a) (my_fsp b) in
+      match temporal_parts a with
+      | Some (1%nat, x, _) => VTime (clamp_time (x + sign * d)) f
+      | _ => match my_ts_of a with
+             | Some (x, _) => VTs (x + sign * d) f
+             | None => match a with
+                       | Value_string _ => match temporal_parts (my_cast_temporal 1 a) with
+                                           | Some (1%nat, x, _) => VTime (clamp_time (x + sign * d)) f
+                                           | _ => Value_T None end
+                       | _ => Value_T None end end
+      end
+    | _ => Value_T None
+    end
+  | _ => Value_T None
+  end.
+
+(** [GREATEST] / [LEAST] of MySQL 8.0 ([Item_func_min_max::resolve_type]; [func_test], Bug#25123839): with a date
+    or a datetime among the arguments, the others are read as datetimes and the result is a date (all the temporal
+    arguments are dates) or a datetime; with strings and numbers, they are compared as strings. MariaDB and TiDB
+    keep the comparison of [my_order]. *)
+Definition my_extremum (keep : comparison -> bool) (l : list value) : value :=
+  let is_str v := match v with Value_string _ | Value_C _ => true | _ => false end in
+  let kind v := match temporal_parts v with Some (k, _, _) => Some k | None => None end in
+  let pick (cmp : value -> value -> comparison) (l : list value) :=
+      match l with nil => Value_Z None | v :: rest => fold_left (fun a b => if keep (cmp a b) then a else b) rest v end in
+  if existsb is_null l || negb is_mysql then extremum_strict is_null my_order keep l
+  else if existsb (fun v => match kind v with Some 1%nat | None => false | Some _ => true end) l then
+    let ts := map my_ts_of l in
+    if forallb (fun o => match o with Some _ => true | None => false end) ts then
+      let dates := forallb (fun v => match kind v with Some 0%nat | None => true | Some _ => false end) l in
+      let vs := map (fun o => match o with Some (t, _) => if dates then VDate (ts_days t) else VTs t 0 | None => Value_T None end) ts in
+      pick (fun a b => match a, b with
+                       | Value_T (Some (x, _)), Value_T (Some (y, _)) =>
+                         Z.compare (if dates then ts_of x 0 else x) (if dates then ts_of y 0 else y)
+                       | _, _ => Eq end) vs
+    else extremum_strict is_null my_order keep l
+  else if existsb is_str l && existsb (fun v => negb (is_str v)) l then
+    pick my_order (map (fun v => Value_string (text_of v)) l)
+  else extremum_strict is_null my_order keep l.
+
 (** [x <=> y]: equality which is never UNKNOWN. *)
 Definition my_null_safe_eq (a b : value) : bool3 :=
   match is_null a, is_null b with
@@ -177,9 +241,9 @@ Definition my_pred_table : list (string * (list value -> bool3)) :=
 
 
 (** the scale of [ROUND (x, d)] and [TRUNCATE (x, d)]: at most [DECIMAL_MAX_SCALE] decimals, 30 in MySQL
-    and 38 in MariaDB (the session with PCRE, [ms_regex = 1]); below -400 every value rounds to 0 (doubles are
+    and 38 in MariaDB ([Eng_MariaDB]); below -400 every value rounds to 0 (doubles are
     below 1e309): the bounds keep [10 ^ d] small *)
-Definition clamp_scale (d : Z) : Z := Z.max (-400) (Z.min (if Nat.eqb (ms_regex ss) 1 then 38 else 30) d).
+Definition clamp_scale (d : Z) : Z := Z.max (-400) (Z.min (if is_maria then 38 else 30) d).
 
 
 
@@ -200,16 +264,36 @@ Definition my_concat (l : list value) : value :=
 
 Definition my_skit : skit := mk_skit text_of z_arg (fun s => Value_string (Some s)) (Value_string None).
 
+(** [LPAD] / [RPAD] with an empty padding, to a length beyond the string: the string in MySQL 8.0
+    ([lpad.result]), NULL in MariaDB ([Item_func_lpad]: [goto err]), the empty string in TiDB
+    ([builtinLpadSig]) *)
+Definition my_pad (left : bool) (l : list value) : value :=
+  match l with
+  | s :: n :: p :: nil =>
+    match sk_txt my_skit s, sk_int my_skit n, sk_txt my_skit p with
+    | Some s', Some n', Some EmptyString =>
+      if (0 <=? n')%Z && (Z.of_nat (List.length (cps s')) <? n')%Z then
+        match ms_engine ss with
+        | Eng_MySQL => sk_ret my_skit s'
+        | Eng_TiDB => sk_ret my_skit EmptyString
+        | Eng_MariaDB => sk_null my_skit
+        end
+      else f_pad my_skit left true l
+    | _, _, _ => f_pad my_skit left true l
+    end
+  | _ => f_pad my_skit left true l
+  end.
+
 (** the regular expressions of the session: ICU (MySQL: groups [$n] in a replacement), PCRE (MariaDB: [\n])
     or RE2 (TiDB: no back reference); case-insensitive under a case-insensitive collation; [.] does not
     match a line break unless the flag [n] *)
 Definition my_rx : rx_env :=
   mk_rx_env my_skit
-            (match ms_regex ss with 1%nat => fl_pcre | 2%nat => fl_re2 | _ => fl_icu end)
+            (match ms_engine ss with Eng_MariaDB => fl_pcre | Eng_TiDB => fl_re2 | Eng_MySQL => fl_icu end)
             false
             (match coll with Coll_Binary => false | _ => true end)
             false
-            (negb (Nat.eqb (ms_regex ss) 1))
+            (negb is_maria)
             "Illegal argument to a regular expression".
 
 (** the JSON functions of TODO 2.8: a document, then paths (and values); NULL if one is NULL *)
@@ -429,17 +513,18 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                            | _ => Value_Z None end)
   :: ("power", num_fun2 conv num_power) :: ("pow", num_fun2 conv num_power)
   (* [ISNULL (x)] is 1 or 0; [INTERVAL (n, n1, n2, ...)] is the number of [ni <= n] for the increasing
-     [ni] (the index of the last one), -1 if [n] is NULL ([Item_func_interval]) *)
+     [ni] (the index of the last one), -1 if [n] is NULL ([Item_func_interval]); a NULL [ni] counts as below [n]
+     (TiDB's [binSearch] of [builtinIntervalRealSig]; MySQL [func_set]: [INTERVAL (0.0, NULL)] is 1) *)
   :: ("isnull", fun l => match l with v :: nil => Value_Z (Some (if is_null v then 1 else 0)) | _ => Value_Z None end)
   :: ("interval_index", fun l => match l with
                                  | n :: rest => if is_null n then Value_Z (Some (-1))
                                                 else Value_Z (Some (Z.of_nat (List.length
-                                                       (filter (fun v => negb (is_null v) &&
+                                                       (filter (fun v => is_null v ||
                                                                          match my_compare_base n v with Some Lt => false | Some _ => true | None => false end)
                                                                rest))))
                                  | nil => Value_Z None end)
-  :: ("greatest", extremum_strict is_null my_order is_Gt)
-  :: ("least", extremum_strict is_null my_order is_Lt)
+  :: ("greatest", my_extremum is_Gt)
+  :: ("least", my_extremum is_Lt)
   (* conditional expressions *)
   :: ("coalesce", coalesce)
   :: ("ifnull", coalesce)
@@ -467,7 +552,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                      | _ => Value_Z None end end)
   :: ("regexp_instr", rx_instr my_rx) :: ("regexp_substr", rx_substr my_rx) :: ("regexp_replace", rx_replace my_rx)
   (* strings ([sql/item_strfunc.cc]; TODO 2.2): positions and lengths in characters, [LENGTH] in bytes *)
-  :: ("lpad", f_pad my_skit true true) :: ("rpad", f_pad my_skit false true)
+  :: ("lpad", my_pad true) :: ("rpad", my_pad false)
   :: ("substring_index", f_substring_index my_skit)
   :: ("insert", f_insert my_skit)
   :: ("space", f_space my_skit)
@@ -526,7 +611,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("concat", my_concat)
   :: ("concat_ws", my_concat_ws)
   :: ("length", str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
-  :: ("char_length", str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  :: ("char_length", str1 (fun s => Value_Z (Some (Z.of_nat (char_length s)))))
   :: ("upper", str_fun1 upper_s) :: ("lower", str_fun1 lower_s)
   :: ("trim", str_fun1 (fun s => string_rtrim (string_ltrim s)))
   :: ("ltrim", str_fun1 string_ltrim) :: ("rtrim", str_fun1 string_rtrim)
@@ -534,14 +619,14 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("substring", my_substring) :: ("substr", my_substring) :: ("mid", my_substring)
   :: ("left", fun l => match l with
                        | s :: n :: nil => match text_of s, z_arg n with
-                                          | Some s, Some n => Value_string (Some (String.substring 0 (Z.to_nat n) s))
+                                          | Some s, Some n => Value_string (Some (char_substring 0 (Z.to_nat n) s))
                                           | _, _ => Value_string None end
                        | _ => Value_string None end)
   :: ("right", fun l => match l with
                         | s :: n :: nil => match text_of s, z_arg n with
                                            | Some s, Some n => 
-                                             let k := Nat.min (Z.to_nat n) (String.length s) in
-                                             Value_string (Some (String.substring (String.length s - k) k s))
+                                             let k := Nat.min (Z.to_nat n) (char_length s) in
+                                             Value_string (Some (char_substring (char_length s - k) k s))
                                            | _, _ => Value_string None end
                         | _ => Value_string None end)
   :: ("replace", fun l => match l with
@@ -561,14 +646,27 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                              | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   (* casts *)
-  :: ("cast_int", fun l => match l with v :: nil => Value_Z (z_arg v) | _ => Value_Z None end)
+  (* [CAST (x AS SIGNED)] of an unsigned beyond 2^63 - 1 wraps ([Item_func_signed]; [cast.test]: -1 for
+     [CAST (CAST (1 - 2 AS UNSIGNED) AS SIGNED)]) *)
+  :: ("cast_int", fun l => match l with
+                           | Value_I (Some (z, 1%nat)) :: nil =>
+                             Value_Z (Some (if (9223372036854775808 <=? z)%Z then (z - 18446744073709551616)%Z else z))
+                           (* a temporal value is its number ([YYYYMMDDhhmmss], [hhmmss]), rounded *)
+                           | (Value_T (Some _) as v) :: nil =>
+                             match my_temporal_number v with
+                             | Some (q, _) => Value_Z (Some (Qround.Qfloor (Qplus (Qcanon.this q) (1 # 2))))
+                             | None => Value_Z None end
+                           | v :: nil => Value_Z (z_arg v) | _ => Value_Z None end)
   :: ("cast_numeric", fun l => match l with
                                | v :: nil => match lenient v with Some n => Value_Q (Some (Qc_of_num n)) | None => Value_Q None end
                                | _ => Value_Q None end)
   :: ("cast_string", fun l => match l with v :: nil => Value_string (text_of v) | _ => Value_string None end)
   :: ("cast_decimal", fun l => match l with 
                                | v :: p :: s :: nil => match z_arg p, z_arg s with
-                                                       | Some p, Some s => my_cast_decimal p s v
+                                                       | Some p, Some s =>
+                                                         my_cast_decimal p s (match v, my_temporal_number v with
+                                                                              | Value_T (Some _), Some (q, _) => Value_Q (Some q)
+                                                                              | _, _ => v end)
                                                        | _, _ => Value_D None end
                                | _ => Value_D None end)
   (* JSON *)
@@ -821,20 +919,7 @@ Definition my_symbol_table_raw : list (string * (list value -> value)) :=
                                                         | Some (x, _), Some (y, _) => VTime (clamp_time (x - y)) 6
                                                         | _, _ => Value_T None end end
                            | _ => Value_T None end)
-  :: ("addtime", fun l => match l with
-                          | a :: b :: nil => match temporal_parts b with
-                                             | Some (1%nat, d, _) => match temporal_parts a with
-                                                                    | Some (1%nat, x, f) => VTime (clamp_time (x + d)) f
-                                                                    | _ => match my_ts_of a with Some (x, _) => VTs (x + d) 6 | None => Value_T None end end
-                                             | _ => Value_T None end
-                          | _ => Value_T None end)
-  :: ("subtime", fun l => match l with
-                          | a :: b :: nil => match temporal_parts b with
-                                             | Some (1%nat, d, _) => match temporal_parts a with
-                                                                    | Some (1%nat, x, f) => VTime (clamp_time (x - d)) f
-                                                                    | _ => match my_ts_of a with Some (x, _) => VTs (x - d) 6 | None => Value_T None end end
-                                             | _ => Value_T None end
-                          | _ => Value_T None end)
+  :: ("addtime", my_addtime 1) :: ("subtime", my_addtime (-1))
   :: ("time_format", fun l => match l with
                               | v :: f :: nil => match temporal_parts v, text_of f with
                                                  | Some (1%nat, us, _), Some f => Value_string (Some (time_format us f))
@@ -927,7 +1012,7 @@ Definition my_symbol_table : list (string * (list value -> value)) :=
     ([Item_sum_variance::fix_length_and_dec]: [MY_MIN (args[0]->decimals + 4, FLOATING_POINT_DECIMALS)], 31
     being not fixed); MySQL prints them with no fixed decimals *)
 Definition var_dec (f : list value -> value) (l : list value) : value :=
-  if Nat.eqb (ms_regex ss) 1
+  if is_maria
   then match filter (fun v => negb (is_null v)) l with
        | v :: _ => match my_fdec v with
                    | Some d => if Nat.ltb (d + 4) 31 then with_fdec (Some (d + 4)%nat) (f l) else f l
@@ -1225,7 +1310,7 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
                           ++ ("regexp", rx_like my_rx false) :: ("not regexp", fun l => negb3 (rx_like my_rx false l))
                           :: my_pred_table))
           (table_of_list (with_my_aliases (sys_table default_env name ++ my_closeout_funs ++ my_symbol_table)))
-          (table_of_list (my_aggregate_table ++ (if Nat.eqb (ms_regex ss) 1 then maria_window_aggs else nil)))
+          (table_of_list (my_aggregate_table ++ (if is_maria then maria_window_aggs else nil)))
           is_null
           my_truth
           my_of_truth
@@ -1241,6 +1326,13 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           (fun p l => match l with
                       | Value_C (Some (_, n1)) :: Value_C (Some (_, n2)) :: _ => 
                         negb (String.eqb n1 n2) && existsb (String.eqb p) ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: "<=>" :: nil)
+                      (* MySQL: a [DATE] compared with a string which is not a date nor a datetime is an error
+                         ([Incorrect DATE value], [bug28940878]: ['2013-02-30'], ['0000-00-00'], ['wrong-date']) *)
+                      | (Value_T (Some (_, 0%nat)) :: Value_string (Some t) :: _ | Value_string (Some t) :: Value_T (Some (_, 0%nat)) :: _)
+                        => is_mysql &&
+                           existsb (String.eqb p) ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: nil) &&
+                           match my_ts_of (Value_string (Some t)) with Some _ => false | None => true end
+                           || bad_escape my_skit p l || rx_bad my_rx ("regexp" :: "not regexp" :: nil)%string p l
                       | _ => bad_escape my_skit p l || rx_bad my_rx ("regexp" :: "not regexp" :: nil)%string p l end)
           (* an integer literal is a [BIGINT], a [BIGINT UNSIGNED] above 2^63 - 1, a [DECIMAL] above 2^64 - 1 *)
           (fun v => match v with
@@ -1254,7 +1346,8 @@ Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
           my_table_funs
           (* a double; of 10 decimals in MariaDB ([Item_sum_percent_rank], [Item_sum_cume_dist]: [decimals = 10]) *)
           (fun q => let v := to_float false (Q2Qc q) in
-                    if Nat.eqb (ms_regex ss) 1 then with_fdec (Some 10%nat) v else v).
+                    if is_maria then with_fdec (Some 10%nat) v else v)
+          Cell_Value.
 
 End Session.
 
@@ -1262,6 +1355,15 @@ End Session.
 (** The default session of MySQL 8.0 and 8.4: [sql_mode] is [ONLY_FULL_GROUP_BY, STRICT_TRANS_TABLES,
     NO_ZERO_IN_DATE, NO_ZERO_DATE, ERROR_FOR_DIVISION_BY_ZERO, NO_ENGINE_SUBSTITUTION],
     [group_concat_max_len] is 1024. *)
-Definition my_default_session : my_session := mk_my_session false Coll_UCA900_AI_CI 4 false true 1024%N 0.
+Definition my_default_session : my_session := mk_my_session false Coll_UCA900_AI_CI 4 false true 1024%N Eng_MySQL.
 
 Definition MySQL : vsem := mysql_vs my_default_session "MySQL" my_supports.
+
+(** A session of the MySQL family whose [sql_mode], [div_precision_increment] or [group_concat_max_len] a script
+    changed ([SET ...], TODO 9.1): the fields of [base], but those given *)
+Definition my_with (base : my_session) (only_full_group_by pipes : option bool) (div_incr : option nat)
+           (gcml : option N) : my_session :=
+  let pick {X} (o : option X) (d : X) := match o with Some x => x | None => d end in
+  mk_my_session (ms_pad base) (ms_coll base) (pick div_incr (ms_div_incr base)) (pick pipes (ms_pipes_as_concat base))
+                (pick only_full_group_by (ms_only_full_group_by base)) (pick gcml (ms_group_concat_max_len base))
+                (ms_engine base).

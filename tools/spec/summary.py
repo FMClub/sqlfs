@@ -29,7 +29,8 @@ def read(log, sequential):
     t = Path(log).read_text(errors='replace')
     m = re.search(r'"translated": (\d+)', t)
     translated = int(m.group(1)) if m else 0
-    fails = set(re.findall(r'"([A-Za-z_0-9]+:\d+) \|', t))
+    # the identifiers: file:hash of the statement (TODO 9.20), file:position before
+    fails = set(re.findall(r'"([A-Za-z_0-9]+:[0-9a-f]+(?:\.\d+)?) \|', t))
     timeouts = re.findall(r'^TIMEOUT (\S+)', t, re.M)
     # a file over the time limit compiled again case by case (compile_spec.sh): only the cases over the
     # limit of a case are not run

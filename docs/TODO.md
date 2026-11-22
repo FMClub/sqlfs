@@ -985,3 +985,146 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
     difference.
   - `numeric:754` and `numeric:996`, on numbers of 131072 digits: the integers of the model are binary terms, whose
     multiplication is quadratic (TODO 8.15).
+
+## Phase 9 — Backlog after PR 75
+
+Found by the audit after PR 75 (the conformance runs of the commit `b6a731a`, the statistics of the translator,
+the code). The numbers are the queries concerned in those runs.
+
+### Coverage of the conformance runs (high)
+- **9.1 Changes of the session**: a script stops at its first `SET` of `sql_mode`, a collation, `NAMES`, `time_zone`
+  or `div_precision_increment` (skipped: TiDB 20,674, MySQL 12,633, MariaDB 629). The model already has these
+  settings (`my_session`); the translator should go on with the dialect of the new session (a dialect per case),
+  and stop only for a setting which the model does not have.
+  - Done: a case carries its dialect (`sc_dialect` of `spec_case`, `with_dialect` in the files of cases), and the
+    translator follows `sql_mode` (the flags which the model has: `ONLY_FULL_GROUP_BY`, `PIPES_AS_CONCAT`,
+    `ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, `REAL_AS_FLOAT`, and the strictness flags which the model's errors
+    already follow), `div_precision_increment`, `group_concat_max_len`, `NAMES` of the default character set and
+    collation, `time_zone` UTC, and the user variables which keep and restore them (`SET @x = @@sql_mode`,
+    `SELECT @@sql_mode INTO @x`) (`my_with` of `MySQL.v`). A script still stops at another flag, another collation
+    or time zone, `cte_max_recursion_depth` and MariaDB's `max_recursive_iterations`.
+  - **9.1b** (open): `SET NAMES latin1` (10,903 queries of MySQL) and `utf8mb3` (4,467): a column then keeps its
+    character set and collation (`Value_C`) while the literals have those of the session, and the string functions
+    must keep the collation of their arguments.
+- **9.2 `WITH RECURSIVE` in the translator**: the parser rejects it (`Skip('recursive with')`), while `SqlFull.v`
+  has `SQ_WithRec` (TODO 3.6) (PostgreSQL 92, TiDB 118, MariaDB 39).
+  - Done: `WITH RECURSIVE name (cols) AS (anchor UNION [ALL] step)` is `with_rec` (the anchors and the recursive
+    terms of a chain of UNIONs of one quantifier are the anchor and the step); the relation of the recursion has the
+    columns `c0, c1, ...` of the anchor. The recursion stops at an error of its last step (`rec_loop`: TiDB's
+    out-of-range anchor would run 1000 steps). PostgreSQL `with`: 15 cases, 9 recursive; TiDB `cte`: 36 cases, 22
+    recursive; all pass. Still skipped: several recursive CTEs in one `WITH`, `SEARCH` / `CYCLE`, a mix of `UNION` and
+    `UNION ALL`, and the forms which the engines reject (`INTERSECT`, a step before the anchor, `ORDER BY` in the
+    recursive term); MariaDB `cte_recursive` mostly needs `t.*` (9.5). In the MySQL family a recursive term with
+    `DISTINCT`, `GROUP BY`, an aggregate, a window function, a `LIMIT`, or a reference to the relation in a
+    subquery or a derived table, or twice, is not translated (`ER_NOT_STANDARD_COMPLIANT_RECURSIVE`; a `LIMIT` there
+    bounds the rows of the whole recursion, not those of a step).
+- **9.3 Transactions in the replay**: `BEGIN` ... `COMMIT` / `ROLLBACK` / `SAVEPOINT` make the tables unreliable;
+  they can be followed on the tables of the translator (PostgreSQL 818, TiDB 1,201, MySQL 546).
+- **9.4 Changes of the tables**: `UPDATE`, `DELETE`, `INSERT ... SELECT` make their tables unreliable (PostgreSQL 482,
+  TiDB 1,400, MySQL 1,291, OceanBase 494): apply the simple ones in the replay (constants, conditions on columns), or
+  evaluate them with the model.
+- **9.5 Parser gaps**: `db.t` (TiDB 542, MySQL 312), `t.*` (PostgreSQL 45, TiDB 73), a string as an alias
+  `SELECT 1 'a'` (MySQL 142), and the families `expected )` / `primary ('op' ...` (MySQL 809, TiDB 578, PostgreSQL
+  152), to be broken down by construct first.
+- **9.6 Constructs of the model which the translator does not write**: `ROW (...)` (MySQL 54), `ARRAY[...]`
+  (PostgreSQL 55), window functions with `DISTINCT` or `FILTER` (MariaDB 43), casts to more PostgreSQL types (227).
+- **9.7 Non-ASCII strings** (MySQL 220, OceanBase 41): the strings of the model are Coq strings of ASCII
+  characters; needs a representation by code points, with the byte or character semantics of the character set.
+  - Done (partly): the translator writes the strings whose characters are at most U+02FF (Latin-1, Latin
+    Extended-A and -B, IPA) as UTF-8; the model reads its strings as UTF-8 (`Collation.utf8_decode`, the weights of
+    the collations up to U+02FF): the lengths and the positions of `CHAR_LENGTH`, `SUBSTRING`, `LEFT`, `RIGHT`,
+    `REVERSE`, `LPAD`, PostgreSQL's and Oracle's `LENGTH` and Oracle's `INSTR` count the characters (`utf8_chars`
+    of `Values.v`), MySQL's `LENGTH` the bytes; `UPPER` / `LOWER` / `INITCAP` change the case of Latin-1 and Latin
+    Extended-A (`upper_cp`, `lower_cp`; SQLite the ASCII letters only). A table of the MySQL family in another
+    character set or collation than the default of the session is not translated (`CHARSET latin1`: padded
+    strings, a byte per character).
+  - Open: the characters beyond U+02FF (the weights of the collations there are the implicit ones, not those of
+    the UCA), the character sets other than UTF-8 (9.1b).
+- **9.8 Files over the memory limit**: MariaDB `union` (all its cases), TiDB `index_merge_reader` (13 cases).
+  `compile_spec.sh` splits a file over its time limit only; split it when it runs out of memory too, then find the
+  case which needs the memory.
+
+### Failures left which the model can fix (medium)
+- **9.9 MySQL functions**: `LPAD` / `RPAD` with an empty padding (6 cases), `INTERVAL ()` with NULL arguments (6),
+  `EXTRACT` of the units `..._MICROSECOND` (4), `CAST` of an unsigned to `SIGNED` (2, it wraps), `DATEDIFF` / `SUBTIME` of
+  a number read as a datetime (4), an invalid date string compared with a `DATE` (3, an error), the comparison of a
+  `VARCHAR` (1), the precedence of a chained `BETWEEN` (1, parser).
+  - Done: an empty padding of `LPAD` / `RPAD` (the string in MySQL 8.0, NULL in MariaDB, the empty string in TiDB:
+    `my_pad`); a NULL bound of `INTERVAL (n, ...)` counts as below `n` (TiDB's `binSearch`); `EXTRACT` of the units
+    `DAY_MICROSECOND` ... `SECOND_MICROSECOND`; `CAST (x AS SIGNED)` of an unsigned beyond 2^63 - 1 wraps; an integer
+    given to a date function is read as a datetime (`my_ts_of`, as in the comparisons), and the string of
+    `SUBTIME` / `ADDTIME` as a time (`D hh:mm:ss`); a `DATE` compared with a string which is no date nor datetime is
+    an error in MySQL (`bug28940878`); the upper bound of `BETWEEN` is a predicate in the MySQL family (`a BETWEEN b
+    AND c BETWEEN d AND e`). With 9.1, scripts go further and show more cases: `GREATEST` / `LEAST` of MySQL 8.0
+    compare a date with the other arguments as datetimes and give a date, and strings with numbers as strings
+    (`my_extremum`); a year of two digits `YY-MM-DD` is 1970-2069 (`my_yy`).
+  - Open: `GREATEST` of a date or a time in a numeric context is a double in MySQL (`func_test`, 5 cases:
+    `GREATEST (time '00:00:00', 120000) + 0.00` is `120000`); `type_varchar:11` is a `latin1` column (9.1b);
+    **9.9b** `STR_TO_DATE` (`date_formats`, 4 cases which 9.1 shows): `%#`, the weeks `%U %u %V %v %X %x`,
+    the prefixes of the month names, `%D`, `%r`, a format longer than the string.
+- **9.10 Static errors** (the rest of 8.25): the aliases and CTE names of MySQL are case sensitive (`derived_cs`, 4)
+  and two CTE names equal up to the case are an error (`derived_ci`, 2); a position of `ORDER BY` / `GROUP BY` beyond
+  the select list (2); `ESCAPE` with a subquery (1); a window ordered by an alias of the same block; TiDB: aliases in
+  a `WINDOW` clause (2), `USE INDEX` on a view (1), `ONLY_FULL_GROUP_BY` in a scalar subquery (1).
+  - Done in the translator: a position of `ORDER BY` / `GROUP BY` beyond the select list is not translated (it was
+    an ordering by a constant; every engine rejects it); the keys of a named window which no function uses are
+    resolved all the same (TiDB: an alias of the select list there is an error); an index hint on a view and an
+    `ESCAPE` with a subquery in the MySQL family are not translated. These cases are skipped, not passed: the
+    translator resolves names and positions, so the model never sees these queries.
+  - Open: `derived_cs` / `derived_ci` depend on `lower_case_table_names` and on the file system of the run
+    (`have_case_sensitive_file_system.inc`): the translator would read the options of each test;
+    `only_full_group_by:65` of TiDB needs the functional dependencies of unique keys.
+- **9.11 Harness**: the version comments `/*!NNNNNN*/` and `--2` (MySQL `comments`, 5), a multi-line statement echoed
+  as rows (`date_formats:0`), `RENAME TABLE` read as a row (`lowercase_table:12`).
+  - Done: the header of a column over several lines (a statement over several lines repeats them: `select 1 --2`
+    then `+1`, `date_formats:0`) is not read as rows; `RENAME TABLE` and an empty query `;` start a statement in a
+    result file; a version comment `/*!NNNNNN*/` whose digits are not a version (5 digits, or 6 then a space) is a
+    syntax error of MySQL 8.0 and is not translated.
+- **9.12 TiDB's doubles**: `tan`, `cot`, `exp` of Go's math library, which are not correctly rounded (4): model its
+  algorithms for TiDB, or record them as an implementation detail.
+- **9.13 Server state**: roles (9), locks (7), XA, `RESET CONNECTION`, time zones, error simulation count as failures;
+  the translator should not translate them (state which the model does not have), as it does for `LAST_INSERT_ID`.
+
+### Model and proofs
+- **9.14 Typed NULLs of the relation theorems** (8.30).
+- **9.15 MariaDB's incremental aggregates of moving frames** (8.37, not done): a field of the record `dialect` for the
+  aggregates of a frame from the frames before it, and the proofs which relate dialects.
+- **9.16 Long numbers** (the rest of 8.15): numbers of 131,072 digits; machine integers (`Uint63`, `PrimInt63`) or
+  another representation of the decimals.
+- **9.17 Ledger gaps** (`OPEN_ISSUES.md` I9): the value of a bare column in SQLite, MariaDB, OceanBase (rows 5, 20),
+  time zones other than UTC (row 12), Unicode case folding (row 24).
+- **9.18 Further engines** (8.7): DuckDB, then CockroachDB.
+
+### Code and maintenance
+- **9.19 Stopgaps of PR 75 to replace by explicit fields**: the symbols `__datestyle` / `__client_text` of
+  `PostgreSQL_regress`, the pseudo-collation `float8out` of `SpecRunner.v`, the marker `k / 10 = 40` of the special
+  `numeric` values, MariaDB recognised by `ms_regex = 1` in `MySQL.v`.
+  - Done: `vsem` has a field `vs_client : value -> client_cell` (how the client shows a value: `Cell_Value`,
+    `Cell_Number` for the doubles of PostgreSQL printed by `float8out`, `Cell_Text` for the dates of
+    `PostgreSQL_regress`), which replaces the pseudo-collation `float8out` and the symbols `__client_text` /
+    `__datestyle`; `my_session` has `ms_engine : my_engine` (`Eng_MySQL`, `Eng_MariaDB`, `Eng_TiDB`), which replaces
+    the field `ms_regex` and the tests `ms_regex = 1`.
+  - Open: the special values of `numeric` are still doubles with the tag `400 + 2 * special` (`num_special`): an
+    explicit representation needs a constructor of `value`, and the proofs about values with it.
+- **9.20 Stable identifiers of the cases**: an identifier is the position of the statement in its script, which moves
+  when the translator counts another directive (`roles:52` became `roles:70`); a hash of the statement and its
+  occurrence would let runs be compared case by case.
+  - Done: an identifier is `file:hash`, the first 8 hexadecimal digits of the SHA-1 of the statement with its
+    spaces collapsed, then `.2`, `.3`, ... for its next occurrences in the file (`case_id` of `sql2coq.py`); the
+    unit tests use `--position-ids`, the former positions. The identifiers which the documents quote from earlier
+    runs (`roles:52`, `numeric:754`) are positions.
+- **9.25 The cases which 9.1 shows in TiDB** (77 new failing cases of run 10, none translated before): the
+  `TIMESTAMP` literals of TiDB (`types_time`, 30: a time zone `+01:00`, an hour alone `'2024-01-01 14'`, a year of
+  1 to 3 digits, `14.55` for `14:55`, the rounding of more than 6 decimals), `STR_TO_DATE` of a partial date
+  (`'5,2019'` with `%m,%Y` is `2019-05-00`), `EXTRACT` / `HOUR` / `MICROSECOND` of a negative time (`-838:59:59`),
+  `FROM_UNIXTIME` of a string (its time zone), `DATE_ADD` with `MINUTE_SECOND` of a number, the doubles of
+  `VARIANCE` and of a `FLOAT` column (`12.190999984741211`), `NOT IN` with an unsigned beyond 2^63, the temporary
+  tables of TiDB (`ltemp1`), a scalar `COUNT` of an empty correlated subquery (`NULL` in TiDB's `join`).
+- **9.21 `summary.py`** reads the generated files to count the cases of a file over the limit, which the next run
+  deletes; the runner should print the number of cases of each file in its log.
+- **9.22 A conformance smoke test in CI**: a fixed sample of cases (with the result files it needs), so that a
+  regression of the harness like 8.36 is seen before a full run.
+- **9.23 `tools/spec/sql2coq.py`** is one file of 3,300 lines: lexer and parser, translation, replay of the scripts,
+  command line.
+- **9.24 `OPEN_ISSUES.md` I9** lists as open rows 16 (arrays), 18b (ordered-set aggregates), 21 (row values) and 22
+  (static typing), which are done (TODO 2.8, 3.7, 6.2, `Aggregates.v`).

@@ -49,7 +49,7 @@ Definition ob_my_supports (f : feature) : bool :=
 (** The default session: [utf8mb4_general_ci] (PAD SPACE, case insensitive), [sql_mode] without
     [ONLY_FULL_GROUP_BY] nor [PIPES_AS_CONCAT], [group_concat_max_len] = 1024
     ([src/share/system_variable/ob_system_variable_init.json]). *)
-Definition ob_my_default_session : my_session := mk_my_session true Coll_General_CI 4 false false 1024%N 0.
+Definition ob_my_default_session : my_session := mk_my_session true Coll_General_CI 4 false false 1024%N Eng_MySQL.
 
 Definition OceanBaseMySQL : vsem := mysql_vs ob_my_default_session "OceanBase (MySQL mode)" ob_my_supports.
 
@@ -187,13 +187,13 @@ Definition ora_substr (l : list value) : value :=
     if ora_isnull s then Value_string None
     else match text_of s, ora_z_arg p, rest with
          | Some s, Some p, nil => 
-           let p' := if Z.eqb p 0 then 1 else if Z.ltb p 0 then (Z.of_nat (String.length s) + p + 1) else p in
+           let p' := if Z.eqb p 0 then 1 else if Z.ltb p 0 then (Z.of_nat (char_length s) + p + 1) else p in
            Value_string (Some (sql_substring s p' None))
          | Some s, Some p, n :: nil =>
            match ora_z_arg n with
            | Some n => 
              if Z.ltb n 1 then Value_string None
-             else let p' := if Z.eqb p 0 then 1 else if Z.ltb p 0 then (Z.of_nat (String.length s) + p + 1) else p in
+             else let p' := if Z.eqb p 0 then 1 else if Z.ltb p 0 then (Z.of_nat (char_length s) + p + 1) else p in
                   Value_string (Some (sql_substring s p' (Some n)))
            | None => Value_string None
            end
@@ -441,7 +441,7 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
                                         | _ => Value_Err "ORA-30076: invalid extract field for extract source" end
                             | None => Value_Z None end
                           | _ => Value_Z None end)
-  :: ("length", ora_str1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  :: ("length", ora_str1 (fun s => Value_Z (Some (Z.of_nat (char_length s)))))
   :: ("upper", ora_str_fun1 upper_s) :: ("lower", ora_str_fun1 lower_s)
   :: ("trim", ora_str_fun1 (fun s => string_rtrim (string_ltrim s)))
   (* [LTRIM (s, set)], [RTRIM (s, set)]: a set of characters; [TRIM (c FROM s)] *)
@@ -470,7 +470,9 @@ Definition ora_symbol_table : list (string * (list value -> value)) :=
                           | _ => Value_string None end)
   :: ("instr", fun l => match l with
                         | s :: sub :: nil => match text_of s, text_of sub with
-                                             | Some s, Some sub => Value_Z (Some (string_index sub s))
+                                             (* the position in characters *)
+                                             | Some s, Some sub => let i := string_index sub s in
+                                                                   Value_Z (Some (if (0 <? i)%Z then Z.of_nat (char_length (String.substring 0 (Z.to_nat i - 1) s)) + 1 else i))
                                              | _, _ => Value_Z None end
                         | _ => Value_Z None end)
   (* conversions *)
@@ -544,4 +546,5 @@ Definition OceanBaseOracle : vsem :=
           (fun _ _ l => l)
           (fun l => l)
           (fun _ => None)
-          NullValues.value_of_rat.
+          NullValues.value_of_rat
+          Cell_Value.

@@ -5,20 +5,17 @@ for the suites, the method and the explanation of each failure).
 
 | Suite | Dialect | Translated | Failing | Not run (time or memory limit) | Pass |
 |---|---|---|---|---|---|
-| OceanBase test suite (run 23) | `OceanBaseMySQL` | 773 | 0 | 0 | 773 |
-| PostgreSQL regression tests (run 16) | `PostgreSQL` | 513 | 1 | 1 | 511 |
-| MariaDB mysql-test, 44 files (run 9) | `MariaDB` | 394 | 2 | 37 | 355 |
-| TiDB integrationtest (run 6) | `TiDB` | 2061 | 17 | 14 | 2030 |
-| MySQL mysql-test (run 7) | `MySQL` | 1308 | 81 | 0 | 1227 |
+| OceanBase test suite (run 25) | `OceanBaseMySQL` | 773 | 0 | 0 | 773 |
+| PostgreSQL regression tests (run 18) | `PostgreSQL` | 524 | 1 | 1 | 522 |
+| MariaDB mysql-test, 44 files (run 11) | `MariaDB` | 447 | 2 | 36 | 409 |
+| TiDB integrationtest (run 8) | `TiDB` | 2739 | 86 | 14 | 2639 |
+| MySQL mysql-test (run 9) | `MySQL` | 1591 | 59 | 0 | 1532 |
 
 "Not run" counts the cases whose compilation stopped at the time or memory limit of the runner (a file over the limit is compiled again case by case); "Pass" is the rest of the translated cases minus the failing ones.
 
-The translated cases include the queries which the engine rejects (TiDB 49, MySQL 103, MariaDB 8): such a case
-passes when the dialect does not accept the query or its evaluation fails. All the runs are of the commit `b6a731a`
-(the fixes of TODO 8.37 and 8.28). Fewer cases are translated than in the runs before: the window functions and
-the aggregates whose result depends on the order of the scan (`ROW_NUMBER` over a window without `ORDER BY`, or
-among peers, `json_object_agg` without `ORDER BY`), the queries of `LAST_INSERT_ID ()`, of another mysqltest
-connection and of the tables which a statement that the translator does not follow changed are not checkable.
-The failures left: PostgreSQL `numeric:996` (numbers of 131072 digits; `numeric:754`, of the same kind, is the
-case not run); MariaDB `win_avg:3`, `win_sum:3` (its incremental aggregates of a moving frame); TiDB and MySQL:
-`docs/CONFORMANCE.md`.
+Runs of PR 76 (TODO 9.1, 9.2, 9.7, 9.9-9.11, 9.19, 9.20): the scripts follow the changes of the session which the model
+has, so more cases are translated than in the runs before (TiDB 2061 -> 2739, MySQL 1308 -> 1591, MariaDB 394 -> 447,
+PostgreSQL 513 -> 524). The failing TiDB cases are new cases of the files which 9.1 opens (TODO 9.25), none of them
+translated before; no case which passed before fails. The identifiers of the cases are hashes of their statements
+(TODO 9.20). The failures left: PostgreSQL `numeric:996` (numbers of 131072 digits); MariaDB `win_avg`, `win_sum`
+(its incremental aggregates of a moving frame); TiDB and MySQL: `docs/CONFORMANCE.md`, `docs/TODO.md` 9.9, 9.25.

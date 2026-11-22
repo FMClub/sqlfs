@@ -773,7 +773,29 @@ Fixpoint string_rev_aux (s acc : string) :=
   | String c s => string_rev_aux s (String c acc)
   end.
 
-Definition string_rev s := string_rev_aux s EmptyString.
+(** The characters of a string of UTF-8 (TODO 9.7): a byte [10xxxxxx] continues the character of the byte before
+    it; a string of ASCII is a list of its bytes. The positions and the lengths of the string functions count
+    these characters. *)
+Definition is_utf8_cont (c : ascii) : bool := Nat.leb 128 (nat_of_ascii c) && Nat.ltb (nat_of_ascii c) 192.
+
+Fixpoint utf8_chars (s : string) : list string :=
+  match s with
+  | EmptyString => nil
+  | String c r =>
+    match utf8_chars r with
+    | (String d _ as x) :: rest => if is_utf8_cont d then String c x :: rest else String c EmptyString :: x :: rest
+    | l => String c EmptyString :: l
+    end
+  end.
+
+Definition concat_strings (l : list string) : string := fold_right append EmptyString l.
+
+Definition char_length (s : string) : nat := List.length (utf8_chars s).
+
+(** the [n] characters from the character [k] (from 0) *)
+Definition char_substring (k n : nat) (s : string) : string := concat_strings (firstn n (skipn k (utf8_chars s))).
+
+Definition string_rev s := concat_strings (rev (utf8_chars s)).
 
 Fixpoint string_ltrim (s : string) :=
   match s with
@@ -812,7 +834,7 @@ Fixpoint string_repeat (n : nat) (s : string) :=
 
 (** SUBSTRING (s FROM start FOR len), 1-based as in SQL. *)
 Definition sql_substring (s : string) (start : Z) (len : option Z) :=
-  let total := Z.of_nat (String.length s) in
+  let total := Z.of_nat (char_length s) in
   let stop := match len with
               | Some l => (start + l)%Z
               | None => (total + 1)%Z
@@ -821,7 +843,7 @@ Definition sql_substring (s : string) (start : Z) (len : option Z) :=
   let stop' := Z.min stop (total + 1)%Z in
   if (stop' <=? start')%Z
   then EmptyString
-  else String.substring (Z.to_nat (start' - 1)) (Z.to_nat (stop' - start')) s.
+  else char_substring (Z.to_nat (start' - 1)) (Z.to_nat (stop' - start')) s.
 
 Definition string_of_Z (z : Z) : string := NilZero.string_of_int (Z.to_int z).
 
@@ -2428,8 +2450,9 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
                        Value_string (Some (s1 ++ s2))
                      | _ => Value_string None end)
   :: ("concat", concat_ws)
-  :: ("length", strict_string1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
-  :: ("char_length", strict_string1 (fun s => Value_Z (Some (Z.of_nat (String.length s)))))
+  (* lengths and positions in characters ([utf8_chars]) *)
+  :: ("length", strict_string1 (fun s => Value_Z (Some (Z.of_nat (char_length s)))))
+  :: ("char_length", strict_string1 (fun s => Value_Z (Some (Z.of_nat (char_length s)))))
   :: ("upper", string_fun1 (string_map upper_ascii))
   :: ("lower", string_fun1 (string_map lower_ascii))
   :: ("trim", string_fun1 (fun s => string_rtrim (string_ltrim s)))
@@ -2445,12 +2468,12 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
                             | _ => Value_string None end)
   :: ("left", fun l => match l with
                        | Value_string (Some s) :: Value_Z (Some n) :: nil =>
-                         Value_string (Some (String.substring 0 (Z.to_nat n) s))
+                         Value_string (Some (char_substring 0 (Z.to_nat n) s))
                        | _ => Value_string None end)
   :: ("right", fun l => match l with
                         | Value_string (Some s) :: Value_Z (Some n) :: nil =>
-                          let k := Nat.min (Z.to_nat n) (String.length s) in
-                          Value_string (Some (String.substring (String.length s - k) k s))
+                          let k := Nat.min (Z.to_nat n) (char_length s) in
+                          Value_string (Some (char_substring (char_length s - k) k s))
                         | _ => Value_string None end)
   :: ("replace", fun l => match l with
                           | Value_string (Some s) :: Value_string (Some from)

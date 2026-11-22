@@ -106,7 +106,7 @@ Definition lite_pred_table : list (string * (list value -> bool3)) :=
     length takes the characters which precede [start]; position 0 is before the first
     character. *)
 Definition lite_substr (s : string) (start : Z) (len : option Z) : string :=
-  let total := Z.of_nat (String.length s) in
+  let total := Z.of_nat (char_length s) in
   let st := if (Z.ltb start 0) then total + start + 1 else start in
   let '(a, b) := match len with
                  | None => (st, total + 1)
@@ -115,7 +115,7 @@ Definition lite_substr (s : string) (start : Z) (len : option Z) : string :=
   let a' := Z.max a 1 in
   let b' := Z.min b (total + 1) in
   if (Z.leb b' a') then EmptyString 
-  else String.substring (Z.to_nat (a' - 1)) (Z.to_nat (b' - a')) s.
+  else char_substring (Z.to_nat (a' - 1)) (Z.to_nat (b' - a')) s.
 
 Definition lite_substr_fun (l : list value) : value :=
   match l with
@@ -493,7 +493,8 @@ Definition lite_symbol_table_raw : list (string * (list value -> value)) :=
   :: ("concat", lite_concat_skip)
   (* [length] of a text counts its characters ([lengthFunc]) *)
   :: ("length", str1 (fun s => Value_Z (Some (char_count s))))
-  :: ("upper", str_fun1 upper_s) :: ("lower", str_fun1 lower_s)
+  (* SQLite (without ICU) changes the case of the ASCII letters only *)
+  :: ("upper", str_fun1 (string_map upper_ascii)) :: ("lower", str_fun1 (string_map lower_ascii))
   (* [trim (s, chars)]: a set of characters, a space by default ([trimFunc]) *)
   :: ("trim", f_trim_set lite_skit 0) :: ("ltrim", f_trim_set lite_skit 1) :: ("rtrim", f_trim_set lite_skit 2)
   :: ("trim_both", f_trim_set lite_skit 0) :: ("trim_leading", f_trim_set lite_skit 1) :: ("trim_trailing", f_trim_set lite_skit 2)
@@ -687,7 +688,7 @@ Definition lite_cmp_coerce (p : string) (ks : list nat) (l : list value) : list 
 
 Definition SQLite : vsem :=
   mk_vsem "SQLite"
-          (table_of_list (like_table lite_skit false low_cp low_cp None
+          (table_of_list (like_table lite_skit false ascii_low_cp ascii_low_cp None
                           (* [REGEXP] calls the user function [regexp ()], which SQLite does not define *)
                           ++ ("regexp", fun _ => unknown3) :: ("not regexp", fun _ => unknown3) :: lite_pred_table))
           (table_of_list lite_symbol_table)
@@ -709,4 +710,5 @@ Definition SQLite : vsem :=
           lite_cmp_coerce
           (fun l => l)
           lite_table_funs
-          (fun q => to_float false (Q2Qc q)).
+          (fun q => to_float false (Q2Qc q))
+          Cell_Value.

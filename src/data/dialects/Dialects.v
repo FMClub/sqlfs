@@ -34,6 +34,13 @@ Definition value := NullValues.value.
 
 (** * The value semantics of a dialect *)
 
+(** A cell of a result as the client shows it: the value itself (compared with the expected text by
+    [SpecRunner.cell_ok]), the text of a number (its expected text may be padded on the left), or a text *)
+Inductive client_cell : Type :=
+  | Cell_Value : value -> client_cell
+  | Cell_Number : string -> client_cell
+  | Cell_Text : string -> client_cell.
+
 Record vsem : Type :=
   mk_vsem
     {
@@ -69,7 +76,10 @@ Record vsem : Type :=
       vs_table_fun : string -> option (list value -> list (list value));
       (** the value of [PERCENT_RANK] and [CUME_DIST], which are rational numbers: a double in PostgreSQL,
           the MySQL family and SQLite, a [NUMBER] in Oracle (TODO 8.31) *)
-      vs_of_rat : Q -> value
+      vs_of_rat : Q -> value;
+      (** how the client of the dialect shows a value of a result (TODO 9.19): PostgreSQL prints its doubles with
+          [float8out], and [PostgreSQL_regress] its dates in the DateStyle [Postgres, MDY] *)
+      vs_client : value -> client_cell
     }.
 
 (** [DISTINCT] aggregates: the name of the aggregate starts with ["distinct "]. *)

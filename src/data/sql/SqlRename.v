@@ -1639,6 +1639,9 @@ intros step' step d sa' sa Hstep Hs n; induction n as [ | n IH]; intros acc' acc
   apply RL_app; [exact Ha | constructor; [apply err_row_RT, null_tuple_RT; exact Hs | constructor]].
 - destruct Hw as [ | x' x w' w Hx Hw]; [exact Ha | ].
   assert (K : RL (x' :: w') (x :: w)) by (constructor; assumption).
+  assert (E : existsb (row_error O) (x' :: w') = existsb (row_error O) (x :: w)).
+  { induction K as [ | y' y u' u Hy Hu IHu]; [reflexivity | ]; simpl; rewrite (row_error_RT _ _ Hy), IHu; reflexivity. }
+  rewrite E; destruct (existsb (row_error O) (x :: w)); [exact Ha | ].
   assert (N : RL (if d then eval_set_op O Diff Set_Distinct (step' (x' :: w')) acc' else step' (x' :: w'))
                  (if d then eval_set_op O Diff Set_Distinct (step (x :: w)) acc else step (x :: w)))
     by (destruct d; [apply set_op_R; [apply Hstep; exact K | exact Ha] | apply Hstep; exact K]).

@@ -63,7 +63,7 @@ Definition at_version (d : vsem) (fam : family) (v : version) : vsem :=
      vs_supports := fun f => vs_supports d f && supported_in fam v f;
      vs_scalar_first := vs_scalar_first d; vs_pred_error := vs_pred_error d; vs_const := vs_const d;
      vs_truth_error := vs_truth_error d; vs_cmp_coerce := vs_cmp_coerce d; vs_unify := vs_unify d;
-     vs_table_fun := vs_table_fun d; vs_of_rat := vs_of_rat d |}.
+     vs_table_fun := vs_table_fun d; vs_of_rat := vs_of_rat d; vs_client := vs_client d |}.
 
 (** A version restricts, and never extends, the constructs of the dialect *)
 Lemma at_version_sub d fam v f : vs_supports (at_version d fam v) f = true -> vs_supports d f = true.
