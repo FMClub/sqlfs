@@ -37,12 +37,22 @@ Record spec_case : Type :=
       (** [LIMIT n] without [ORDER BY]: any [n] rows of the result of [sc_query] (TODO 3.10) *)
       sc_limit : option nat;
       (** the engine rejects the query (an error): the model must reject it or fail on it (TODO 8.17) *)
-      sc_error : bool
+      sc_error : bool;
+      (** the dialect of the session in which the query ran, when the script changed it ([SET sql_mode], ...:
+          TODO 9.1); otherwise the dialect of the run *)
+      sc_dialect : option vsem
     }.
 
-Definition mk_case id ordered tabs q expected sql := mk_spec_case id ordered tabs q expected sql None false.
-Definition mk_case_limit id (n : nat) tabs q expected sql := mk_spec_case id false tabs q expected sql (Some n) false.
-Definition mk_case_error id tabs q sql := mk_spec_case id false tabs q nil sql None true.
+Definition mk_case id ordered tabs q expected sql := mk_spec_case id ordered tabs q expected sql None false None.
+Definition mk_case_limit id (n : nat) tabs q expected sql := mk_spec_case id false tabs q expected sql (Some n) false None.
+Definition mk_case_error id tabs q sql := mk_spec_case id false tabs q nil sql None true None.
+
+(** a case of a session whose settings are not those of the dialect of the run *)
+Definition with_dialect (d : vsem) (c : spec_case) : spec_case :=
+  mk_spec_case (sc_id c) (sc_ordered c) (sc_tables c) (sc_query c) (sc_expected c) (sc_sql c) (sc_limit c)
+               (sc_error c) (Some d).
+
+Definition dialect_for (d : vsem) (c : spec_case) : vsem := match sc_dialect c with Some d' => d' | None => d end.
 
 (** The database of a case *)
 Definition build_db (tabs : list table_spec) : db_state :=
@@ -55,14 +65,12 @@ Definition build_db (tabs : list table_spec) : db_state :=
 (** A value, and the text of a result: NULLs are the same; an integer or a rational is compared as a
     number; a decimal, whose text has the scale of the engine, and the other values are compared as
     texts. The leading spaces of the text of a number are ignored. *)
-Definition cell_ok (v : NullValues.value) (s0 : string) : bool :=
+Definition value_ok (v : NullValues.value) (s0 : string) : bool :=
   (* the leading spaces of a number are the padding of a psql column aligned on the right
      (pg2result.py, aligned_cells): no engine prints a number with them *)
   let s := match v with
            | NullValues.Value_Z _ | NullValues.Value_I _ | NullValues.Value_Q _ | NullValues.Value_D _
            | NullValues.Value_F _ => NullValues.string_ltrim s0
-           (* a double of PostgreSQL as its client prints it ([client_value]) *)
-           | NullValues.Value_C (Some (_, "float8out")) => NullValues.string_ltrim s0
            | _ => s0
            end in
   if String.eqb s "NULL" then NullValues.is_null v
@@ -84,27 +92,36 @@ Definition cell_ok (v : NullValues.value) (s0 : string) : bool :=
        | _ => match text_of v with Some t => String.eqb s t | None => false end
        end.
 
-Fixpoint row_ok (r : list NullValues.value) (e : list string) : bool :=
+(** A cell as the client shows it ([vs_client]), and the text of a result: the text of a number is compared
+    without the leading spaces of the expected text *)
+Definition cell_ok (c : client_cell) (s0 : string) : bool :=
+  match c with
+  | Cell_Value v => value_ok v s0
+  | Cell_Number t => String.eqb (NullValues.string_ltrim s0) t
+  | Cell_Text t => String.eqb s0 t
+  end.
+
+Fixpoint row_ok (r : list client_cell) (e : list string) : bool :=
   match r, e with
   | nil, nil => true
   | v :: r, s :: e => cell_ok v s && row_ok r e
   | _, _ => false
   end.
 
-Fixpoint remove_matching (e : list string) (rs : list (list NullValues.value)) : option (list (list NullValues.value)) :=
+Fixpoint remove_matching (e : list string) (rs : list (list client_cell)) : option (list (list client_cell)) :=
   match rs with
   | nil => None
   | r :: rs => if row_ok r e then Some rs 
                else match remove_matching e rs with Some rs' => Some (r :: rs') | None => None end
   end.
 
-Fixpoint match_unordered (rs : list (list NullValues.value)) (es : list (list string)) : bool :=
+Fixpoint match_unordered (rs : list (list client_cell)) (es : list (list string)) : bool :=
   match es with
   | nil => match rs with nil => true | _ => false end
   | e :: es => match remove_matching e rs with Some rs' => match_unordered rs' es | None => false end
   end.
 
-Fixpoint match_ordered (rs : list (list NullValues.value)) (es : list (list string)) : bool :=
+Fixpoint match_ordered (rs : list (list client_cell)) (es : list (list string)) : bool :=
   match rs, es with
   | nil, nil => true
   | r :: rs, e :: es => row_ok r e && match_ordered rs es
@@ -113,30 +130,16 @@ Fixpoint match_ordered (rs : list (list NullValues.value)) (es : list (list stri
 
 Definition out_attr (i : nat) : attribute TNull := Attr_Z ("c" ++ NullValues.string_of_Z (Z.of_nat i)).
 
-(** The value as the client of the dialect shows it: a double of PostgreSQL is printed by [float8out] ([pg_text]:
-    [NaN], [Infinity], the exponents [e+20]), the others as the MySQL family prints them ([text_of]). The text of
-    a double of PostgreSQL is tagged with the pseudo-collation ["float8out"], so that [cell_ok] still knows it
-    is a number (and ignores the leading spaces of its expected text). *)
-Definition client_value (d : vsem) (v : NullValues.value) : NullValues.value :=
-  match v with
-  | NullValues.Value_F (Some (x, k)) =>
-    if String.eqb (vs_name d) "PostgreSQL"
-    then NullValues.Value_C
-           (Some (IEEE.pg_text (NullValues.fmt_of (Nat.odd k)) (IEEE.special_of_tag (Nat.div (Nat.modulo k 10) 2)) x,
-                  "float8out"))
-    else v
-  (* a date or a timestamp in the DateStyle of the dialect, when it has one ([PostgreSQL_regress]) *)
-  | NullValues.Value_T (Some _) => match vs_symb d "__client_text" with Some f => f (v :: nil) | None => v end
-  | _ => v
-  end.
+(** The value as the client of the dialect shows it ([vs_client]) *)
+Definition client_value (d : vsem) (v : NullValues.value) : client_cell := vs_client d v.
 
-Definition run_rows (d : vsem) (c : spec_case) (ncols : nat) : list (list NullValues.value) :=
+Definition run_rows (d : vsem) (c : spec_case) (ncols : nat) : list (list client_cell) :=
   let db := build_db (sc_tables c) in
   map (fun t => map (fun i => client_value d (dot (TD d) t (out_attr i))) (seq 0 ncols))
       (eval_query_list ORN (dialect_of d) (_basesort _ db) (_instance _ db) (to_dialect d (sc_query c))).
 
 (** the expected rows [e] are rows of [rs], each a different one *)
-Fixpoint sub_bag (rs : list (list NullValues.value)) (e : list (list string)) : bool :=
+Fixpoint sub_bag (rs : list (list client_cell)) (e : list (list string)) : bool :=
   match e with
   | nil => true
   | x :: e' => match remove_matching x rs with Some rs' => sub_bag rs' e' | None => false end
@@ -145,7 +148,7 @@ Fixpoint sub_bag (rs : list (list NullValues.value)) (e : list (list string)) : 
 (** The allowed orders of an ordered query ([allowed_ordered] of [SqlFull.v]): the expected rows are the
     groups of peers in their order, the rows of a group in any order; with a [LIMIT], the last group may
     be taken in part. *)
-Fixpoint groups_ok (gs : list (list (list NullValues.value))) (e : list (list string)) : bool :=
+Fixpoint groups_ok (gs : list (list (list client_cell))) (e : list (list string)) : bool :=
   match gs with
   | nil => match e with nil => true | _ => false end
   | g :: gs' =>
@@ -176,7 +179,8 @@ Definition error_ok (d : vsem) (c : spec_case) : bool :=
   | QR_Rows _ _ => false
   end.
 
-Definition check_case (d : vsem) (c : spec_case) : bool :=
+Definition check_case (d0 : vsem) (c : spec_case) : bool :=
+  let d := dialect_for d0 c in
   if sc_error c then error_ok d c else
   let ncols := match sc_expected c with e :: _ => List.length e | nil => 0%nat end in
   match sc_limit c with
@@ -202,9 +206,13 @@ Definition show_value (v : NullValues.value) : string :=
   else if NullValues.is_null v then "NULL"
   else match text_of v with Some s => s | None => "?" end.
 
-Definition show_actual (d : vsem) (c : spec_case) : list (list string) :=
+Definition show_cell (c : client_cell) : string :=
+  match c with Cell_Value v => show_value v | Cell_Number t | Cell_Text t => t end.
+
+Definition show_actual (d0 : vsem) (c : spec_case) : list (list string) :=
+  let d := dialect_for d0 c in
   let ncols := match sc_expected c with e :: _ => List.length e | nil => 1%nat end in
-  map (map show_value) (run_rows d c ncols).
+  map (map show_cell) (run_rows d c ncols).
 
 Definition join_strings (sep : string) (l : list string) : string :=
   match l with nil => "" | x :: l => fold_left (fun acc y => acc ++ sep ++ y) l x end.

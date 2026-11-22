@@ -42,7 +42,7 @@ Definition run (d : vsem) (q : squery) :=
 (** the rows of [q], whose columns are [c0, c1, ...], are the expected ones, in any order *)
 Definition result_is (d : vsem) (q : squery) (n : nat) (expected : list (list string)) : bool :=
   match_unordered 
-    (map (fun t => map (fun i => dot (TD d) t (out_attr i)) (seq 0 n)) (run d q)) expected.
+    (map (fun t => map (fun i => client_value d (dot (TD d) t (out_attr i))) (seq 0 n)) (run d q)) expected.
 
 Definition items := [from_table "items_sold"].
 Definition b := col brand.

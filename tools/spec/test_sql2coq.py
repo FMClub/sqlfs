@@ -17,7 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.join(HERE, 'sql2coq.py')
 
 
-def translate(dialect, files):
+def translate(dialect, files, extra=()):
     """files: {name: text}. Returns {name: text of the generated Spec_name.v}."""
     with tempfile.TemporaryDirectory() as d:
         paths = []
@@ -27,7 +27,7 @@ def translate(dialect, files):
                 f.write(text)
             paths.append(p)
         out = os.path.join(d, 'out')
-        subprocess.run([sys.executable, TOOL, '--dialect', dialect, '--lenient', '--outdir', out] + sorted(paths),
+        subprocess.run([sys.executable, TOOL, '--dialect', dialect, '--lenient', '--position-ids', '--outdir', out] + list(extra) + sorted(paths),
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         res = {}
         for name in files:
@@ -194,7 +194,7 @@ def result_files_of_the_same_name():
                 f.write("select %d;\n%d\n%d\n" % (n, n, n))
             paths.append(p)
         out = os.path.join(d, 'out')
-        subprocess.run([sys.executable, TOOL, '--dialect', 'TiDB', '--lenient', '--outdir', out] + paths,
+        subprocess.run([sys.executable, TOOL, '--dialect', 'TiDB', '--lenient', '--position-ids', '--outdir', out] + paths,
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert sorted(os.listdir(out)) == ['Spec_executor_integration.v', 'Spec_planner_integration.v'], os.listdir(out)
         assert 'mk_case "executor_integration:0"' in open(os.path.join(out, 'Spec_executor_integration.v')).read()
@@ -354,7 +354,7 @@ def sorted_result():
         open(os.path.join(d, 'a.test'), 'w').write(script)
         open(os.path.join(d, 'a.result'), 'w').write(result)
         out = os.path.join(d, 'out')
-        subprocess.run([sys.executable, TOOL, '--dialect', 'TiDB', '--lenient', '--outdir', out, os.path.join(d, 'a.result')],
+        subprocess.run([sys.executable, TOOL, '--dialect', 'TiDB', '--lenient', '--position-ids', '--outdir', out, os.path.join(d, 'a.result')],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         text = open(os.path.join(out, 'Spec_a.v')).read()
         assert re.search(r'mk_case "a:2" false', text) and re.search(r'mk_case "a:3" true', text), text
@@ -377,6 +377,106 @@ def unfollowed_changes():
         "create temp table n (a int);\ninsert into n values (1);\nselect a from n;\na\n1\n"
         "create table s (a int);\ninsert into s values (1);\ncreate temporary table s (a int);\nselect a from s;\na\n")})['a']
     assert 'select a from n;' in out and 'select a from s;' not in out, out
+
+
+@test
+def changes_of_the_session():
+    """TODO 9.1: a SET of sql_mode, div_precision_increment, group_concat_max_len, NAMES or time_zone which the model
+    has is followed (the cases are in the dialect of the new session); another one stops the script."""
+    out = translate('MySQL', {'a': (
+        "select 1;\n1\n1\n"
+        "set @orig = @@sql_mode;\nset sql_mode = '';\nselect 2;\n2\n2\n"
+        "set sql_mode = 'PIPES_AS_CONCAT,ANSI_QUOTES';\nselect 'a' || 'b' as \"x\";\nx\nab\n"
+        "set sql_mode = @orig;\nset names utf8mb4;\nset time_zone = '+00:00';\nselect 3;\n3\n3\n"
+        "set div_precision_increment = 6;\nselect 4;\n4\n4\n"
+        "set sql_mode = 'NO_UNSIGNED_SUBTRACTION';\nselect 5;\n5\n5\n")})['a']
+    lines = [l for l in out.split('\n') if 'mk_case' in l]
+    by_id = {re.search(r'"a:(\d+)"', l).group(1): l for l in lines}
+    assert by_id['0'].startswith('  mk_case'), by_id['0']
+    assert 'with_dialect (mysql_vs (my_with my_default_session (Some false) None None None)' in by_id['3'], by_id['3']
+    x = by_id['5']
+    # PIPES_AS_CONCAT: || is the concatenation; ANSI_QUOTES: "x" is an identifier (the alias)
+    assert 'my_with my_default_session (Some false) (Some true) None None' in x and 'fn "||"' in x, x
+    assert by_id['9'].startswith('  mk_case'), by_id['9']
+    assert 'my_with my_default_session None None (Some 6%nat) None' in by_id['11'], by_id['11']
+    assert '"a:13"' not in out, out
+    # a capture and a change in one SET; SELECT ... INTO; a saved div_precision_increment
+    out = translate('MySQL', {'a': (
+        "SET @OLD=@@SQL_MODE, @@SQL_MODE='';\nselect 1;\n1\n1\nSET @@SQL_MODE=@OLD;\nselect 2;\n2\n2\n"
+        "SELECT @@session.sql_mode INTO @o2;\nset sql_mode='PIPES_AS_CONCAT';\nselect 3;\n3\n3\nset sql_mode=@o2;\nselect 4;\n4\n4\n"
+        "set @d = @@div_precision_increment;\nset div_precision_increment = 2;\nset div_precision_increment = @d;\n"
+        "select 5;\n5\n5\n")})['a']
+    by_id = {re.search(r'"a:(\d+)"', l).group(1): l for l in out.split('\n') if 'mk_case' in l}
+    assert '(Some false)' in by_id['1'] and by_id['3'].startswith('  mk_case'), out
+    assert '(Some true)' in by_id['6'] and by_id['8'].startswith('  mk_case'), out
+    assert by_id['12'].startswith('  mk_case'), out
+    # NAMES of another character set stops the script
+    out = translate('MySQL', {'a': "set names latin1;\nselect 1;\n1\n1\n"})['a']
+    assert 'mk_case' not in out, out
+
+
+@test
+def recursive_with():
+    """TODO 9.2: WITH RECURSIVE is with_rec of SqlFull: the anchor, the step which reads the relation, the query."""
+    out = translate('PostgreSQL', {'a': (
+        "WITH RECURSIVE t(n) AS (VALUES (1) UNION ALL SELECT n+1 FROM t WHERE n < 3) SELECT n FROM t;\nn\n1\n2\n3\n"
+        "WITH RECURSIVE t(n) AS (SELECT 1) SELECT n FROM t;\nn\n1\n"
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT n FROM t), u AS (SELECT n FROM t) SELECT n FROM u;\nn\n1\n")})['a']
+    c = case(out, 'a:0')
+    assert '(with_rec Set_All "t" (values_ [(Attr_Z "c0")] [[(int (1))]])' in c, c
+    assert '(from_as (table "t") [((Attr_Z "c0"), (Attr_Z "t.n"))])' in c, c
+    # a CTE of WITH RECURSIVE which does not refer to itself is inlined, as without RECURSIVE
+    assert 'with_rec' not in case(out, 'a:1') and case(out, 'a:1') != '', out
+    assert '(with_rec Set_Distinct "t"' in case(out, 'a:2'), out
+    # several anchors and recursive terms: the anchor is the union of the first ones, the step that of the others
+    out = translate('MariaDB', {'b': (
+        "with recursive t(n) as (select 1 union select 2 union select n+2 from t where n < 5 union select n+3 from t where n < 5) "
+        "select n from t;\nn\n1\n2\n3\n4\n5\n6\n7\n"
+        "with recursive t(n) as (select 1 union all select n+1 from t where n < 3 union select 9) select n from t;\nn\n1\n")})['b']
+    c = case(out, 'b:0')
+    assert '(with_rec Set_Distinct "t" (set_op_ Union Set_Distinct' in c, c
+    assert case(out, 'b:1') == '', out
+
+
+@test
+def stable_identifiers():
+    """TODO 9.20: an identifier is a hash of the statement, which a directive before it does not move; a repeated
+    statement has the suffix .2"""
+    with tempfile.TemporaryDirectory() as d:
+        outs = []
+        for k, text in enumerate(["select 1;\n1\n1\nselect 2;\n2\n2\nselect 1;\n1\n1\n",
+                                  "set @y = 2;\nselect 1;\n1\n1\nset @x = 1;\nselect 2;\n2\n2\nselect 1;\n1\n1\n"]):
+            p = os.path.join(d, str(k), 's.result')
+            os.makedirs(os.path.dirname(p))
+            open(p, 'w').write(text)
+            subprocess.run([sys.executable, TOOL, '--dialect', 'MySQL', '--lenient', '--outdir', os.path.join(d, str(k), 'o'), p],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            outs.append(re.findall(r'mk_case\w* "([^"]*)"', open(os.path.join(d, str(k), 'o', 'Spec_s.v')).read()))
+        assert outs[0] == outs[1] and len(outs[0]) == 3, outs
+        assert re.match(r'^s:[0-9a-f]{8}$', outs[0][0]) and outs[0][2] == outs[0][0] + '.2', outs
+
+
+@test
+def latin_strings():
+    """TODO 9.7: the characters up to U+02FF are translated, as UTF-8; the others, and a table in another character
+    set, are not"""
+    out = translate('MySQL', {'a': (
+        "select upper('café');\nupper('café')\nCAFÉ\n"
+        "select '中';\n中\n中\n"
+        "create table t1 (v varchar(20)) charset latin1;\ninsert into t1 values ('a ');\nselect v from t1;\nv\na \n")})['a']
+    assert '(str "café")' in case(out, 'a:0'), out
+    assert case(out, 'a:1') == '' and case(out, 'a:4') == '', out
+
+
+@test
+def recursive_terms():
+    """TODO 9.2: the MySQL family rejects a recursive term with DISTINCT, an aggregate, or a reference in a subquery;
+    PostgreSQL accepts a WITH there"""
+    out = translate('TiDB', {'a': (
+        "with recursive t(n) as (select 1 union select distinct n + 1 from t where n < 3) select * from t;\nError 3575 (HY000): x\n"
+        "with recursive t(n) as (select 1 union all select n + 1 from t where n in (select n from t)) select * from t;\nError 3575 (HY000): x\n"
+        "with recursive t(n) as (select 1 union all select n + 1 from t where n < 3) select * from t;\nn\n1\n2\n3\n")})['a']
+    assert case(out, 'a:0') == '' and case(out, 'a:1') == '' and 'with_rec' in case(out, 'a:2'), out
 
 
 def main():

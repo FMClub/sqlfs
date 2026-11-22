@@ -58,6 +58,43 @@ Definition utf8_encode1 (c : Z) : string :=
 
 Definition utf8_encode (l : list Z) : string := fold_right (fun c acc => (utf8_encode1 c ++ acc)%string) EmptyString l.
 
+(** * The case of the letters of Latin-1 and Latin Extended-A (TODO 9.7)
+
+    The simple case mapping of Unicode ([UnicodeData.txt]) on U+0000..U+017F, which the engines use for [UPPER]
+    and [LOWER]: [à..þ] and [À..Þ] (but [÷], [×]), [ÿ] and [Ÿ] (U+0178), the pairs of Latin Extended-A, [ı] (U+0131)
+    is [I], [İ] (U+0130) is [i], [ſ] (U+017F) is [S]; [ß], [ĸ], [ŉ] have no simple upper case. The other characters
+    are kept (the translator does not give the model strings beyond U+02FF). *)
+Definition upper_cp (c : Z) : Z :=
+  if (97 <=? c) && (c <=? 122) then c - 32
+  else if (224 <=? c) && (c <=? 254) && negb (c =? 247) then c - 32
+  else if c =? 255 then 376
+  else if c =? 305 then 73
+  else if c =? 383 then 83
+  else if (256 <=? c) && (c <=? 311) && Z.odd c then c - 1
+  else if (313 <=? c) && (c <=? 328) && Z.even c then c - 1
+  else if (330 <=? c) && (c <=? 375) && Z.odd c then c - 1
+  else if (377 <=? c) && (c <=? 382) && Z.even c then c - 1
+  else c.
+
+Definition lower_cp (c : Z) : Z :=
+  if (65 <=? c) && (c <=? 90) then c + 32
+  else if (192 <=? c) && (c <=? 222) && negb (c =? 215) then c + 32
+  else if c =? 376 then 255
+  else if c =? 304 then 105
+  else if (256 <=? c) && (c <=? 311) && Z.even c then c + 1
+  else if (313 <=? c) && (c <=? 328) && Z.odd c then c + 1
+  else if (330 <=? c) && (c <=? 375) && Z.even c then c + 1
+  else if (377 <=? c) && (c <=? 382) && Z.odd c then c + 1
+  else c.
+
+Definition is_ascii_string (s : string) : bool :=
+  forallb (fun a => Nat.ltb (Ascii.nat_of_ascii a) 128) (list_ascii_of_string s).
+
+Definition upper_utf8 (s : string) : option string :=
+  if is_ascii_string s then None else Some (utf8_encode (map upper_cp (utf8_decode s))).
+Definition lower_utf8 (s : string) : option string :=
+  if is_ascii_string s then None else Some (utf8_encode (map lower_cp (utf8_decode s))).
+
 (** * Collations *)
 Inductive collation : Type :=
   (** the bytes: [C] of PostgreSQL, [BINARY] of SQLite, [utf8mb4_bin], [binary] *)

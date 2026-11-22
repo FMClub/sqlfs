@@ -1757,6 +1757,9 @@ Fixpoint rec_loop (step : list tuple -> list tuple) (distinct : bool) (sa : setA
     match work with
     | nil => acc
     | _ =>
+      (* an error of the last step is the result of the query: the engines stop there (TiDB [cte.test], an
+         out-of-range anchor) *)
+      if existsb row_error work then acc else
       let new := step work in
       let new' := if distinct then eval_set_op Diff Set_Distinct new acc else new in
       rec_loop step distinct sa n' (acc ++ new') new'

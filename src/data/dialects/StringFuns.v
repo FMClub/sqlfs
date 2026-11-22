@@ -26,8 +26,12 @@ Definition is_lower_cp (c : Z) := (97 <=? c) && (c <=? 122).
 (** a letter: an ASCII letter, or a character outside ASCII *)
 Definition is_alpha_cp (c : Z) := is_upper_cp c || is_lower_cp c || (128 <=? c).
 Definition is_alnum_cp (c : Z) := is_alpha_cp c || is_digit_cp c.
-Definition up_cp (c : Z) := if is_lower_cp c then c - 32 else c.
-Definition low_cp (c : Z) := if is_upper_cp c then c + 32 else c.
+(** the case of Latin-1 and Latin Extended-A too ([Collation.upper_cp], TODO 9.7) *)
+Definition up_cp (c : Z) := upper_cp c.
+Definition low_cp (c : Z) := lower_cp c.
+(** the ASCII letters only (SQLite without ICU: [sqlite3UpperToLower], [upper ()] and [LIKE]) *)
+Definition ascii_up_cp (c : Z) := if is_lower_cp c then c - 32 else c.
+Definition ascii_low_cp (c : Z) := if is_upper_cp c then c + 32 else c.
 
 Fixpoint prefix_of (p s : list Z) : bool :=
   match p, s with

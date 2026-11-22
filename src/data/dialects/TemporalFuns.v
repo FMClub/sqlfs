@@ -148,6 +148,11 @@ Definition my_extract (unit : string) (ts : Z) : option Z :=
   | "DAY_MINUTE"%string => Some ((d * 100 + h) * 100 + mi) | "DAY_SECOND"%string => Some (((d * 100 + h) * 100 + mi) * 100 + se)
   | "HOUR_MINUTE"%string => Some (h * 100 + mi) | "HOUR_SECOND"%string => Some ((h * 100 + mi) * 100 + se)
   | "MINUTE_SECOND"%string => Some (mi * 100 + se)
+  (* the units [..._MICROSECOND]: the microseconds on 6 digits ([func_sapdb]) *)
+  | "DAY_MICROSECOND"%string => Some ((((d * 100 + h) * 100 + mi) * 100 + se) * usec_s + us mod usec_s)
+  | "HOUR_MICROSECOND"%string => Some (((h * 100 + mi) * 100 + se) * usec_s + us mod usec_s)
+  | "MINUTE_MICROSECOND"%string => Some ((mi * 100 + se) * usec_s + us mod usec_s)
+  | "SECOND_MICROSECOND"%string => Some (se * usec_s + us mod usec_s)
   | _ => None
   end.
 

@@ -335,6 +335,7 @@ Proof.
 intros P step d sa He Hs n; induction n as [ | n IH]; intros acc work Ha Hw t H; simpl in H.
 - destruct work; [exact (Ha t H) | ]; apply in_app_or in H; destruct H as [H | [<- | []]]; [exact (Ha t H) | exact He].
 - destruct work as [ | w0 work]; [exact (Ha t H) | ].
+  destruct (existsb (row_error O) (w0 :: work)); [exact (Ha t H) | ].
   assert (N : forall t, In t (if d then eval_set_op O Diff Set_Distinct (step (w0 :: work)) acc else step (w0 :: work)) -> P t).
   { intros u Hu; destruct d; [apply in_eval_set_op in Hu; destruct Hu as [Hu | Hu] | ];
       [exact (Hs _ Hw u Hu) | exact (Ha u Hu) | exact (Hs _ Hw u Hu)]. }

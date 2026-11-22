@@ -33,7 +33,7 @@ Definition value1 (d : vsem) (e : sexpr) : string :=
 
 (** a session of MySQL with [PIPES_AS_CONCAT], [div_precision_increment] = 2, [group_concat_max_len] = 3,
     and without [ONLY_FULL_GROUP_BY] *)
-Definition custom : my_session := mk_my_session false Coll_UCA900_AI_CI 2 true false 3%N 0.
+Definition custom : my_session := mk_my_session false Coll_UCA900_AI_CI 2 true false 3%N Eng_MySQL.
 Definition MySQL' : vsem := mysql_vs custom "MySQL" my_supports.
 
 Example pipes_default : value1 MySQL (fn "||" [str "a"; str "b"]) = "0".

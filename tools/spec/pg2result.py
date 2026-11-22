@@ -323,7 +323,7 @@ def main():
                 continue
             res.append(st)
             res += convert_output(out)
-        with open(os.path.join(outdir, name + '.result'), 'w') as f:
+        with open(os.path.join(outdir, name + '.result'), 'w', encoding='utf-8') as f:
             f.write('\n'.join(res) + '\n')
 
 

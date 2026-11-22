@@ -10,6 +10,7 @@ Require Import Bool3 FlatData ListFacts OrderedSet
 
 Require Import Values TuplesImpl GenericInstance SqlSyntax SqlFullSyntax
         Dialects ValueKit PostgreSQL MySQL SQLite OceanBase SpecRunner.
+Require Import MariaDB TiDB.
 
 Import Tuple.
 Import ListNotations.
@@ -44,8 +45,33 @@ Proof. check. Qed.
 Example str_2 : text PostgreSQL (fn "lpad" [s "hello"; int 3]) = "hel".
 Proof. check. Qed.
 
-Example str_3 : text MySQL (fn "lpad" [s "hi"; int 5; s ""]) = "NULL".
+(* an empty padding: the string in MySQL 8.0 ([lpad.result]), NULL in MariaDB, the empty string in TiDB *)
+Example str_3 : text MySQL (fn "lpad" [s "hi"; int 5; s ""]) = "hi".
 Proof. check. Qed.
+
+Example str_3_maria : text MariaDB (fn "lpad" [s "hi"; int 5; s ""]) = "NULL".
+Proof. check. Qed.
+
+Example str_3_tidb : text TiDB (fn "rpad" [s "hi"; int 5; s ""]) = "".
+Proof. check. Qed.
+
+(* the case of Latin-1 and Latin Extended-A (TODO 9.7); SQLite changes the ASCII letters only *)
+Example str_case_1 : text MySQL (fn "upper" [s "aéßÿı"]) = "AÉßŸI".
+Proof. check. Qed.
+
+Example str_case_2 : text PostgreSQL (fn "lower" [s "ÀÉŸİĀ"]) = "àéÿiā".
+Proof. check. Qed.
+
+Example str_case_3 : text SQLite (fn "upper" [s "aé"]) = "Aé".
+Proof. check. Qed.
+
+(* the lengths and the positions count the characters of UTF-8; MySQL's [LENGTH] counts the bytes *)
+Example str_case_4 : text MySQL (fn "char_length" [s "aé"]) = "2" /\ text MySQL (fn "length" [s "aé"]) = "3".
+Proof. split; check. Qed.
+
+Example str_chars_1 : text PostgreSQL (fn "substring" [s "aéb"; int 2; int 1]) = "é" /\
+                      text MySQL (fn "reverse" [s "aéb"]) = "béa" /\ text SQLite (fn "substr" [s "aéb"; int 2; int 1]) = "é".
+Proof. repeat split; check. Qed.
 
 Example str_4 : text MySQL (fn "rpad" [s "hi"; int 5; s "?"]) = "hi???".
 Proof. check. Qed.

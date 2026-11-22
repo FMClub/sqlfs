@@ -13,6 +13,7 @@ which read it are skipped, so that a skipped statement never makes a case wrong.
 
 Usage: sql2coq.py RESULT_FILE... > Cases.v
 """
+import hashlib
 import re
 import sys
 import json
@@ -48,7 +49,12 @@ def tokenize(s):
             j = s.find('*/', i + 3)
             if j < 0:
                 raise Skip('comment')
-            m = re.match(r'(\d{5,6})', s[i + 3:j])
+            # the version has 5 digits, or 6 followed by a space: other runs of digits are a syntax error of
+            # MySQL 8.0 (comments.test: /*!000002*/, /*!999992*/), which the translator does not model
+            run = re.match(r'\d*', s[i + 3:j]).group(0)
+            if len(run) > 5 and not (len(run) == 6 and s[i + 3 + 6:i + 3 + 7].isspace()):
+                raise Skip('version comment')
+            m = re.match(r'(\d{5,6})', s[i + 3:j]) if len(run) >= 5 else None
             body = s[i + 3 + (len(m.group(1)) if m else 0):j]
             if m and int(m.group(1)) > SERVER_VERSION:
                 body = ''
@@ -59,11 +65,18 @@ def tokenize(s):
             if j < 0:
                 raise Skip('comment')
             i = j + 2
+        elif c == '"' and session_mode('ANSI_QUOTES'):
+            # ANSI_QUOTES: a double-quoted text is an identifier
+            j = s.find('"', i + 1)
+            if j < 0:
+                raise Skip('unterminated identifier')
+            toks.append(('id', s[i + 1:j]))
+            i = j + 1
         elif c in "'\"" or (ENGINE == 'postgresql' and c in 'eE' and s.startswith("'", i + 1)
                              and not (i > 0 and (s[i - 1].isalnum() or s[i - 1] == '_'))):
             # a backslash is an escape in the MySQL family and in the E'...' strings of PostgreSQL; in the
             # other strings of PostgreSQL, SQLite and Oracle it is a character
-            esc = ENGINE == 'mysql' or c in 'eE'
+            esc = (ENGINE == 'mysql' and not session_mode('NO_BACKSLASH_ESCAPES')) or c in 'eE'
             if c in 'eE':
                 i += 1
             q = s[i]
@@ -127,6 +140,10 @@ def tokenize(s):
 # ----------------------------------------------------------------------------------------
 
 NAMED_WINDOWS = {}
+# the named windows which a SELECT block defines: id of the block -> (the block, the window specifications); the
+# translation of a block without a window function checks their keys too (TiDB planner/core/integration: a window
+# which is not used, ordered by an alias of the select list, is an error)
+BLOCK_WINDOWS = {}
 # the version of the server, for the executable comments /*!NNNNN ... */ of the MySQL family
 SERVER_VERSION = 80400
 # the views of the script: name -> (query, columns); a view is a derived table where it is used
@@ -169,6 +186,7 @@ class P:
         global NAMED_WINDOWS
         NAMED_WINDOWS = {}
         self.named_windows = NAMED_WINDOWS
+        BLOCK_WINDOWS.clear()
 
     def peek(self, k=0):
         return self.t[self.i + k] if self.i + k < len(self.t) else ('eof', '')
@@ -205,10 +223,10 @@ class P:
     def query(self):
         if self.kw('with') and not (self.peek(1)[0] in ('id', 'kw') and self.peek(1)[1].lower() == 'ordinality'):
             self.i += 1
-            if self.kw('recursive'):
-                raise Skip('recursive with')
+            recursive = self.eat_kw('recursive')
             scope = {}
             self.ctes.append(scope)
+            rec = None
             try:
                 while True:
                     name = self.ident()
@@ -220,12 +238,49 @@ class P:
                         self.need_op(')')
                     self.need_kw('as')
                     self.need_op('(')
+                    if recursive:
+                        # its references read the relation of the recursion (TODO 9.2)
+                        scope[name.lower()] = ('rec', name, cols)
                     q = self.query()
                     self.need_op(')')
-                    scope[name.lower()] = (q, cols)
+                    if recursive and refers_to(q, name):
+                        # WITH RECURSIVE t AS (anchor UNION [ALL] step): one recursive CTE per WITH
+                        if rec is not None:
+                            raise Skip('recursive with (several)')
+                        # several anchors and several recursive terms (MariaDB cte_recursive: a1 UNION a2 UNION
+                        # s1 UNION s2), of one quantifier: the anchors come first; at each iteration every
+                        # recursive term reads the rows of the last one, so the step is the union of the terms
+                        terms, allq = union_terms(q)
+                        k = next((i for i, t in enumerate(terms) if refers_to(t, name)), len(terms))
+                        if allq is None or k == 0 or k == len(terms) or \
+                                any(not refers_to(t, name) for t in terms[k:]):
+                            raise Skip('recursive with (form)')
+                        # the MySQL family: a recursive term is a SELECT without DISTINCT, GROUP BY, aggregates, window
+                        # functions or LIMIT (a LIMIT bounds the rows of the whole recursion there, not of a step),
+                        # which reads the relation once, in its FROM and not in a subquery or a derived table
+                        # ([ER_NOT_STANDARD_COMPLIANT_RECURSIVE], TiDB expression/misc)
+                        for t in (terms[k:] if ENGINE == 'mysql' else []):
+                            if not (t[0] == 'select' and not t[1] and not t[5] and
+                                    not any(has_agg(it) or has_wcall(it) for it in t[2]) and
+                                    count_refs(t, name) == 1 and
+                                    any(f[0] == 'rectable' and f[1].lower() == name.lower() for f in from_tables(t[3]))):
+                                raise Skip('recursive with (recursive term)')
+                        def chain(ts):
+                            out = ts[0]
+                            for t in ts[1:]:
+                                out = ('setop', 'union', allq, out, t)
+                            return out
+                        rec = (name, cols, allq, chain(terms[:k]), chain(terms[k:]))
+                    else:
+                        scope[name.lower()] = (q, cols)
                     if not self.eat_op(','):
                         break
-                return self.query_body()
+                if self.kw('search', 'cycle'):
+                    raise Skip('recursive with (search, cycle)')
+                body = self.query_body()
+                if rec is not None:
+                    return ('withrec',) + rec + (body,)
+                return body
             finally:
                 self.ctes.pop()
         return self.query_body()
@@ -393,6 +448,7 @@ class P:
                     sets = out
                 group = ('sets', sets)
         having = self.expr() if self.eat_kw('having') else None
+        defined = []
         # WINDOW w AS (spec), ...: the named windows (one name space per statement)
         if self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() == 'window':
             self.i += 1
@@ -401,11 +457,15 @@ class P:
                 self.need_kw('as')
                 self.need_op('(')
                 self.named_windows[name] = self.window_spec()
+                defined.append(self.named_windows[name])
                 if not self.eat_op(','):
                     break
         if self.kw('window', 'for', 'lock', 'into', 'procedure'):
             raise Skip('clause')
-        return ('select', distinct, items, frm, where, group, having)
+        out = ('select', distinct, items, frm, where, group, having)
+        if defined:
+            BLOCK_WINDOWS[id(out)] = (out, defined)
+        return out
 
     def group_element(self):
         """an element of GROUP BY: an expression, (), ROLLUP (...), CUBE (...), GROUPING SETS (...); its grouping
@@ -742,6 +802,9 @@ class P:
         # MySQL index hints (USE | FORCE | IGNORE {INDEX | KEY} [FOR ...] (names)) do not change the rows
         while ENGINE == 'mysql' and self.kw('use', 'force', 'ignore') and \
                 self.peek(1)[0] in ('id', 'kw') and self.peek(1)[1].lower() in ('index', 'key'):
+            if name.lower() in VIEWS:
+                # an index hint on a view is an error ([ER_KEY_DOES_NOT_EXITS]; TiDB planner/core/casetest/hint)
+                raise Skip('index hint on a view')
             self.i += 2
             if self.eat_kw('for'):
                 while not self.op('(') and self.peek()[0] != 'eof':
@@ -762,7 +825,10 @@ class P:
             self.need_op(')')
         for scope in reversed(self.ctes):
             if name.lower() in scope:
-                q, ccols = scope[name.lower()]
+                entry = scope[name.lower()]
+                if entry[0] == 'rec':
+                    return ('rectable', entry[1], alias, cols)
+                q, ccols = entry
                 return ('derived', q, alias, cols or ccols)
         if name.lower() in VIEWS:
             q, vcols = VIEWS[name.lower()]
@@ -777,7 +843,8 @@ class P:
 
     def e_or(self):
         l = self.e_xor()
-        while self.eat_kw('or') or (ENGINE not in ('postgresql', 'oracle') and self.eat_op('||')):
+        while self.eat_kw('or') or (ENGINE not in ('postgresql', 'oracle') and not session_mode('PIPES_AS_CONCAT')
+                                    and self.eat_op('||')):
             l = ('bin', 'or' if self.t[self.i - 1][1] in ('or', 'OR', 'Or') or self.t[self.i - 1][1].lower() == 'or' else '||', l, self.e_xor())
         return l
 
@@ -815,6 +882,23 @@ class P:
     def ilike_mark(self):
         self.i += 1
         return True
+
+    def between_high(self):
+        """The upper bound of BETWEEN: in the MySQL family it is a predicate (bit_expr BETWEEN bit_expr AND predicate,
+        [sql_yacc.yy], TiDB's PredicateExpr): 5 BETWEEN 0 AND 10 BETWEEN 0 AND 1 is 5 BETWEEN 0 AND (10 BETWEEN 0 AND 1)."""
+        hi = self.e_bitor()
+        while ENGINE == 'mysql':
+            save = self.i
+            neg = bool(self.kw('not') and self.peek(1)[1].lower() == 'between')
+            if neg:
+                self.i += 1
+            if not self.eat_kw('between'):
+                self.i = save
+                break
+            lo = self.e_bitor()
+            self.need_kw('and')
+            hi = ('between', neg, hi, lo, self.between_high(), False)
+        return hi
 
     def e_pred(self):
         l = self.e_bitor()
@@ -866,6 +950,10 @@ class P:
                 esc = None
                 if self.eat_kw('escape'):
                     esc = self.e_bitor()
+                    if ENGINE == 'mysql' and esc[0] in ('subq', 'exists'):
+                        # the escape of the MySQL family is a constant: a subquery is an error ([Incorrect
+                        # arguments to ESCAPE], func_like)
+                        raise Skip('escape subquery')
                 if self.kw('binary'):
                     raise Skip('like binary')
                 l = ('like', neg, l, r, esc, ci)
@@ -876,7 +964,7 @@ class P:
                     self.i += 1
                 lo = self.e_bitor()
                 self.need_kw('and')
-                hi = self.e_bitor()
+                hi = self.between_high()
                 l = ('between', neg, l, lo, hi, sym)
             elif self.kw('regexp', 'rlike') or (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('regexp', 'rlike')):
                 self.i += 1
@@ -930,7 +1018,8 @@ class P:
     def e_bitor(self):
         l = self.e_bitand()
         # in PostgreSQL, [||] is an operator of the same level as [|]: below [+], above the comparisons
-        while self.peek() == ('op', '|') or (ENGINE in ('postgresql', 'oracle') and self.peek() == ('op', '||')):
+        while self.peek() == ('op', '|') or ((ENGINE in ('postgresql', 'oracle') or session_mode('PIPES_AS_CONCAT'))
+                                              and self.peek() == ('op', '||')):
             op = self.peek()[1]
             self.i += 1
             l = ('bin', op, l, self.e_bitand())
@@ -1320,13 +1409,197 @@ class Table:
 
 
 def coq_str(s):
-    if any(ord(c) < 32 or ord(c) > 126 for c in s):
+    # a string of the model is a Coq string of bytes, read as UTF-8 (Collation.utf8_decode): the characters up to
+    # U+02FF, whose weights in the collations and whose case the model has (TODO 9.7), are written as UTF-8; the
+    # control characters and the characters beyond are not translated
+    if any(ord(c) < 32 or 126 < ord(c) < 0xA0 or ord(c) > 0x2FF for c in s):
         raise Skip('non-ascii string')
     return '"' + s.replace('"', '""') + '"'
 
 
 def attr(kind, name):
     return '(Attr_%s %s)' % ({'Z': 'Z', 'S': 'string', 'Q': 'Q'}[kind], coq_str(name))
+
+
+# ---- the session of a script of the MySQL family (TODO 9.1)
+# For each dialect: its default session in MySQL.v, its name, its constructs, the flags of its default sql_mode.
+_MY_MODES = frozenset(['ONLY_FULL_GROUP_BY', 'STRICT_TRANS_TABLES', 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE',
+                       'ERROR_FOR_DIVISION_BY_ZERO', 'NO_ENGINE_SUBSTITUTION'])
+SESSION_DIALECTS = {
+    'MySQL': ('my_default_session', 'MySQL', 'my_supports', _MY_MODES),
+    'Percona': ('my_default_session', 'Percona Server for MySQL', 'my_supports', _MY_MODES),
+    'PolarDB': ('my_default_session', 'PolarDB for MySQL', 'polar_supports', _MY_MODES),
+    'TiDB': ('tidb_default_session', 'TiDB', 'tidb_supports', _MY_MODES | {'NO_AUTO_CREATE_USER'}),
+    'MariaDB': ('maria_default_session', 'MariaDB', 'maria_supports',
+                frozenset(['STRICT_TRANS_TABLES', 'ERROR_FOR_DIVISION_BY_ZERO', 'NO_AUTO_CREATE_USER',
+                           'NO_ENGINE_SUBSTITUTION'])),
+}
+# the flags of sql_mode which the translator follows: those which change only what an INSERT stores or which
+# statement is allowed (the replay makes a table unreliable whenever a value must be converted), those of the model
+# (ONLY_FULL_GROUP_BY, PIPES_AS_CONCAT), those of the lexer (ANSI_QUOTES, NO_BACKSLASH_ESCAPES) and REAL_AS_FLOAT
+MODE_FLAGS = frozenset(['STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES', 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE',
+                        'ERROR_FOR_DIVISION_BY_ZERO', 'NO_ENGINE_SUBSTITUTION', 'NO_AUTO_CREATE_USER',
+                        'NO_DIR_IN_CREATE', 'IGNORE_SPACE', 'ONLY_FULL_GROUP_BY', 'PIPES_AS_CONCAT', 'ANSI_QUOTES',
+                        'NO_BACKSLASH_ESCAPES', 'REAL_AS_FLOAT'])
+MODE_ALIASES = {
+    'TRADITIONAL': ['STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES', 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE',
+                    'ERROR_FOR_DIVISION_BY_ZERO', 'NO_ENGINE_SUBSTITUTION'],
+    'ANSI': ['REAL_AS_FLOAT', 'PIPES_AS_CONCAT', 'ANSI_QUOTES', 'IGNORE_SPACE', 'ONLY_FULL_GROUP_BY'],
+}
+SESSION = {'modes': None, 'div': None, 'gcml': None, 'vars': {}}
+
+
+def session_value(var):
+    """the current value of a setting which the translator follows, as a user variable keeps it"""
+    return (var, SESSION['modes'] if var == 'sql_mode' else SESSION['div'] if var.startswith('div') else SESSION['gcml'])
+
+
+def session_reset():
+    SESSION.update({'modes': None, 'div': None, 'gcml': None, 'vars': {}})
+
+
+def session_modes():
+    if SESSION['modes'] is not None:
+        return SESSION['modes']
+    return SESSION_DIALECTS[DIALECT][3] if DIALECT in SESSION_DIALECTS else frozenset()
+
+
+def session_mode(flag):
+    return LENIENT and DIALECT in SESSION_DIALECTS and flag in session_modes()
+
+
+def parse_modes(v):
+    """the flags of a value of sql_mode ('A,B', '', an identifier), or None when it is not a literal"""
+    v = v.strip()
+    if len(v) >= 2 and v[0] in '\'"' and v[-1] == v[0]:
+        v = v[1:-1]
+    elif not re.fullmatch(r'[A-Za-z_,]*', v):
+        return None
+    flags = set()
+    for f in v.upper().split(','):
+        f = f.strip()
+        if f:
+            flags |= set(MODE_ALIASES.get(f, [f]))
+    return frozenset(flags)
+
+
+def split_assignments(body):
+    """the assignments of a SET, at the commas outside quotes and parentheses"""
+    out, cur, q, depth = [], '', None, 0
+    for c in body:
+        if q:
+            if c == q:
+                q = None
+        elif c in '\'"':
+            q = c
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        elif c == ',' and depth == 0:
+            out.append(cur)
+            cur = ''
+            continue
+        cur += c
+    out.append(cur)
+    return [a.strip() for a in out if a.strip()]
+
+
+def apply_set(stmt):
+    """Follow a SET of the session (sql_mode, div_precision_increment, group_concat_max_len, NAMES, time_zone) of a
+    script of the MySQL family; False when the model cannot follow it (the script then stops)."""
+    if DIALECT not in SESSION_DIALECTS:
+        return False
+    # the delimiter of the statement: ; or another one of mysqltest (|, //, $$)
+    m = re.match(r'^\s*set\s+(.*?)\s*(;|\||//|\$\$)?\s*$', stmt, re.I | re.S)
+    if not m:
+        return False
+    for a in split_assignments(m.group(1)):
+        # @x = @@sql_mode (or another setting which the translator follows): the variable keeps its value; another
+        # assignment of a user variable does not change the session
+        mu = re.match(r'^@(\w+)\s*:?=\s*(.*)$', a, re.S)
+        if mu:
+            src = re.match(r'^@@(session\.)?(sql_mode|div_precision_increment|group_concat_max_len)$', mu.group(2).strip(), re.I)
+            if src:
+                SESSION['vars'][mu.group(1).lower()] = session_value(src.group(2).lower())
+            else:
+                SESSION['vars'].pop(mu.group(1).lower(), None)
+            continue
+        g = re.match(r'^(global\s+|@@global\.|persist\s+|@@persist\.)', a, re.I)
+        a = re.sub(r'^(session\s+|local\s+|global\s+|persist\s+|@@session\.|@@local\.|@@global\.|@@persist\.|@@)', '', a,
+                   flags=re.I)
+        mm = re.match(r'^names\s+(.*)$', a, re.I)
+        if mm:
+            # NAMES: the collation of the literals; only the default one of the engine, which the model has
+            v = re.sub(r'[\'"]', '', mm.group(1)).lower().split()
+            default_coll = {'TiDB': 'utf8mb4_bin'}.get(DIALECT, 'utf8mb4_0900_ai_ci')
+            if not (v == ['utf8mb4'] or v == ['default'] or v == ['utf8mb4', 'collate', default_coll]):
+                return False
+            continue
+        mm = re.match(r'^(\w+)\s*:?=\s*(.*)$', a, re.S)
+        if not mm:
+            return False
+        var, val = mm.group(1).lower(), mm.group(2).strip()
+        if g and var in ('sql_mode', 'div_precision_increment', 'group_concat_max_len', 'time_zone'):
+            continue    # the current session keeps its settings
+        if val.startswith('@') and not val.startswith('@@'):
+            # the value which a user variable kept (SET @x = @@sql_mode)
+            kept = SESSION['vars'].get(val[1:].lower())
+            if kept is None or kept[0] != var:
+                return False
+            SESSION['modes' if var == 'sql_mode' else 'div' if var.startswith('div') else 'gcml'] = kept[1]
+            continue
+        if var == 'sql_mode':
+            if val.lower() == 'default':
+                SESSION['modes'] = None
+            else:
+                flags = parse_modes(val)
+                if flags is None or not flags <= MODE_FLAGS:
+                    return False
+                SESSION['modes'] = flags
+        elif var in ('div_precision_increment', 'group_concat_max_len'):
+            key = 'div' if var.startswith('div') else 'gcml'
+            if val.lower() == 'default':
+                SESSION[key] = None
+            elif re.fullmatch(r'\d+', val) and (key == 'gcml' or int(val) <= 30):
+                SESSION[key] = int(val)
+            else:
+                return False
+        elif var == 'time_zone':
+            # the model is in UTC
+            if re.sub(r'[\'"]', '', val).upper() not in ('+00:00', '+0:00', 'UTC', '-00:00'):
+                return False
+        else:
+            return False
+    return True
+
+
+def add_case(cases, text):
+    """a case, in the dialect of the current session when the script changed it"""
+    d = session_dialect()
+    cases.append('  ' + text if d is None else '  with_dialect %s (%s)' % (d, text))
+
+
+def session_dialect():
+    """the Coq dialect of the current session, None when it is the default one"""
+    if DIALECT not in SESSION_DIALECTS or not LENIENT:
+        return None
+    base, name, sup, defaults = SESSION_DIALECTS[DIALECT]
+    modes = session_modes()
+
+    def flag(f):
+        return None if (f in modes) == (f in defaults) else (f in modes)
+    ofgb, pipes = flag('ONLY_FULL_GROUP_BY'), flag('PIPES_AS_CONCAT')
+    if ofgb is None and pipes is None and SESSION['div'] is None and SESSION['gcml'] is None:
+        return None
+
+    def ob(b):
+        return 'None' if b is None else '(Some %s)' % ('true' if b else 'false')
+    return '(mysql_vs (my_with %s %s %s %s %s) %s %s)' % (
+        base, ob(ofgb), ob(pipes),
+        'None' if SESSION['div'] is None else '(Some %d%%nat)' % SESSION['div'],
+        'None' if SESSION['gcml'] is None else '(Some %d%%N)' % SESSION['gcml'],
+        coq_str(name), sup)
 
 
 # the size of FLOAT: binary32 in the MySQL family, binary64 in SQLite and PostgreSQL (set by slt2coq)
@@ -1829,6 +2102,61 @@ def has_ordered_agg(e):
     return any(has_ordered_agg(x) for x in e[1:])
 
 
+def union_terms(q):
+    """The terms of a chain of UNIONs (left associated) and their quantifier (None: they mix UNION and UNION ALL)."""
+    if q[0] == 'setop' and q[1] == 'union':
+        ls, la = union_terms(q[3])
+        if len(ls) == 1:
+            la = q[2]
+        return ls + [q[4]], (la if la == q[2] else None)
+    return [q], None
+
+
+def refers_to(e, name):
+    """the query reads the relation of the recursive CTE name"""
+    if isinstance(e, list):
+        return any(refers_to(x, name) for x in e)
+    if not isinstance(e, tuple):
+        return False
+    if e[0] == 'rectable' and e[1].lower() == name.lower():
+        return True
+    return any(refers_to(x, name) for x in e[1:])
+
+
+def table_names(e):
+    """the names of the tables which a query reads (those of its views too)"""
+    if isinstance(e, list):
+        return [x for y in e for x in table_names(y)]
+    if not isinstance(e, tuple):
+        return []
+    if e[0] == 'table' and isinstance(e[1], str):
+        return [e[1]] + (table_names(VIEWS[e[1].lower()][0]) if e[1].lower() in VIEWS else [])
+    return [x for y in e[1:] for x in table_names(y)]
+
+
+def count_refs(e, name):
+    """the number of the references to the relation of the recursive CTE name"""
+    if isinstance(e, list):
+        return sum(count_refs(x, name) for x in e)
+    if not isinstance(e, tuple):
+        return 0
+    if e[0] == 'rectable' and e[1].lower() == name.lower():
+        return 1
+    return sum(count_refs(x, name) for x in e[1:])
+
+
+def from_tables(frm):
+    """the items of a FROM clause (an item, or a join of items: ('join', kind, left, right, ...)), not inside the
+    derived tables"""
+    if isinstance(frm, list):
+        return [x for f in frm for x in from_tables(f)]
+    if not isinstance(frm, tuple):
+        return []
+    if frm[0] == 'join':
+        return from_tables(frm[2]) + from_tables(frm[3])
+    return [frm]
+
+
 def has_call(e, name):
     if isinstance(e, list):
         return any(has_call(x, name) for x in e)
@@ -1892,6 +2220,8 @@ class QTr:
     def __init__(self, tables):
         self.tables = tables
         self.used = set()
+        # the recursive CTEs being translated: (name, names of the columns)
+        self.rec_tables = []
 
     def table_of(self, name):
         t = self.tables.get(name.lower())
@@ -1912,6 +2242,21 @@ class QTr:
             ctx.scope.append((alias, t))
             ren = '; '.join('(%s, %s)' % (attr(kd, n), attr(kd, alias + '.' + n)) for n, kd in t.cols)
             return '(from_as (table %s) [%s])' % (coq_str(t.name), ren)
+        if k == 'rectable':
+            # the relation of a recursive CTE: its columns are c0, c1, ..., named as the CTE
+            name, alias, cols = f[1], f[2], f[3]
+            known = [r for r in self.rec_tables if r[0] == name.lower()]
+            if not known:
+                raise Skip('recursive with (reference)')
+            names = cols if cols is not None else known[-1][1]
+            if len(names) != len(known[-1][1]):
+                raise Skip('recursive with (arity)')
+            if any(a.lower() == alias.lower() for a, _ in ctx.scope):
+                raise Skip('duplicate alias')
+            t = Table(alias, [(nm, 'Z') for nm in names])
+            ctx.scope.append((alias, t))
+            ren = '; '.join('((Attr_Z "c%d"), %s)' % (i, attr('Z', alias + '.' + nm)) for i, nm in enumerate(names))
+            return '(from_as (table %s) [%s])' % (coq_str(name), ren)
         if k == 'derived':
             q, alias, cols = f[1], f[2], f[3]
             if any(a.lower() == alias.lower() for a, _ in ctx.scope):
@@ -2015,6 +2360,24 @@ class QTr:
                 return self.select(inner, order, limit, parent)
             cq, n, _, names = self.query(inner, parent)
             return self.apply_order(cq, n, order, limit) + (names,)
+        if k == 'withrec':
+            # WITH RECURSIVE name (cols) AS (anchor UNION [ALL] step) body: with_rec of SqlFull (TODO 9.2); the
+            # relation of the recursion has the columns c0, c1, ... of the anchor
+            _, name, cols, allq, anchor, step, body = q
+            aq, n, _, anames = self.query(anchor, parent)
+            names = cols if cols is not None else anames
+            if len(names) != n or any(x is None for x in names):
+                raise Skip('recursive with (columns)')
+            self.rec_tables.append((name.lower(), names))
+            try:
+                sq_, n2, _, _ = self.query(step, parent)
+                if n2 != n:
+                    raise Skip('recursive with (arity)')
+                bq, nb, ordered, bnames = self.query(body, parent)
+            finally:
+                self.rec_tables.pop()
+            return ('(with_rec %s %s %s %s %s)' % ('Set_All' if allq else 'Set_Distinct', coq_str(name), aq, sq_, bq),
+                    nb, ordered, bnames)
         if k == 'values':
             rows = q[1]
             if any(has_agg(e) or has_wcall(e) for r in rows for e in r):
@@ -2118,6 +2481,8 @@ class QTr:
                 okeys.append((('item', names[e[2].lower()]), d))
             elif e[0] == 'num' and '.' not in e[1] and 1 <= int(e[1]) <= len(exprs):
                 okeys.append((('item', int(e[1]) - 1), d))
+            elif e[0] == 'num' and re.match(r'^\d+$', e[1]):
+                raise Skip('position beyond the select list')
             else:
                 okeys.append((lift(e), d))
         if limit is not None and not order:
@@ -2266,6 +2631,14 @@ class QTr:
                 exprs.append((it[1], it[2]))
         if any(has_wcall(e) for e, _ in exprs) or any(has_wcall(e) for e, _ in (order or [])):
             return self.window_select(s, exprs, order, limit, parent, tr)
+        # the keys of the named windows which no function uses are resolved all the same: the columns of the tables
+        # (not the aliases of the select list)
+        for spec in (BLOCK_WINDOWS.get(id(s), (None, []))[1]):
+            for x in list(spec[2] or []) + [o[0] for o in (spec[3] or [])]:
+                try:
+                    tr.ex(x)
+                except Skip:
+                    raise Skip('window key')
         names = {}
         outnames = []
         for i, (e, a) in enumerate(exprs):
@@ -2288,6 +2661,11 @@ class QTr:
                     return exprs[names[e[2].lower()]][0]
             if e[0] == 'num' and '.' not in e[1] and 1 <= int(e[1]) <= n:
                 return exprs[int(e[1]) - 1][0]
+            if e[0] == 'num' and re.match(r'^\d+$', e[1]):
+                # a position beyond the select list is an error of every engine ([Unknown column '2' in 'order
+                # clause'], [ORDER BY position 2 is not in select list]): the translator resolves the positions,
+                # and does not turn it into an ordering by a constant
+                raise Skip('position beyond the select list')
             return e
 
         def subst_deep(e, alias_first):
@@ -2389,7 +2767,7 @@ class QTr:
 # Script replay
 # ----------------------------------------------------------------------------------------
 
-STMT_START = re.compile(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|desc|describe|truncate|replace|with|begin|commit|rollback|use|analyze|call|prepare|execute|deallocate|source|connect|connection|disconnect|sleep|--|#|let|eval|echo|if|while|}|\{|start|flush|lock|unlock|grant|revoke|rename|load|optimize|checksum|kill|reset|purge|handler|do|\()', re.I)
+STMT_START = re.compile(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|desc|describe|truncate|replace|with|begin|commit|rollback|use|analyze|call|prepare|execute|deallocate|source|connect|connection|disconnect|sleep|--|#|let|eval|echo|if|while|}|\{|start|flush|lock|unlock|grant|revoke|rename|load|optimize|checksum|kill|reset|purge|handler|do|\(|;\s*$)', re.I)
 
 
 def split_blocks(lines):
@@ -2476,6 +2854,12 @@ def looks_like_statement(l):
                 or re.match(r'^(prepare\s+\w+\s+from|execute\s+\w+(\s+using\b|\s*;)|deallocate\s+prepare)', l, re.I)
                 # TiDB's non-transactional DML, and a VALUES statement (session: VALUES ( ('foo'), ROW('bar') );)
                 or re.match(r'^(batch\s+(on\s+\w+\s+)?limit\s+\d+|values\s*(\(|row\b))', l, re.I)
+                # RENAME TABLE (lowercase_table: after a result of one column)
+                or re.match(r'^rename\s+tables?\s+\w', l, re.I)
+                # FLUSH TABLES (partition_charset)
+                or re.match(r'^flush\s+(tables|privileges|status|logs)\b', l, re.I)
+                # an empty query (comments: ';' then ERROR 42000: Query was empty)
+                or re.match(r'^;\s*$', l)
                 # the connection commands of mysqltest, as the result file echoes them
                 or re.match(r'^(connect\s+\w+,.*;|connection\s+\w+;|disconnect\s+\w+;)$', l, re.I))
 
@@ -2601,6 +2985,18 @@ def parse_create(toks):
             continue
         p.need_op(')')
         break
+    # the options of the table: a character set or a collation other than the default of the session (utf8mb4, its
+    # default collation) changes the comparisons, the lengths and the bytes of the strings (type_varchar: a table
+    # in latin1 pads its strings); the model has the collation of the session only (TODO 9.1b)
+    if ENGINE == 'mysql':
+        rest = [t[1].lower() for t in p.t[p.i:] if t[0] in ('id', 'kw', 'str')]
+        for k, w in enumerate(rest):
+            if w in ('charset', 'character', 'collate'):
+                vals = [x for x in rest[k + 1:k + 4] if x not in ('set', '=')]
+                v = vals[0] if vals else ''
+                default_coll = 'utf8mb4_bin' if DIALECT == 'TiDB' else 'utf8mb4_0900_ai_ci'
+                if v not in ('utf8mb4', 'default', default_coll):
+                    raise Skip('table charset ' + v)
     return name, cols, limits
 
 
@@ -2749,6 +3145,19 @@ def parse_insert(toks, tables):
     return t, out
 
 
+def header_continued(stmt, res):
+    """The header of a result is the text of the select list: the column of a statement over several lines (a
+    comment --2, then +1 on the next line; MySQL comments, date_formats) has a header over several lines too, which
+    repeats the lines of the statement after its first one; they are not rows."""
+    sl = [l.rstrip() for l in stmt.rstrip().rstrip(';').rstrip().split('\n')]
+    if len(sl) < 2 or not res:
+        return res
+    k = 1
+    while k < len(res) and k < len(sl) and res[k].rstrip() == sl[k] and sl[k] != '':
+        k += 1
+    return res[:1] + res[k:]
+
+
 def parse_results(res_lines, ncols):
     """Rows of a result in the tab format: the first line is the header."""
     lines = [l for l in res_lines]
@@ -2859,6 +3268,19 @@ def test_items(test_src, blocks):
 
 
 LENIENT = False
+# the identifier of a case (TODO 9.20): the file, then a hash of its statement (8 hexadecimal digits of the SHA-1
+# of the statement with its spaces collapsed), then .2, .3, ... for its next occurrences in the file; the position
+# of the statement in the script would move whenever the translator reads another directive. --position-ids gives
+# the positions.
+POSITION_IDS = False
+
+
+def case_id(base, bi, stmt, seen):
+    if POSITION_IDS:
+        return '%s:%d' % (base, bi)
+    h = hashlib.sha1(' '.join(stmt.split()).encode('utf-8')).hexdigest()[:8]
+    seen[h] = seen.get(h, 0) + 1
+    return '%s:%s' % (base, h) if seen[h] == 1 else '%s:%s.%d' % (base, h, seen[h])
 USER_FUNCS = set()
 # the items of the script whose result mysqltest sorted (--sorted_result): compared as unordered
 SORTED_ITEMS = set()
@@ -2871,6 +3293,11 @@ BASE_NAMES = {}
 def process(path, out, stats):
     USER_FUNCS.clear()
     SORTED_ITEMS.clear()
+    session_reset()
+    global REAL_BITS
+    if ENGINE == 'mysql':
+        REAL_BITS = 64    # REAL_AS_FLOAT of an earlier script is forgotten
+    real_bits = REAL_BITS
     VIEWS.clear()
     import os
     if os.path.getsize(path) > 3000000:
@@ -2937,6 +3364,9 @@ def process(path, out, stats):
         return
     in_txn = False
     other_conn = False
+    ids_seen = {}
+    # the current database of the script (USE)
+    current_db = ['test']
     for bi, (stmt, res, expect_err) in enumerate(items):
         s = stmt.strip()
         if len(s) > 20000:
@@ -2951,12 +3381,32 @@ def process(path, out, stats):
         if other_conn:
             stats['skip']['another connection'] = stats['skip'].get('another connection', 0) + 1
             continue
-        if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?(sql_mode|names|'
-                                r'character_set_\w+|collation_\w+|time_zone|div_precision_increment|'
-                                r'tidb_enable_new_collation\w*|default_collation\w*|group_concat_max_len|'
-                                r'tidb_enable_noop_functions|tidb_enable_cascades_planner)\b|^\s*set\s+(character\s+set|charset)\b', s, re.I):
+        # SET @x = @@sql_mode, SELECT @@sql_mode INTO @x: the user variable keeps the value (SET sql_mode = @x
+        # restores it)
+        mv = re.match(r'^\s*select\s+@@(session\.)?(sql_mode|div_precision_increment|group_concat_max_len)\s+into\s+@(\w+)\s*;?\s*$',
+                      s, re.I)
+        if LENIENT and mv:
+            SESSION['vars'][mv.group(3).lower()] = session_value(mv.group(2).lower())
+            continue
+        # a SET which assigns a setting of the session, in any of its assignments (SET @old = @@sql_mode,
+        # @@sql_mode = '...': the second one changes the mode)
+        sess_set = LENIENT and re.match(r'^\s*set\b', s, re.I) and (
+            re.search(r'(?:^\s*set\s+|,\s*)(?:session\s+|global\s+|local\s+|persist\s+|@@session\.|@@global\.|@@local\.|'
+                      r'@@persist\.|@@)?(?:sql_mode|names|character_set_\w+|collation_\w+|time_zone|div_precision_increment|'
+                      r'tidb_enable_new_collation\w*|default_collation\w*|group_concat_max_len|'
+                      r'tidb_enable_noop_functions|tidb_enable_cascades_planner|cte_max_recursion_depth|max_recursive_iterations)\b', s, re.I) or
+            re.match(r'^\s*set\s+(character\s+set|charset)\b', s, re.I))
+        if LENIENT and not sess_set and re.match(r'^\s*set\s+@\w+\s*:?=', s, re.I) and \
+                re.search(r'@@(session\.)?(sql_mode|div_precision_increment|group_concat_max_len)\b', s, re.I):
+            apply_set(s)
+            continue
+        if sess_set:
             # (--lenient) the semantics of the rest of the script depends on the new sql_mode, collation, character
-            # set, time zone or precision: stop
+            # set, time zone or precision: followed when the model has it (TODO 9.1), otherwise stop
+            if apply_set(s):
+                REAL_BITS = 32 if session_mode('REAL_AS_FLOAT') else real_bits
+                stats['followed session changes'] = stats.get('followed session changes', 0) + 1
+                continue
             stats['skip']['after a change of the session'] = stats['skip'].get('after a change of the session', 0) + len(items) - bi
             break
         if LENIENT:
@@ -2991,8 +3441,13 @@ def process(path, out, stats):
                 continue
             if in_txn or unsafe.search(s) or re.match(r'^\s*(create\s+(or\s+replace\s+)?(function|procedure|'
                                                       r'aggregate|operator|type|domain|cast|rule|trigger)|do\b)', s, re.I):
+                # the tables which it mentions, and those of the views which it mentions (view: PREPARE ... 'UPDATE
+                # v1 SET a = ?' changes the table of v1)
+                named = set(n for n in list(tables) + list(VIEWS) if re.search(r'\b' + re.escape(n) + r'\b', s, re.I))
+                for v in [n for n in named if n in VIEWS]:
+                    named |= set(x.lower() for x in table_names(VIEWS[v][0]))
                 for t in tables.values():
-                    if re.search(r'\b' + re.escape(t.name) + r'\b', s, re.I):
+                    if t.name.lower() in named:
                         t.ok = False
                 if re.match(r'^\s*create\s+(or\s+replace\s+)?(function|aggregate|operator|cast)', s, re.I):
                     m = re.search(r'(function|aggregate)\s+([\w.]+)', s, re.I)
@@ -3002,6 +3457,19 @@ def process(path, out, stats):
                     in_txn = False
                 stats['skip']['transaction or routine'] = stats['skip'].get('transaction or routine', 0) + 1
                 continue
+        # USE db: the tables of the script before it are those of the database which it leaves (unreliable when it
+        # changes), and DATABASE () is the new one (func_system: USE of a database of 64 characters)
+        mu = re.match(r'^\s*use\s+`?(\w+)`?\s*;?\s*$', s, re.I)
+        if mu:
+            if mu.group(1).lower() != current_db[0]:
+                current_db[0] = mu.group(1).lower()
+                for t in tables.values():
+                    t.ok = False
+            continue
+        if current_db[0] != 'test' and re.match(r'^\s*select\b', s, re.I) and \
+                re.search(r'\b(database|schema)\s*\(', s, re.I):
+            stats['skip']['session state'] = stats['skip'].get('session state', 0) + 1
+            continue
         # LAST_INSERT_ID () is the last key which the session generated, which the translator does not follow
         if re.match(r'^\s*select\b', s, re.I) and re.search(r'\blast_insert_id\s*\(', s, re.I):
             stats['skip']['session state'] = stats['skip'].get('session state', 0) + 1
@@ -3173,7 +3641,7 @@ def process(path, out, stats):
                 global EXPECT_ERROR
                 EXPECT_ERROR = failed
                 cq, ncols, ordered, _ = qt.query(q)
-                rows = parse_results(res, ncols)
+                rows = parse_results(header_continued(s, res), ncols)
                 # the engine rejects the query (the suites of the MySQL family, --lenient): the model must too
                 error_case = rows is None and failed and LENIENT and ENGINE == 'mysql'
                 if rows is None and not error_case:
@@ -3190,21 +3658,21 @@ def process(path, out, stats):
                 except Skip:
                     sql_txt = '""'
                 if error_case:
-                    cases.append('  mk_case_error %s [%s] %s %s' % (
-                        coq_str('%s:%d' % (base, bi)), '; '.join(tabs), cq, sql_txt))
+                    add_case(cases, 'mk_case_error %s [%s] %s %s' % (
+                        coq_str(case_id(base, bi, s, ids_seen)), '; '.join(tabs), cq, sql_txt))
                     stats['translated'] += 1
                     stats['error_cases'] = stats.get('error_cases', 0) + 1
                     continue
                 exp = '[%s]' % '; '.join('[%s]' % '; '.join(coq_str(c) for c in r) for r in rows)
                 if qt.limit_any is not None:
                     # any [n] rows of the result
-                    cases.append('  mk_case_limit %s %d [%s] %s %s %s' % (
-                        coq_str('%s:%d' % (base, bi)), qt.limit_any, '; '.join(tabs), cq, exp, sql_txt))
+                    add_case(cases, 'mk_case_limit %s %d [%s] %s %s %s' % (
+                        coq_str(case_id(base, bi, s, ids_seen)), qt.limit_any, '; '.join(tabs), cq, exp, sql_txt))
                 else:
                     if bi in SORTED_ITEMS:
                         ordered = False
-                    cases.append('  mk_case %s %s [%s] %s %s %s' % (
-                        coq_str('%s:%d' % (base, bi)), 'true' if ordered else 'false', '; '.join(tabs), cq, exp, sql_txt))
+                    add_case(cases, 'mk_case %s %s [%s] %s %s %s' % (
+                        coq_str(case_id(base, bi, s, ids_seen)), 'true' if ordered else 'false', '; '.join(tabs), cq, exp, sql_txt))
                 stats['translated'] += 1
         except Skip as e:
             if head == 'select':
@@ -3246,6 +3714,12 @@ def main():
             LENIENT = True
             args = args[1:]
             continue
+        elif args[0] == '--position-ids':
+            # the identifiers of the cases are the positions of their statements in the script (the unit tests)
+            global POSITION_IDS
+            POSITION_IDS = True
+            args = args[1:]
+            continue
         args = args[2:]
     import os
     global ENGINE, DIALECT
@@ -3273,7 +3747,7 @@ def main():
             body += 'Eval vm_compute in (diagnose %s cases_%s).\n' % (eval_dialect or dialect, name)
             if outdir:
                 os.makedirs(outdir, exist_ok=True)
-                with open(os.path.join(outdir, 'Spec_%s.v' % name), 'w') as f:
+                with open(os.path.join(outdir, 'Spec_%s.v' % name), 'w', encoding='utf-8') as f:
                     f.write(HEADER + body)
             else:
                 print(body)
