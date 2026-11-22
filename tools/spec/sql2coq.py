@@ -2966,10 +2966,12 @@ def process(path, out, stats):
                 in_txn = True
             ends = re.match(r'^\s*(commit|rollback|end|abort)\b', s, re.I)
             # statements which change tables and which the translator does not follow (TODO 8.28): EXPLAIN ANALYZE
-            # of a change runs it; TiDB's non-transactional BATCH ... DML; a temporary table shadows the table of
-            # its name; the tables they mention are unreliable
+            # of a change runs it; TiDB's non-transactional BATCH ... DML; a temporary table shadows a table of its
+            # name (a temporary table of a new name is created as the others); the tables they mention are
+            # unreliable
+            tmp = re.match(r'^\s*create\s+(global\s+|local\s+)?temp(orary)?\s+table\s+(if\s+not\s+exists\s+)?(\w+)', s, re.I)
             if re.match(r'^\s*(explain\s+analyze\s+(insert|update|delete|replace)|batch\b)', s, re.I) or \
-               re.match(r'^\s*create\s+(global\s+|local\s+)?temporary\s+table\b', s, re.I):
+               tmp and tmp.group(4).lower() in tables:
                 for t in tables.values():
                     if re.search(r'\b' + re.escape(t.name) + r'\b', s, re.I):
                         t.ok = False

@@ -856,6 +856,10 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
 - **8.28 Replay of the scripts** (iteration 14): the failing cases of TiDB which come from statements the
   translator does not follow (`EXPLAIN ANALYZE` of an `INSERT`, cascading foreign keys, temporary tables shadowing a
   table, `LAST_INSERT_ID ()`, batch DML): the tables they change must be marked unreliable.
+  **Status: DONE** (after PR 74). `EXPLAIN ANALYZE` of a change, TiDB's `BATCH ... DML`, a temporary table, and an
+  `INSERT IGNORE` into a table with a foreign key (which drops the rows without a parent) make the tables which
+  they mention unreliable; the cascades of `UPDATE` and `DELETE` were followed already (`parents`); a query of
+  `LAST_INSERT_ID ()` is not translated (session state). Tests in `tools/spec/test_sql2coq.py`.
 - **8.29 The hypotheses of the relation between `Sql.v` and `SqlFull.v` could not be met** (iteration 16): two
   hypotheses of `sql_full_agree`, `sql_full_agree2`, `sql_full_agree3`, `sql_full_alg`, `sql_full_alg3` and
   `positional_agree` were false for the instance of the project, so that these theorems said nothing about it.
@@ -967,6 +971,12 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
     there is no year 0).
   Tests: `Test_Grouping.v`, `Test_Date.v`, `Test_Decimal.v`, `Test_OrderedSet.v`, `Test_Range.v`, `Test_Dialects.v`,
   and 4 new tests in `tools/spec/test_sql2coq.py`.
+  The runs which checked these fixes found more defects of the harness, fixed too: mysqltest's `--sorted_result`
+  was ignored, so a result which mysqltest had sorted was compared in the order of an `ORDER BY` (TiDB
+  `executor/jointest/join` recorded `ORDER BY a DESC` as `1, 2, 2`: not an engine bug); `PREPARE`, `EXECUTE`,
+  `BATCH` and a `VALUES` statement after a result were read as its rows; TiDB's `FULL JOIN ... USING` (not
+  supported by TiDB, and written as an `ON` by `SqlFull.v`) and its cascades planner are not translated; a
+  timestamp before the common era is read by the model and by the translator.
   Not done, with the reason:
   - MariaDB's incremental aggregates of a moving frame (`win_avg:3`, `win_sum:3`, the last digit of a double): the
     aggregate of a frame is a function of the values of the frame (`interp_agg` of the record `dialect`); MariaDB's

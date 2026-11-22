@@ -372,6 +372,11 @@ def unfollowed_changes():
         "insert into p values (1);\ninsert ignore into c values (1), (2);\nselect * from c;\ni\n1\n"
         "create table u (a int);\ninsert into u values (1);\nselect * from u;\na\n1\n")})['a']
     assert 'select * from t;' not in out and 'select * from c;' not in out and 'select * from u;' in out, out
+    # a temporary table of a new name is a table; one which shadows a table makes it unreliable
+    out = translate('PostgreSQL', {'a': (
+        "create temp table n (a int);\ninsert into n values (1);\nselect a from n;\na\n1\n"
+        "create table s (a int);\ninsert into s values (1);\ncreate temporary table s (a int);\nselect a from s;\na\n")})['a']
+    assert 'select a from n;' in out and 'select a from s;' not in out, out
 
 
 def main():
