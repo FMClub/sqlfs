@@ -6,15 +6,17 @@ for the suites, the method and the explanation of each failure).
 | Suite | Dialect | Translated | Failing | Not run (time or memory limit) | Pass |
 |---|---|---|---|---|---|
 | OceanBase test suite (run 21) | `OceanBaseMySQL` | 775 | 0 | 1 | 774 |
-| PostgreSQL regression tests (run 11) | `PostgreSQL` | 514 | 53 | 0 | 461 |
-| MariaDB mysql-test, 44 files (run 5) | `MariaDB` | 428 | 16 | 23 | 389 |
+| PostgreSQL regression tests (run 14) | `PostgreSQL` | 517 | 15 | 1 | 501 |
+| MariaDB mysql-test, 44 files (run 7) | `MariaDB` | 402 | 5 | 37 | 360 |
 | TiDB integrationtest (run 4) | `TiDB` | 2102 | 50 | 13 | 2039 |
-| MySQL mysql-test (run 4) | `MySQL` | 1314 | 124 | 0 | 1190 |
+| MySQL mysql-test (run 5) | `MySQL` | 1314 | 89 | 0 | 1225 |
 
-"Not run" counts the cases of the files whose compilation stopped at the time or memory limit of the runner; "Pass" is the rest of the translated cases minus the failing ones.
+"Not run" counts the cases whose compilation stopped at the time or memory limit of the runner (a file over the limit is compiled again case by case); "Pass" is the rest of the translated cases minus the failing ones.
 
 Since run 4 of TiDB and MySQL and run 5 of MariaDB, the translated cases include the queries which the engine
-rejects (TiDB 53, MySQL 103, MariaDB 32): such a case passes when the dialect does not accept the query or its
-evaluation fails. The runs are those of the commit `187fe5d` (iteration 15); the acceptance rules of iterations 16
-and 17 make 9 more cases of MariaDB pass (checked on their files, not counted here).
-
+rejects: such a case passes when the dialect does not accept the query or its evaluation fails. The runs of
+OceanBase and TiDB are those of the commit `187fe5d` (iteration 15); MySQL run 5 is of `afef183` (iteration 18);
+PostgreSQL run 14 and MariaDB run 7 are of `0e36d0b` with the fix of the runner of TODO 8.36 (iteration 25).
+MariaDB translates 26 cases fewer than in run 5: 24 put a window function in the argument of an aggregate, which
+`SqlFull.v` cannot write (iteration 17; run 5 translated them wrongly), and 2 run under a connection other than
+the default one (iteration 23).

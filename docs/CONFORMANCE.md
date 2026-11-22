@@ -98,6 +98,17 @@ test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 
+Run 14 (iteration 25, the commit `0e36d0b` with the fix of the runner of TODO 8.36): **517** translated, **15** fail,
+1 not run (`numeric:754`, over the limit of a case: `numeric.sql` is now compiled case by case when it goes over the
+limit of its file). The 37 cases which pass since run 12 (53 failing; the 38th, `numeric:754`, is the one not run), none newly failing: `to_char` of numbers (TODO 8.12), the
+padding of the psql tables (TODO 8.33), integers in bases 16, 8 and 2, `numeric` and doubles with an exponent,
+the literals of `VALUES`, `%` and `log` on the special `numeric` values (TODO 8.32). The 15 left: the `-0` of
+`power ('-inf'::numeric, -3)` and the products of special values of `numeric:563` (the special `numeric` values
+are doubles), `exp (1234.5678)` and `10::numeric ^ 131071` (the precision and the size of very long decimals,
+TODO 8.15), `rank ('3') WITHIN GROUP` of a text argument, `concat` of a date (`DateStyle`), the spaces of two
+`json` texts, `GROUPING` in a subquery, `power (float8 '-inf', float8 '-2') = '0'` (NULL given), four window
+queries.
+
 Run 11 (iteration 12): the infinite dates and timestamps and the special inputs (`today`, ...): **53** fail (the 16
 cases of `date` and `timestamp` pass; the other files are those of run 10).
 

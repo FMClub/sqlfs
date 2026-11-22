@@ -906,5 +906,12 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   **Status: DONE** (iteration 25). `my_json_table` takes the rows from `my_seek` (iteration 19): the values which the
   path designates, in the order of the document; a test in `Test_TableFuns.v`. `pyflakes` on the tools: one unused
   variable removed. `docs/DIALECT_TABLES.md` regenerated for the features of iteration 23; the conformance summary
-  updated with the runs of PostgreSQL, MariaDB and MySQL of iterations 18 to 24.
+  updated with the runs of PostgreSQL, MariaDB and MySQL of iterations 18 to 25.
+- **8.36 The padding of the psql tables, again** (iteration 25, found by the PostgreSQL run of the commit `5115400`:
+  106 failing cases instead of 53): iteration 21 kept the leading spaces of a column which no padding shows to be
+  aligned on the left, and let the comparison of a number ignore them; but the runner gives a double of
+  PostgreSQL as the text of its client (`client_value`), which the comparison took for a string, so that
+  `    NaN` no longer matched `NaN` (53 cases of `float8`, `numeric`, `aggregates`).
+  **Status: DONE** (iteration 25). The text of a double of PostgreSQL is tagged as a number (`Value_C` with the
+  pseudo-collation `float8out`, `SpecRunner.v`); a test in `Test_Float.v`.
 

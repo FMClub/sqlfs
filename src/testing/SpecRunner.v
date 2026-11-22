@@ -61,6 +61,8 @@ Definition cell_ok (v : NullValues.value) (s0 : string) : bool :=
   let s := match v with
            | NullValues.Value_Z _ | NullValues.Value_I _ | NullValues.Value_Q _ | NullValues.Value_D _
            | NullValues.Value_F _ => NullValues.string_ltrim s0
+           (* a double of PostgreSQL as its client prints it ([client_value]) *)
+           | NullValues.Value_C (Some (_, "float8out")) => NullValues.string_ltrim s0
            | _ => s0
            end in
   if String.eqb s "NULL" then NullValues.is_null v
@@ -112,13 +114,16 @@ Fixpoint match_ordered (rs : list (list NullValues.value)) (es : list (list stri
 Definition out_attr (i : nat) : attribute TNull := Attr_Z ("c" ++ NullValues.string_of_Z (Z.of_nat i)).
 
 (** The value as the client of the dialect shows it: a double of PostgreSQL is printed by [float8out] ([pg_text]:
-    [NaN], [Infinity], the exponents [e+20]), the others as the MySQL family prints them ([text_of]). *)
+    [NaN], [Infinity], the exponents [e+20]), the others as the MySQL family prints them ([text_of]). The text of
+    a double of PostgreSQL is tagged with the pseudo-collation ["float8out"], so that [cell_ok] still knows it
+    is a number (and ignores the leading spaces of its expected text). *)
 Definition client_value (d : vsem) (v : NullValues.value) : NullValues.value :=
   match v with
   | NullValues.Value_F (Some (x, k)) =>
     if String.eqb (vs_name d) "PostgreSQL"
-    then NullValues.Value_string
-           (Some (IEEE.pg_text (NullValues.fmt_of (Nat.odd k)) (IEEE.special_of_tag (Nat.div (Nat.modulo k 10) 2)) x))
+    then NullValues.Value_C
+           (Some (IEEE.pg_text (NullValues.fmt_of (Nat.odd k)) (IEEE.special_of_tag (Nat.div (Nat.modulo k 10) 2)) x,
+                  "float8out"))
     else v
   | _ => v
   end.

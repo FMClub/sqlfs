@@ -125,3 +125,15 @@ Example my_sum_float32 :
   map (fun t => show_value (dot (TD MySQL) t (out_attr 0)))
       (run MySQL (select_where [as_ (agg "sum" (col c0)) c0] [from_as floats [(c0, c0)]] c_true)) = ["147.56999969482422"].
 Proof. check. Qed.
+
+(** The comparison of the conformance runner ([cell_ok] of [SpecRunner.v], iteration 25): the leading spaces of
+    the text of a number are the padding of a psql column, also for a double of PostgreSQL, which the runner
+    prints as its client does ([client_value]); the leading spaces of a text are data. *)
+Example runner_padding :
+  (cell_ok (client_value PostgreSQL (NullValues.VF false (IEEE.F_NaN, NullValues.Qc_of_Z 0))) "    NaN",
+   cell_ok (client_value PostgreSQL (NullValues.VF false (IEEE.F_Finite, NullValues.Qc_of_Z 2))) "  2",
+   cell_ok (NullValues.Value_Z (Some 37%Z)) "   37",
+   cell_ok (NullValues.Value_string (Some " 485")) " 485",
+   cell_ok (NullValues.Value_string (Some "485")) " 485")
+  = (true, true, true, true, false).
+Proof. check. Qed.
