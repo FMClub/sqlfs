@@ -148,8 +148,8 @@ instances of the record
 source code of OceanBase, and from results recorded by real engines (`docs/DIALECTS.md`,
 `docs/CONFORMANCE.md`). At the time of this issue: 545 OceanBase queries (7 known deviations), and 9600
 `random/expr` queries of sqllogictest per dialect with no failure. Now (`docs/CONFORMANCE_SUMMARY.md`): the test
-suites of OceanBase (775 queries, none failing), PostgreSQL (517, 15 failing), MariaDB (402, 5), TiDB (2102, 50)
-and MySQL (1314, 89); the failures left are listed and explained in `docs/CONFORMANCE.md` and TODO 8.9.
+suites of OceanBase (773 queries, none failing), PostgreSQL (513, 1 failing), MariaDB (394, 2), TiDB (2061, 17)
+and MySQL (1308, 81); the failures left are listed and explained in `docs/CONFORMANCE.md` and TODO 8.9.
 
 Since then: the decimal scale (TODO 1.2.1), floating-point numbers and integer ranges (1.2.2, 1.2.3), dates and
 times, JSON, regular expressions (1.5, 1.6, 2.4), `ORDER BY` inside aggregates (2.6, `E_AggX`) and the functional
