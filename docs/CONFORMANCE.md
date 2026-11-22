@@ -207,6 +207,13 @@ modelled since this run); 15 views changed through `UPDATE`/`INSERT` (the transl
 unreliable: 2 remain); 9 `CURRENT_ROLE ()` and other session state; `INTERVAL ()` with a NULL bound, `varbinary`
 (binary strings), locks, temporary tables, time zones: not modelled or server state.
 
+Run 9 (PR 76): **1591** translated, **59** fail. The scripts go on after the changes of `sql_mode`,
+`div_precision_increment`, `group_concat_max_len`, `NAMES` and `time_zone` which the model has (TODO 9.1), which
+shows new cases; the fixes of TODO 9.9 (`LPAD` with an empty padding, `INTERVAL ()`, `EXTRACT` of the units
+`..._MICROSECOND`, `GREATEST` / `LEAST` of MySQL 8.0, `ADDTIME`, `CAST` of a `TIME`, two-digit years) and of
+the harness (9.11). Left: `STR_TO_DATE` formats (9.9b), `GREATEST` in a numeric context, session state, views
+made invalid by a change of their table, the platform-dependent `derived_ci` / `derived_cs`.
+
 Run 7 (the commit `b6a731a`): **1308** translated, **81** fail (89 in run 5); `LAST_INSERT_ID ()` is not translated
 (session state), and three results which mysqltest had sorted (`--sorted_result`) are compared as unordered.
 
@@ -223,6 +230,11 @@ literals with a time zone offset (`TIMESTAMP '2024-01-01 14:00:00+01:00'`, MySQL
 non-JSON arguments, where TiDB reports an error that the model gives as a value; integer overflow errors (`ABS (-2^63)`):
 the integers of the MySQL family are unbounded in the model; results which hold a statement of the script (scripts
 without `;` echo): harness.
+
+Run 8 (PR 76): **2739** translated, **86** fail, 14 not run. The changes of the session are followed (TODO 9.1)
+and `WITH RECURSIVE` is translated (9.2: `cte`, `executor/cte` pass): the new failing cases come from the parts
+of the files which the translator now reads, none of them translated before (TODO 9.25: the `TIMESTAMP` literals of
+TiDB, partial dates of `STR_TO_DATE`, negative times, ...).
 
 Run 6 (the commit `b6a731a`): **2061** translated, **17** fail (50 in run 4), 14 not run (a file over the memory limit,
 and one case of `executor/jointest/join`, which went over the time limit of its file and is now compiled case by
