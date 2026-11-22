@@ -678,7 +678,6 @@ class P:
             cols, paths = [], []
             while True:
                 cname = self.ident()
-                depth = 0
                 # the type, up to PATH
                 while not (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('path', 'for')):
                     if self.peek()[0] == 'eof':

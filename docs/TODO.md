@@ -884,7 +884,11 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   **Status: PARTIAL** (iteration 21). Done: the bases and the underscores of the integers (`pg_int_of_string`,
   `Values.v`), the exponent of a `numeric` and its scale (`numeric_of_string`), the literals of `VALUES` (translator,
   `values_types`), `%` on NaN and the infinities (`special_mod`). Tests: `Test_Integer.v`, `Test_Decimal.v`,
-  `tools/spec/test_sql2coq.py`. Open: `power ('-inf'::numeric, -3)`.
+  `tools/spec/test_sql2coq.py`. Iteration 24: a double with an exponent (`'100e9'::float8`, `float8in`), `log (b, x)`
+  of `numeric` with NaN or an infinity (`pg_log_special`, after `numeric_log`); tests in `Test_Decimal.v`. Open, a
+  limit of the representation: the NaN and the infinities of `numeric` are the special values of the doubles
+  (iteration 9), so `power ('-inf'::numeric, -3)` follows the doubles and gives `-0`, which `numeric` does not
+  have.
 - **8.34 One slow case loses the results of its file** (iteration 21): a file of cases is one `vm_compute`; with
   the exponents of 8.32, `numeric:754` (`to_char` of `1.2345e131071`) made `numeric.sql` go over the limit of the
   runner, and its 155 cases were reported as not run.
@@ -897,3 +901,10 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   `' 485'`).
   **Status: DONE** (iteration 20): `aligned_cells` in `tools/spec/pg2result.py` tells the alignment of a column from
   its padding; a test in `tools/spec/test_sql2coq.py`.
+- **8.35 Audit of iterations 18 to 24** (iteration 25): the definitions added are all used; `JSON_TABLE` still read its
+  row path with the old reader of paths, which took only a final `[*]` (`$.a[*].b`, `$.*` were invalid).
+  **Status: DONE** (iteration 25). `my_json_table` takes the rows from `my_seek` (iteration 19): the values which the
+  path designates, in the order of the document; a test in `Test_TableFuns.v`. `pyflakes` on the tools: one unused
+  variable removed. `docs/DIALECT_TABLES.md` regenerated for the features of iteration 23; the conformance summary
+  updated with the runs of PostgreSQL, MariaDB and MySQL of iterations 18 to 24.
+

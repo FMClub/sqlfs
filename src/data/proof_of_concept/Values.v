@@ -1308,6 +1308,25 @@ Definition float_to_numeric (v : value) : value :=
   | None => Value_D None
   end.
 
+(** The text of a [numeric] ([numeric_in]): a sign, digits with a point, and an exponent [e+n]; its scale
+    is the number of digits after the point less the exponent (not negative). *)
+Definition numeric_of_string (t : string) : option (Qc * nat) :=
+  let t := match t with String "+" r => r | _ => t end in
+  let u := string_map lower_ascii t in
+  let (mant, ex) := match String.index 0 "e" u with
+                    | Some i => (String.substring 0 i u,
+                                 let e := String.substring (S i) (String.length u - S i) u in
+                                 Z_of_string (match e with String "+" r => r | _ => e end))
+                    | None => (u, Some 0%Z)
+                    end in
+  match Qc_of_string mant, ex with
+  | Some q, Some e =>
+    let frac := match String.index 0 "." mant with Some i => (String.length mant - S i)%nat | None => 0%nat end in
+    let q' := if (0 <=? e)%Z then Qcmult q (Qc_of_Z (10 ^ e)) else Qcdiv q (Qc_of_Z (10 ^ (- e))) in
+    Some (q', Z.to_nat (Z.of_nat frac - e))
+  | _, _ => None
+  end.
+
 Definition cast_float (w32 : bool) (v : value) : value :=
   match v with
   | Value_F (Some (x, k)) =>
@@ -1318,7 +1337,9 @@ Definition cast_float (w32 : bool) (v : value) : value :=
   | Value_Q (Some q) => to_float w32 q
   | Value_D (Some (q, _, _)) => to_float w32 q
   | Value_string (Some t) => 
-    let t := string_rtrim (string_ltrim t) in float_of_text w32 t (Qc_of_string t)
+    (* [float8in]: the text of a number, with an exponent ([strtod]) *)
+    let t := string_rtrim (string_ltrim t) in
+    float_of_text w32 t (match numeric_of_string t with Some (q, _) => Some q | None => None end)
   | _ => Value_F None
   end.
 
@@ -1383,25 +1404,6 @@ Definition cast_Z v :=
     end
   | Value_bool (Some b) => Value_Z (Some (if b then 1%Z else 0%Z))
   | _ => Value_Z None
-  end.
-
-(** The text of a [numeric] ([numeric_in]): a sign, digits with a point, and an exponent [e+n]; its scale
-    is the number of digits after the point less the exponent (not negative). *)
-Definition numeric_of_string (t : string) : option (Qc * nat) :=
-  let t := match t with String "+" r => r | _ => t end in
-  let u := string_map lower_ascii t in
-  let (mant, ex) := match String.index 0 "e" u with
-                    | Some i => (String.substring 0 i u,
-                                 let e := String.substring (S i) (String.length u - S i) u in
-                                 Z_of_string (match e with String "+" r => r | _ => e end))
-                    | None => (u, Some 0%Z)
-                    end in
-  match Qc_of_string mant, ex with
-  | Some q, Some e =>
-    let frac := match String.index 0 "." mant with Some i => (String.length mant - S i)%nat | None => 0%nat end in
-    let q' := if (0 <=? e)%Z then Qcmult q (Qc_of_Z (10 ^ e)) else Qcdiv q (Qc_of_Z (10 ^ (- e))) in
-    Some (q', Z.to_nat (Z.of_nat frac - e))
-  | _, _ => None
   end.
 
 Definition cast_Q v :=
@@ -2083,6 +2085,38 @@ Definition pg_exp_check (v : value) : value :=
   | _ => v
   end.
 
+(** [log (b, x)] of [numeric] when [b] or [x] is NaN or an infinity ([numeric_log] in [numeric.c]): NaN with a
+    NaN; an error for a negative or zero argument; [log (inf, inf)] is NaN, [log (inf, x)] is 0, [log (b, inf)]
+    is an infinity of the sign of [b - 1] (an error for [b = 1]) *)
+Definition pg_log_special (b x : value) : value :=
+  let nan := VF false (F_NaN, Q2Qc 0) in
+  let sp (v : value) := match float_parts v with Some (s, _, _) => s | None => F_Finite end in
+  let sign (v : value) : comparison :=
+      match sp v with
+      | F_PosInf => Gt | F_NegInf => Lt | F_NaN => Eq
+      | _ => match num_of_value v with Some n => Qccompare (Qc_of_num n) (Qc_of_Z 0) | None => Eq end
+      end in
+  match sp b, sp x with
+  | F_NaN, _ | _, F_NaN => nan
+  | _, _ =>
+    match sign b, sign x with
+    | Lt, _ | _, Lt => Value_Err "cannot take logarithm of a negative number"
+    | Eq, _ | _, Eq => Value_Err "cannot take logarithm of zero"
+    | _, _ =>
+      match sp b with
+      | F_PosInf => match sp x with F_PosInf => nan | _ => VDec (Qc_of_Z 0) 0 0 end
+      | _ => match num_of_value b with
+             | Some n => match Qccompare (Qc_of_num n) (Qc_of_Z 1) with
+                         | Lt => VF false (F_NegInf, Q2Qc 0)
+                         | Gt => VF false (F_PosInf, Q2Qc 0)
+                         | Eq => Value_Err "division by zero"
+                         end
+             | None => nan
+             end
+      end
+    end
+  end.
+
 Definition pg_math_table (num_power : list value -> value) : list (string * (list value -> value)) :=
   let c := num_of_value in
   let bad := Value_Err "function does not exist" in
@@ -2112,9 +2146,10 @@ Definition pg_math_table (num_power : list value -> value) : list (string * (lis
   let trig f := dbl_fun1 c (fun q => Some (f binary64 q)) bad pg_sp_range bad in
   let atrig (f : format -> Q -> option (fspecial * Qc)) := dbl_fun1 c (f binary64) (pg_dom "input is out of range") pg_sp_range bad in
   let dpow := pg_dpow c (pg_dom "a negative number raised to a non-integer power yields a complex result") bad in
-  let numeric_log l := match l with
+  let numeric_log l := match map (fun v => match v with Value_string (Some _) => cast_Q v | _ => v end) l with
                        | b :: x :: nil =>
                          if is_null b || is_null x then Value_D None
+                         else if is_special b || is_special x then pg_log_special b x
                          else match dec_of_value b, dec_of_value x with
                               | Some (qb, _, sb), Some (qx, _, sx) => pg_num_log (qb, sb) (qx, sx)
                               | _, _ => bad end

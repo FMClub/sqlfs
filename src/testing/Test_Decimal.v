@@ -150,3 +150,21 @@ Example pg_numeric_special_mod :
    text PostgreSQL (fn "%" [fn "cast_numeric" [str "inf"]; str "0"]))
   = (Some IEEE.F_NaN, Some IEEE.F_NaN, "4.2", "ERROR").
 Proof. check. Qed.
+
+(** iteration 24: a double with an exponent ([float8in]: [strtod]); [log (b, x)] of [numeric] with an infinite
+    or NaN argument ([numeric_log]) *)
+Example pg_float_exponent :
+  (text PostgreSQL (fn "cast_float8" [str "100e9"]), text PostgreSQL (fn "cast_float8" [str "-1.5E-3"]),
+   text PostgreSQL (fn "cast_float8" [str "1e400"]))
+  = ("100000000000", "-0.0015", "ERROR").
+Proof. check. Qed.
+Example pg_log_specials :
+  (kind PostgreSQL (fn "log" [fn "cast_numeric" [str "0.5"]; str "inf"]),
+   kind PostgreSQL (fn "log" [fn "cast_numeric" [str "2"]; str "inf"]),
+   kind PostgreSQL (fn "log" [fn "cast_numeric" [str "inf"]; str "inf"]),
+   kind PostgreSQL (fn "log" [fn "cast_numeric" [str "2"]; str "nan"]),
+   text PostgreSQL (fn "log" [fn "cast_numeric" [str "inf"]; str "4.2"]),
+   text PostgreSQL (fn "log" [fn "cast_numeric" [str "1"]; str "inf"]),
+   text PostgreSQL (fn "log" [fn "cast_numeric" [str "-inf"]; str "2"]))
+  = (Some IEEE.F_NegInf, Some IEEE.F_PosInf, Some IEEE.F_NaN, Some IEEE.F_NaN, "0", "ERROR", "ERROR").
+Proof. check. Qed.

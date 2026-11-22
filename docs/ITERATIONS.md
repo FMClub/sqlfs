@@ -29,3 +29,5 @@ next item. One entry per iteration, newest last.
 | 21 | TODO 8.32, 8.34 | PostgreSQL texts of numbers: integers in bases 16, 8, 2 with underscores, `numeric` with an exponent, string literals of `VALUES`, `%` on NaN; the runners compile a file over its time limit case by case | 8.34 (found: a newly computable case made a whole file time out) |
 | 22 | TODO 8.31 | `PERCENT_RANK` and `CUME_DIST` typed by dialect (`vs_of_rat`): doubles, 10 decimals in MariaDB, exact in Oracle mode | — |
 | 23 | TODO 8.25 (windows) | MariaDB's mandatory `ORDER BY` for the ranks; `RANGE` frames over other than one sort key; the queries of another mysqltest connection are not translated (privileges) | — |
+| 24 | TODO 8.32 | PostgreSQL: doubles with an exponent, `log (b, x)` of `numeric` on NaN and the infinities | the `-0` of `power ('-inf'::numeric, -3)`: a limit of the representation of the special `numeric` values |
+| 25 | TODO 8.35: audit of iterations 18 to 24 | `JSON_TABLE` row paths with wildcards inside them (`my_seek`); generated tables and conformance summary brought up to date | — |

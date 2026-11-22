@@ -981,26 +981,20 @@ Definition my_unify_column (l : list value) : list value :=
   else l.
 
 (** [JSON_TABLE (doc, rowpath COLUMNS (c1 ... PATH p1, ...))] as [json_table (doc, rowpath, p1, ...)]: the
-    rows are the values at [rowpath], a path whose last step may be [[*]] (every element of an array);
-    a column is the value at its path from the row (a scalar, its SQL value; NULL when missing). The
+    rows are the values which [rowpath] designates, in the order of the document (a path of the MySQL family,
+    with wildcards and ranges: [my_seek]); a column is the value at its path from the row (a path without
+    wildcard; a scalar, its SQL value; NULL when missing). The
     declared types of the columns and the [ON EMPTY] / [ON ERROR] clauses are not modelled (TODO 3.4). *)
 Definition my_json_table (l : list value) : list (list value) :=
   match l with
   | d :: rp :: cols =>
     match my_json_doc d, text_of rp with
     | Some (Some j), Some rpath =>
-      let n := String.length rpath in
-      let (base, star) := if Nat.leb 3 n && String.eqb (substring (n - 3) 3 rpath) "[*]"
-                          then (substring 0 (n - 3) rpath, true) else (rpath, false) in
-      match parse_path base with
-      | Some st =>
-        let rows := match follow st j with
-                    | Some (JArr xs) => if star then xs else JArr xs :: nil
-                    | Some x => if star then nil else x :: nil
-                    | None => nil end in
+      match my_seek j rpath with
+      | Some (_, rows) =>
         let colv (r : json) (c : value) :=
             match text_of c with
-            | Some cp => match parse_path cp with
+            | Some cp => match my_path cp with
                          | Some cst => match follow cst r with
                                        | Some JNull | None => Value_Z None
                                        | Some (JStr t) => Value_string (Some t)
