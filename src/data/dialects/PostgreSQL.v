@@ -8,7 +8,7 @@
 
 Require Import List String Ascii ZArith NArith QArith Qcanon.
 
-Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
+Require Import Bool3 OrderedSet SqlFull Temporal Json Values Dialects ValueKit Collation Hash StringFuns PgNumFormat Regex RegexFuns Aggregates TemporalFuns JsonFuns SystemFuns.
 
 Close Scope Q_scope.
 Close Scope Qc_scope.
@@ -731,6 +731,15 @@ Definition pg_with_overrides (t : list (string * (list value -> value))) : list 
   let over (n : string) (f : (list value -> value) -> list value -> value) :=
       match string_assoc _ n t with Some g => (n, f g) :: nil | None => nil end in
   over "concat" (fun g l => g (map pg_out_text l))
+  (* [to_char (number, format)]: [PgNumFormat.v] *)
+  ++ over "to_char" (fun g l => match l with
+                                | v :: Value_string (Some fmt) :: nil =>
+                                  match v with
+                                  | Value_D (Some _) | Value_Q (Some _) | Value_Z (Some _) | Value_I (Some _)
+                                  | Value_F (Some _) => pg_num_to_char v fmt
+                                  | _ => g l
+                                  end
+                                | _ => g l end)
   ++ over "concat_ws" (fun g l => g (map pg_out_text l))
   (* [text || anynonarray]: the other operand is converted to text *)
   ++ over "||" (fun g l => match l with
@@ -764,7 +773,7 @@ Definition PostgreSQL : vsem :=
           canon_numeric
           false
           (fun f => match f with F_Bare_Column | F_Fetch_Percent | F_Null_Treatment | F_From_Last | F_Rec_Aggregate
-                                  | F_Group_Aggregate | F_Order_Not_Selected | F_Frame_Bounds | F_Ntile_Zero => false | _ => true end)
+                                  | F_Group_Aggregate | F_Order_Not_Selected | F_Frame_Bounds | F_Ntile_Zero | F_Range_Offset_Keys => false | _ => true end)
           false
           (* an escape of more than one character: [invalid escape string] *)
           (fun p l => bad_escape pg_skit p l || rx_bad pg_rx ("~" :: "~*" :: "!~" :: "!~*" :: nil)%string p l)
@@ -796,4 +805,5 @@ Definition PostgreSQL : vsem :=
                   match l with a :: b :: nil => conv b a :: conv a b :: nil | _ => l end
              else l)
           (fun l => l)
-          pg_table_funs.
+          pg_table_funs
+          (fun q => to_float false (Q2Qc q)).

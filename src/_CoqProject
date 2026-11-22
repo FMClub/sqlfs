@@ -76,6 +76,7 @@ data/dialects/Collation.v
 data/dialects/ValueKit.v
 data/proof_of_concept/Hash.v
 data/dialects/StringFuns.v
+data/dialects/PgNumFormat.v
 data/dialects/Regex.v
 data/dialects/RegexFuns.v
 data/dialects/Aggregates.v
@@ -180,3 +181,4 @@ testing/Test_Collation.v
 testing/Test_Truth.v
 testing/Test_Date.v
 testing/Test_Json.v
+testing/Test_NumFormat.v

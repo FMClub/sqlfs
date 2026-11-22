@@ -73,6 +73,13 @@ Example json_table_rows :
   tf MySQL "json_table" [s "[{""x"":2,""y"":""8""},{""x"":""3"",""y"":""7""},{""y"":6}]"; s "$[*]"; s "$.x"; s "$.y"] false 2
   = [["2"; "8"]; ["3"; "7"]; ["NULL"; "6"]].
 Proof. check. Qed.
+(** a row path with wildcards inside it (iteration 25: [my_seek]), and a path to an array, which is one row *)
+Example json_table_paths :
+  (tf MySQL "json_table" [s "{""a"": [{""b"": {""x"": 1}}, {""b"": {""x"": 2}}, {""c"": 3}]}"; s "$.a[*].b"; s "$.x"] false 1,
+   tf MySQL "json_table" [s "{""p"": {""x"": 1}, ""q"": {""x"": 2}}"; s "$.*"; s "$.x"] false 1,
+   tf MySQL "json_table" [s "{""a"": [1, 2]}"; s "$.a"; s "$[1]"] false 1)
+  = ([["1"]; ["2"]], [["1"]; ["2"]], [["2"]]).
+Proof. check. Qed.
 (** SQLite [json_each]: [key], [value], [type] *)
 Example lite_each : tf SQLite "json_each" [s "[10,""a""]"] false 3 = [["0"; "10"; "integer"]; ["1"; "a"; "text"]].
 Proof. check. Qed.

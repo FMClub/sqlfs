@@ -18,4 +18,6 @@ rm -rf "$ROOT/src/testing/pgspec"
 python3 "$ROOT/tools/spec/sql2coq.py" --dialect PostgreSQL --lenient --outdir "$ROOT/src/testing/pgspec" "$T"/*.result
 rm -rf "$T"
 cd "$ROOT/src"
-ls testing/pgspec/Spec_*.v | xargs -P "${JOBS:-3}" -I{} sh -c 'echo "== {}"; timeout ${FILE_TIMEOUT:-900} coqc -R . SQLFS {} > /tmp/pgspec_$$.out 2>&1; [ $? -eq 124 ] && echo "TIMEOUT {}"; grep -v "^ *: " /tmp/pgspec_$$.out; rm -f /tmp/pgspec_$$.out'
+# a file over FILE_TIMEOUT is compiled again case by case (compile_spec.sh); the outputs of the files are not
+# interleaved: each is printed when it is done
+ls testing/pgspec/Spec_*.v | xargs -P "${JOBS:-3}" -I{} sh -c 'o=$(echo "== {}"; "$0" {}); echo "$o"' "$ROOT/tools/spec/compile_spec.sh"

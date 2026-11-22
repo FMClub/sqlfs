@@ -66,7 +66,10 @@ Record vsem : Type :=
       (** the values of a column of the result of a set operation, in the type of the column (TODO 3.3) *)
       vs_unify : list value -> list value;
       (** the table functions (TODO 3.4) *)
-      vs_table_fun : string -> option (list value -> list (list value))
+      vs_table_fun : string -> option (list value -> list (list value));
+      (** the value of [PERCENT_RANK] and [CUME_DIST], which are rational numbers: a double in PostgreSQL,
+          the MySQL family and SQLite, a [NUMBER] in Oracle (TODO 8.31) *)
+      vs_of_rat : Q -> value
     }.
 
 (** [DISTINCT] aggregates: the name of the aggregate starts with ["distinct "]. *)
@@ -164,7 +167,7 @@ Definition dialect_of (d : vsem) : dialect (TD d) :=
              (vs_order d)
              (fun z => NullValues.Value_Z (Some z))
              NullValues.rat_of_value
-             NullValues.value_of_rat
+             (vs_of_rat d)
              (vs_canon d)
              (vs_nulls_smallest d)
              (vs_known_symbol d)

@@ -7,6 +7,9 @@ translator ("translated": N), one "== file" line per compiled file, the failing 
 ... | got ...") and TIMEOUT lines. A file whose compilation printed nothing (killed, out of memory) is
 counted as not run.
 
+A file over the time limit is compiled again case by case ("SPLIT file", then "TIMEOUT_CASE id" for each
+case over the limit of a case): only these cases are counted as not run.
+
 Usage: summary.py LABEL:DIALECT:LOG[:seq] ...   (:seq for the logs of suite_run.sh, which compiles one file
        at a time; the others compile in parallel and only their TIMEOUT lines say which files did not finish)
 """
@@ -28,12 +31,15 @@ def read(log, sequential):
     translated = int(m.group(1)) if m else 0
     fails = set(re.findall(r'"([A-Za-z_0-9]+:\d+) \|', t))
     timeouts = re.findall(r'^TIMEOUT (\S+)', t, re.M)
+    # a file over the time limit compiled again case by case (compile_spec.sh): only the cases over the
+    # limit of a case are not run
+    split = set(re.findall(r'^SPLIT (\S+)', t, re.M))
     # the files which printed no result (time limit, memory limit): their cases are not run
-    unfinished = sum(cases_of(p) for p in timeouts)
+    unfinished = sum(cases_of(p) for p in timeouts) + len(re.findall(r'^TIMEOUT_CASE \S+', t, re.M))
     parts = [] if not sequential else re.split(r'^== (\S+)\s*$', t, flags=re.M)
     for k in range(1, len(parts), 2):
         path, body = parts[k], parts[k + 1]
-        if not re.search(r'^\s*= \[', body, re.M) and path not in timeouts:
+        if not re.search(r'^\s*= \[', body, re.M) and path not in timeouts and path not in split:
             unfinished += cases_of(path)
     return translated, fails, timeouts, unfinished
 
@@ -52,8 +58,8 @@ def main():
         rows.append('| %s | `%s` | %d | %d | %d | %d |' % (label, dialect, n, len(fails), unfinished,
                                                          n - len(fails) - unfinished))
     rows.append('')
-    rows.append('"Not run" counts the cases of the files whose compilation stopped at the time or memory limit of '
-                'the runner; "Pass" is the rest of the translated cases minus the failing ones.')
+    rows.append('"Not run" counts the cases whose compilation stopped at the time or memory limit of the runner '
+                '(a file over the limit is compiled again case by case); "Pass" is the rest of the translated cases minus the failing ones.')
     (ROOT / 'docs' / 'CONFORMANCE_SUMMARY.md').write_text('\n'.join(rows) + '\n')
     print('\n'.join(rows))
 

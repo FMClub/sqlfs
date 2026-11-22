@@ -750,6 +750,12 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   `tomorrow`, `yesterday`, `epoch`, `now`. PostgreSQL: 53 failing cases of 514.
 - **8.12 `to_char` of numbers** (iteration 6): the numeric format models (`9`, `0`, `FM`, `EEEE`, `RN`, `V`, ...): 28
   failing cases.
+  **Status: DONE** (iteration 20). `src/data/dialects/PgNumFormat.v` follows `formatting.c`: the parser of the format
+  (`NUM_keywords`, the quoted texts), the description of the format with its syntax errors (`NUMDesc_prepare`), the
+  text of the number by type (`int4_to_char`, `numeric_to_char`, `float8_to_char`: rounding, `V`, `EEEE`, Roman
+  numerals, `#` on overflow) and the processor (`NUM_processor_to_char`, `NUM_numpart_to_char`: signs, `FM`, `PR`,
+  `S`, `MI`, `PL`, `SG`, `TH`, the group separator). The locale is C. Tests: `src/testing/Test_NumFormat.v` (the
+  examples of the manual which do not depend on the locale, queries of `numeric.sql`).
 - **8.13 BC dates** (iteration 6): the date parser reads years of the common era only: 12 failing cases.
   **Status: DONE** (iteration 7). `parse_date` reads the eras `AD` and `BC`, `date_text` prints `BC`, `EXTRACT` gives
   the negative years, decades, centuries and millennia of `extract_date`, and `JULIAN`. Found on the way, and
@@ -798,6 +804,13 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   (`my_arith2`); `ABS` and `ROUND` of an integer are now (`my_int_range`).
 - **8.22 Wildcards of JSON paths in the MySQL family** (iteration 10): `$.*`, `$[*]`, `$**.a` are read as member
   names by `parse_path`; `JSON_EXTRACT` and `JSON_CONTAINS_PATH` with them are wrong.
+  **Status: DONE** (iteration 19). `parse_wpath` and `seek` (`Json.v`): `.*`, `[*]`, `[m to n]`, `last`, `last-n`, `**`,
+  and the wrapping of a value which is not an array by `[0]` and `[last]`; `JSON_EXTRACT` takes several paths and
+  gives the array of the values found; the functions which name one place (`JSON_SET`, `JSON_LENGTH`, ...) reject
+  a wildcard or a range; `JSON_SET` on `[last]` of a value which is not an array replaces it; a NULL path of
+  `JSON_CONTAINS_PATH` and `JSON_SEARCH` gives NULL. Tests: `src/testing/Test_Json.v` (the examples of the MySQL
+  manual); TiDB `expression/json`: 5 failing cases before, 0 after. Not modelled: the
+  removal of the duplicates which `**` can give with the wrapping; the path arguments of `JSON_SEARCH`.
 - **8.23 `INTERVAL` with a fraction in the MySQL family** (iteration 10): `d + INTERVAL 1.2 SECOND`, `INTERVAL '1.9'
   MINUTE` (the fraction is dropped or rounded by the unit), `INTERVAL true MICROSECOND`: 11 cases of TiDB `time`.
   **Status: DONE** (iteration 11). The `interval` of the MySQL family follows `get_interval_value`; a sum with a
@@ -809,16 +822,25 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   the continuous integration.
 - **8.25 Static errors which the cases expecting an error show** (iteration 14): the queries which the engines reject
   and the model accepts.
-  **Status: PARTIAL** (iterations 14 and 17). Done: an aggregate in a grouping expression (`F_Group_Aggregate`, no dialect
+  **Status: PARTIAL** (iterations 14, 17, 18 and 23). Done: an aggregate in a grouping expression (`F_Group_Aggregate`, no dialect
   has it); a `SELECT DISTINCT` ordered by an expression which is not selected (`F_Order_Not_Selected`:
   rejected by PostgreSQL, Oracle mode and `ONLY_FULL_GROUP_BY`; accepted by SQLite, MariaDB, OceanBase's MySQL
   mode); tests in `src/testing/Test_Arity.v`; `docs/DIALECT_TABLES.md` regenerated. Iteration 17: a window frame
   whose start is after its end by its form (`F_Frame_Bounds`) and `NTILE (0)` (`F_Ntile_Zero`), which no dialect
-  has; `LAG` / `LEAD` over a window without `ORDER BY` (`F_Shift_No_Order`, rejected by MariaDB); a window function
+  has; `LAG` / `LEAD` over a window without `ORDER BY` (`F_Shift_No_Order`, rejected by MariaDB; `F_No_Order_List`
+  since iteration 23); a window function
   in the argument of an aggregate cannot be written in `SqlFull.v`: the translator does not translate it. The
-  cases of MariaDB which expect these errors pass. Open: a window ordered by an alias of the same block, the
-  invalid regular expressions of MySQL (`a**`, `a{37,17}`, references to groups which do not exist), a duplicate
-  name of `WITH` up to the case.
+  cases of MariaDB which expect these errors pass. Iteration 18: the invalid regular expressions (`a**`,
+  `a{37,17}`, in ICU a reference to a group which does not exist and a lookbehind without a bounded length);
+  with them the scoped options `(?-i:…)`, `(?i)` inside an expression, atomic groups, comments, `\10` and the
+  groups of a lookahead: MySQL `regular_expressions_func` goes from 39 failing cases to 4 (`(?x)`, a set
+  operation of ICU). Iteration 23: MariaDB requires an `ORDER BY` for `RANK`, `DENSE_RANK`, `PERCENT_RANK`,
+  `CUME_DIST` too (`F_No_Order_List`, after `is_order_list_mandatory`); a `RANGE` frame with an offset needs
+  exactly one sort key (`F_Range_Offset_Keys`, every engine), and in MariaDB any `RANGE` frame bounded at one end
+  (`F_Range_Keys`); tests in `Test_Arity.v`. The translator no longer translates the queries of a mysqltest
+  connection other than the default one: the "error" which MariaDB `cte_nonrecursive_not_embedded` expects is a
+  privilege of its user. Open: a window ordered by an alias of the same block, a duplicate name of `WITH` up to
+  the case (no case of the suites shows them; kept for a later audit).
 - **8.26 Result files of the same name** (iteration 14): 39 result files of TiDB have the name of another one in
   another directory; their cases were written to the same file, so that only the last one was checked.
   **Status: DONE** (iteration 14). Such files are named after their directory too (`executor_integration`); 12 more
@@ -847,4 +869,49 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   false: `paper`), because the NULLs of the instance have a type. The theorems therefore relate the two semantics
   where `SqlFull.v` does not normalise the NULLs. To relate them for the dialects of the engines, the statement has
   to be up to the type of the NULLs.
+
+- **8.31 The type of `PERCENT_RANK` and `CUME_DIST`** (iteration 20): the window functions give an exact rational
+  (`value_of_rat` is `Value_Q` for every dialect), where the engines give a double (PostgreSQL, the MySQL family,
+  SQLite), of 10 decimals in MariaDB (`Item_sum_percent_rank`), or a `NUMBER` (Oracle). Seen on MariaDB
+  `win_percent_cume` (`0.2222222222` expected, 40 digits given).
+  **Status: DONE** (iteration 22). A field `vs_of_rat` of the dialects (`Dialects.v`) gives the value of a rational:
+  a double in PostgreSQL, SQLite and the MySQL family, of 10 decimals in MariaDB, the exact number in Oracle
+  mode; `same_core` (`Refinement.v`) and `at_version` (`Versions.v`) carry it. Tests: `src/testing/Test_Range.v`.
+- **8.32 The texts of the numbers of PostgreSQL** (iteration 20, found with the cases of `to_char`): an integer
+  is read with `0x`, `0o`, `0b` and underscores (`pg_strtoint32_safe`); a `numeric` with an exponent (`'4.2e9'`);
+  a string literal in a column of `VALUES` takes the type of the other entries (the translator kept it a string).
+  Also open: `'nan'::numeric % 0` is NaN (NULL given); `power ('-inf'::numeric, -3)` is `0` (`-0` given).
+  **Status: PARTIAL** (iteration 21). Done: the bases and the underscores of the integers (`pg_int_of_string`,
+  `Values.v`), the exponent of a `numeric` and its scale (`numeric_of_string`), the literals of `VALUES` (translator,
+  `values_types`), `%` on NaN and the infinities (`special_mod`). Tests: `Test_Integer.v`, `Test_Decimal.v`,
+  `tools/spec/test_sql2coq.py`. Iteration 24: a double with an exponent (`'100e9'::float8`, `float8in`), `log (b, x)`
+  of `numeric` with NaN or an infinity (`pg_log_special`, after `numeric_log`); tests in `Test_Decimal.v`. Open, a
+  limit of the representation: the NaN and the infinities of `numeric` are the special values of the doubles
+  (iteration 9), so `power ('-inf'::numeric, -3)` follows the doubles and gives `-0`, which `numeric` does not
+  have.
+- **8.34 One slow case loses the results of its file** (iteration 21): a file of cases is one `vm_compute`; with
+  the exponents of 8.32, `numeric:754` (`to_char` of `1.2345e131071`) made `numeric.sql` go over the limit of the
+  runner, and its 155 cases were reported as not run.
+  **Status: DONE** (iteration 21). `tools/spec/compile_spec.sh` compiles a file over its limit again case by case
+  (`split_cases.py`); `summary.py` counts as not run only the cases over the limit of a case (`TIMEOUT_CASE`). The
+  slow cases themselves (`numeric:754`, the power `1.234 ^ 5678`, sums over 100,000 rows) are TODO 8.15: the
+  numbers of the model are binary terms, and the normalisation of a fraction of 10^131071 is quadratic.
+- **8.33 The padding of the psql tables** (iteration 20): the converter of the PostgreSQL results removed the
+  spaces at the start of every cell; in a column aligned on the left they are data (`to_char (485, '999')` is
+  `' 485'`).
+  **Status: DONE** (iteration 20): `aligned_cells` in `tools/spec/pg2result.py` tells the alignment of a column from
+  its padding; a test in `tools/spec/test_sql2coq.py`.
+- **8.35 Audit of iterations 18 to 24** (iteration 25): the definitions added are all used; `JSON_TABLE` still read its
+  row path with the old reader of paths, which took only a final `[*]` (`$.a[*].b`, `$.*` were invalid).
+  **Status: DONE** (iteration 25). `my_json_table` takes the rows from `my_seek` (iteration 19): the values which the
+  path designates, in the order of the document; a test in `Test_TableFuns.v`. `pyflakes` on the tools: one unused
+  variable removed. `docs/DIALECT_TABLES.md` regenerated for the features of iteration 23; the conformance summary
+  updated with the runs of PostgreSQL, MariaDB and MySQL of iterations 18 to 25.
+- **8.36 The padding of the psql tables, again** (iteration 25, found by the PostgreSQL run of the commit `5115400`:
+  106 failing cases instead of 53): iteration 21 kept the leading spaces of a column which no padding shows to be
+  aligned on the left, and let the comparison of a number ignore them; but the runner gives a double of
+  PostgreSQL as the text of its client (`client_value`), which the comparison took for a string, so that
+  `    NaN` no longer matched `NaN` (53 cases of `float8`, `numeric`, `aggregates`).
+  **Status: DONE** (iteration 25). The text of a double of PostgreSQL is tagged as a number (`Value_C` with the
+  pseudo-collation `float8out`, `SpecRunner.v`); a test in `Test_Float.v`.
 

@@ -16,5 +16,5 @@ python3 "$ROOT/tools/spec/sql2coq.py" --dialect "$D" --lenient --outdir "$OUT" "
 cd "$ROOT/src"
 for f in testing/suite_$NAME/Spec_*.v; do
   echo "== $f"
-  ( ulimit -v "${MEM_KB:-5000000}"; timeout "${FILE_TIMEOUT:-600}" coqc -R . SQLFS "$f" 2>&1 ) | grep -v "^ *: " || true
+  ( ulimit -v "${MEM_KB:-5000000}"; FILE_TIMEOUT="${FILE_TIMEOUT:-600}" "$ROOT/tools/spec/compile_spec.sh" "$f" ) || true
 done

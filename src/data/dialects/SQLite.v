@@ -631,7 +631,7 @@ Definition lite_supports (f : feature) : bool :=
   match f with
   | F_Lateral | F_Intersect_All | F_Except_All | F_Any_All 
   | F_Grouping_Sets | F_Rollup | F_Cube | F_Fetch_Ties | F_Fetch_Percent
-  | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate | F_Frame_Bounds | F_Ntile_Zero => false
+  | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate | F_Frame_Bounds | F_Ntile_Zero | F_Range_Offset_Keys => false
   | _ => true
   end.
 
@@ -708,4 +708,5 @@ Definition SQLite : vsem :=
           (fun _ => false)
           lite_cmp_coerce
           (fun l => l)
-          lite_table_funs.
+          lite_table_funs
+          (fun q => to_float false (Q2Qc q)).

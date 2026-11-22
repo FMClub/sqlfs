@@ -59,14 +59,20 @@ def tokenize(s):
             if j < 0:
                 raise Skip('comment')
             i = j + 2
-        elif c in "'\"":
-            q = c
+        elif c in "'\"" or (ENGINE == 'postgresql' and c in 'eE' and s.startswith("'", i + 1)
+                             and not (i > 0 and (s[i - 1].isalnum() or s[i - 1] == '_'))):
+            # a backslash is an escape in the MySQL family and in the E'...' strings of PostgreSQL; in the
+            # other strings of PostgreSQL, SQLite and Oracle it is a character
+            esc = ENGINE == 'mysql' or c in 'eE'
+            if c in 'eE':
+                i += 1
+            q = s[i]
             j = i + 1
             buf = []
             while True:
                 if j >= n:
                     raise Skip('unterminated string')
-                if s[j] == '\\' and j + 1 < n:
+                if esc and s[j] == '\\' and j + 1 < n:
                     e = s[j + 1]
                     m = {'n': '\n', 't': '\t', '0': '\0', '\\': '\\', "'": "'", '"': '"', 'r': '\r', 'b': '\b', '%': '\\%', '_': '\\_'}
                     buf.append(m.get(e, e))
@@ -125,6 +131,24 @@ NAMED_WINDOWS = {}
 SERVER_VERSION = 80400
 # the views of the script: name -> (query, columns); a view is a derived table where it is used
 VIEWS = {}
+
+
+def values_types(rows):
+    """The type of a column of VALUES in PostgreSQL (select_common_type): a string literal has no type of
+    its own and takes the type of the other entries of its column. Here: when all the entries which are not
+    string literals are casts to one type, the literals are cast to it too ((VALUES ('0'::numeric), ('4.2'))
+    is a column of numerics)."""
+    rows = [list(r) for r in rows]
+    for j in range(len(rows[0])):
+        col = [r[j] for r in rows]
+        typed = [e for e in col if not (isinstance(e, tuple) and e[0] == 'str')]
+        if len(typed) == len(col) or not typed:
+            continue
+        if all(isinstance(e, tuple) and e[0] == 'cast' for e in typed) and len(set(repr(e[1]) for e in typed)) == 1:
+            for r in rows:
+                if r[j][0] == 'str':
+                    r[j] = ('cast', typed[0][1], r[j])
+    return rows
 
 
 class P:
@@ -253,6 +277,8 @@ class P:
                     break
             if len(set(len(r) for r in rows)) != 1:
                 raise Skip('values arity')
+            if ENGINE == 'postgresql':
+                rows = values_types(rows)
             return ('values', rows)
         return self.select()
 
@@ -652,7 +678,6 @@ class P:
             cols, paths = [], []
             while True:
                 cname = self.ident()
-                depth = 0
                 # the type, up to PATH
                 while not (self.peek()[0] in ('id', 'kw') and self.peek()[1].lower() in ('path', 'for')):
                     if self.peek()[0] == 'eof':
@@ -2345,7 +2370,9 @@ def stmt_complete(s):
 
 
 def looks_like_statement(l):
-    return bool(re.match(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|commit|rollback|use|analyze|call|start|begin)\b', l, re.I))
+    return bool(re.match(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|commit|rollback|use|analyze|call|start|begin)\b', l, re.I)
+                # the connection commands of mysqltest, as the result file echoes them
+                or re.match(r'^(connect\s+\w+,.*;|connection\s+\w+;|disconnect\s+\w+;)$', l, re.I))
 
 
 # the AUTO_INCREMENT columns (their positions) of the tables
@@ -2685,6 +2712,10 @@ def test_items(test_src, blocks):
             if st.startswith('--'):
                 if re.match(r'^--\s*error\b', st):
                     pending_error = True
+                # --connect (name, ...) and --connection name: the connection of the statements which follow
+                m = re.match(r'^--\s*(connection|connect)\b\s*\(?\s*(\w+)', st, re.I)
+                if m:
+                    stmts.append(('connection %s' % m.group(2), False))
                 continue
         cur += line + '\n'
         if stmt_complete(cur):
@@ -2785,9 +2816,20 @@ def process(path, out, stats):
         stats['skipped_files'] += 1
         return
     in_txn = False
+    other_conn = False
     for bi, (stmt, res, expect_err) in enumerate(items):
         s = stmt.strip()
         if len(s) > 20000:
+            continue
+        # mysqltest's connect / connection: the queries of a connection other than the default one are not
+        # translated (their results depend on the privileges of its user and on its session: MariaDB
+        # cte_nonrecursive_not_embedded reads a table which the user may not read)
+        m = re.match(r'^\s*(connection|connect)\b\s*\(?\s*(\w+)', s, re.I)
+        if m:
+            other_conn = m.group(2).lower() != 'default'
+            continue
+        if other_conn:
+            stats['skip']['another connection'] = stats['skip'].get('another connection', 0) + 1
             continue
         if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?(sql_mode|names|'
                                 r'character_set_\w+|collation_\w+|time_zone|div_precision_increment|'

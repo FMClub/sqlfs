@@ -207,9 +207,16 @@ Inductive feature : Type :=
   | F_Frame_Bounds
   (** [NTILE (0)]: no engine has it *)
   | F_Ntile_Zero
-  (** [LAG] or [LEAD] over a window without [ORDER BY] (an error of MariaDB: "No order list in window
-      specification") *)
-  | F_Shift_No_Order.
+  (** [RANK], [DENSE_RANK], [PERCENT_RANK], [CUME_DIST], [LAG] or [LEAD] over a window without [ORDER BY] (an
+      error of MariaDB: "No order list in window specification", [is_order_list_mandatory]) *)
+  | F_No_Order_List
+  (** a [RANGE] frame with an offset ([1 PRECEDING]) over a window whose [ORDER BY] has not exactly one key: no
+      engine has it *)
+  | F_Range_Offset_Keys
+  (** a [RANGE] frame which is not unbounded at both ends, without offset, over a window whose [ORDER BY] has
+      not exactly one key (an error of MariaDB: [ER_RANGE_FRAME_NEEDS_SIMPLE_ORDERBY]; PostgreSQL and MySQL
+      accept it) *)
+  | F_Range_Keys.
 
 Record dialect : Type :=
   mk_dialect
@@ -622,12 +629,30 @@ Fixpoint frame_bound_is_groups (f : frame) : list use :=
   | Frame_Excl f' _ => (U_Feature F_Frame_Exclusion) :: frame_bound_is_groups f'
   end.
 
-(** what a window function uses by its form: [ordered] tells whether its window has an [ORDER BY] *)
-Fixpoint wfun_static (f : swfun) (ordered : bool) : list use :=
+(** a [RANGE] frame over a window whose [ORDER BY] has [nkeys] keys *)
+Definition is_offset (b : frame_bound) : bool :=
+  match b with Preceding _ | Following _ | Preceding_Q _ | Following_Q _ => true | _ => false end.
+Definition is_unbounded (b : frame_bound) : bool :=
+  match b with Unbounded_Preceding | Unbounded_Following => true | _ => false end.
+Fixpoint frame_keys (fr : frame) (nkeys : nat) : list use :=
+  match fr with
+  | Frame_Range lo hi =>
+    if Nat.eqb nkeys 1 then nil
+    else if is_offset lo || is_offset hi then U_Feature F_Range_Offset_Keys :: nil
+    else if is_unbounded lo && is_unbounded hi then nil
+    else U_Feature F_Range_Keys :: nil
+  | Frame_Excl f' _ => frame_keys f' nkeys
+  | _ => nil
+  end.
+
+(** what a window function uses by its form: [nkeys] is the number of keys of the [ORDER BY] of its window *)
+Fixpoint wfun_static (f : swfun) (nkeys : nat) : list use :=
   match f with
   | W_Ntile 0%nat => U_Feature F_Ntile_Zero :: nil
-  | W_Lag _ _ _ | W_Lead _ _ _ => if ordered then nil else U_Feature F_Shift_No_Order :: nil
-  | W_Opts f' _ _ => wfun_static f' ordered
+  | W_Lag _ _ _ | W_Lead _ _ _ | W_Rank | W_Dense_Rank | W_Percent_Rank | W_Cume_Dist =>
+    if Nat.eqb nkeys 0 then U_Feature F_No_Order_List :: nil else nil
+  | W_Agg _ _ _ fr | W_First_Value _ fr | W_Last_Value _ fr | W_Nth_Value _ _ fr => frame_keys fr nkeys
+  | W_Opts f' _ _ => wfun_static f' nkeys
   | _ => nil
   end.
 
@@ -721,7 +746,7 @@ with squery_uses (q : squery) {struct q} : list use :=
                        (if last then (U_Feature F_From_Last) :: nil else nil) ++ fuses f'
                      | _ => nil
                      end) f ++
-                  wfun_static f (match lo with nil => false | _ => true end)
+                  wfun_static f (List.length lo)
                 end) lw
   | SQ_With _ q1 q2 => (U_Feature F_With) :: squery_uses q1 ++ squery_uses q2
   | SQ_WithRec _ _ q1 q2 q3 =>

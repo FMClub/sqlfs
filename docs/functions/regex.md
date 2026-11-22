@@ -12,15 +12,20 @@ in the manuals of MySQL, MariaDB and Oracle.
   - the escapes `\d \w \s \D \W \S`;
   - groups, `(?:…)`, the lookaheads `(?=…)` and `(?!…)`, and the lookbehinds `(?<=…)` and `(?<!…)`;
   - alternation, and the quantifiers `* + ? {m} {m,} {m,n}` with lazy forms;
-  - back references `\1`–`\9`;
+  - back references `\1`–`\9` (ICU: `\10` and more, when there are that many groups);
+  - the scoped options `(?i:…)`, `(?-i:…)`, and `(?i)`, `(?-i)` inside an expression, which hold up to the end of the enclosing group, through its alternatives (not in PostgreSQL, where the embedded options are at the start only);
+  - atomic groups `(?>…)`, possessive quantifiers (`a++` is `(?>a+)`) and comments `(?#…)`, in the flavours which have the lookaheads;
   - the anchors `^ $ \A \z`, and the word boundaries `\b \B` (PostgreSQL: `\y \Y \m \M`).
 
   The flavours differ in a few points:
   - PostgreSQL: `\b` is a backspace.
   - TiDB (RE2): back references and lookaheads are syntax errors.
-  - Oracle: lookaheads are syntax errors.
+  - Oracle: lookaheads are syntax errors; a quantifier on a quantified atom (`a**`) is accepted, and is a syntax error in the others.
+  - `{m,n}` with `n < m` is a syntax error.
+  - ICU (`regexcmp.cpp`): a back reference to a group which the expression does not have is a syntax error (a group opened later is allowed); a lookbehind must have a bounded length.
 - **Matching.** A backtracking matcher returns the matches from a position in the order of preference:
   - a greedy repetition prefers one more iteration and a lazy one one less;
+  - a lookahead keeps the groups of its first match; an atomic group keeps its first match only;
   - an iteration which matches the empty string ends the repetition, as in Perl and Spencer's engine (`()*\1` matches);
   - a back reference compares the text of the group.
 - **The choice of the match.**
@@ -65,8 +70,8 @@ in the manuals of MySQL, MariaDB and Oracle.
 - Not modelled:
   - `regexp_match` and `regexp_matches` (they return arrays) and `regexp_split_to_table` (a table function): arrays and table functions are TODO 2.8 and 3.x;
   - the `x` flag (extended syntax);
-  - Unicode property classes `\p{…}`;
-  - possessive quantifiers, which are read as greedy ones.
+  - Unicode property classes `\p{…}`, and the set operations of ICU (`[a-[:digit:]]`);
+  - the errors of PCRE and PostgreSQL for a back reference to a group which does not exist.
 - Validation: every query of the form `'s' ~ 'p'` and `substring('s' from 'p')` in PostgreSQL's `regex.out`
   that has a single-row result was replayed (49 cases, `src/testing/Test_Regex.v`). The one difference is
   `'a' ~ '$()|^\1'`, which PostgreSQL answers `f`. The test comment says it covers a former infinite loop

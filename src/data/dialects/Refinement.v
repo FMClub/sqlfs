@@ -22,16 +22,16 @@ Definition same_core (d1 d2 : vsem) : Prop :=
   vs_eq3 d2 = vs_eq3 d1 /\ vs_order d2 = vs_order d1 /\ vs_canon d2 = vs_canon d1 /\
   vs_nulls_smallest d2 = vs_nulls_smallest d1 /\ vs_scalar_first d2 = vs_scalar_first d1 /\
   vs_pred_error d2 = vs_pred_error d1 /\ vs_const d2 = vs_const d1 /\ vs_truth_error d2 = vs_truth_error d1 /\
-  vs_cmp_coerce d2 = vs_cmp_coerce d1 /\ vs_unify d2 = vs_unify d1.
+  vs_cmp_coerce d2 = vs_cmp_coerce d1 /\ vs_unify d2 = vs_unify d1 /\ vs_of_rat d2 = vs_of_rat d1.
 
 Lemma dialect_of_with : forall d1 d2, same_core d1 d2 ->
   dialect_of d2 =
   with_interp (TD d1) (dialect_of d1) (vs_interp_symbol d2) (vs_interp_predicate d2) (vs_interp_aggregate d2)
               (vs_table_fun d2) (vs_known_symbol d2) (vs_known_predicate d2) (vs_known_aggregate d2).
 Proof.
-intros d1 d2 [E1 [E2 [E3 [E4 [E5 [E6 [E7 [E8 [E9 [E10 [E11 [E12 E13]]]]]]]]]]]].
+intros d1 d2 [E1 [E2 [E3 [E4 [E5 [E6 [E7 [E8 [E9 [E10 [E11 [E12 [E13 E14]]]]]]]]]]]]].
 unfold dialect_of, with_interp; cbn.
-rewrite E1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E11, E12, E13; reflexivity.
+rewrite E1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E11, E12, E13, E14; reflexivity.
 Qed.
 
 (** [d2] agrees with [d1] on a construct *)

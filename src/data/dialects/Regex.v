@@ -38,7 +38,9 @@ Inductive re : Type :=
   | R_WordB : bool -> re                             (** [\b] ([true]) and [\B] *)
   | R_WordStart : re | R_WordEnd : re                (** PostgreSQL [\m], [\M] *)
   | R_Look : bool -> re -> re                        (** lookahead [(?=r)] ([true]), [(?!r)] *)
-  | R_LookB : bool -> re -> re.                      (** lookbehind [(?<=r)] ([true]), [(?<!r)] *)
+  | R_LookB : bool -> re -> re                       (** lookbehind [(?<=r)] ([true]), [(?<!r)] *)
+  | R_Case : bool -> re -> re                        (** [(?i:r)] ([true]: the case is ignored), [(?-i:r)] *)
+  | R_Atomic : re -> re.                             (** [(?>r)]: the first match of [r] only *)
 
 (** the options of a match *)
 Record ropts : Type := mk_ropts
@@ -121,16 +123,17 @@ Definition is_nl (i : nat) : bool := match at_ i with Some 10 => true | _ => fal
 Definition word_at (i : nat) : bool := match at_ i with Some c => is_word c | None => false end.
 Definition word_before (i : nat) : bool := match i with O => false | S k => word_at k end.
 
-Fixpoint sub_eq (i j : nat) (n : nat) : bool :=
+Fixpoint sub_eq (ic : bool) (i j : nat) (n : nat) : bool :=
   match n with
   | O => true
   | S k => match at_ i, at_ j with
-           | Some a, Some b => (if o_icase o then fold a =? fold b else a =? b) && sub_eq (S i) (S j) k
+           | Some a, Some b => (if ic then fold a =? fold b else a =? b) && sub_eq ic (S i) (S j) k
            | _, _ => false
            end
   end.
 
-Fixpoint m (fuel : nat) (r : re) (st : state) {struct fuel} : list state :=
+(** [ic]: the case is ignored (the option of the match, or the flag of the enclosing group) *)
+Fixpoint m (fuel : nat) (ic : bool) (r : re) (st : state) {struct fuel} : list state :=
   match fuel with
   | O => nil
   | S f =>
@@ -138,28 +141,28 @@ Fixpoint m (fuel : nat) (r : re) (st : state) {struct fuel} : list state :=
     let one (ok : Z -> bool) := match at_ i with Some c => if ok c then [(S i, cs)] else nil | None => nil end in
     match r with
     | R_Empty => [st]
-    | R_Char c => one (fun x => if o_icase o then fold x =? fold c else x =? c)
+    | R_Char c => one (fun x => if ic then fold x =? fold c else x =? c)
     | R_Any => one (fun x => o_dotnl o || negb (x =? 10))
-    | R_Set neg items => one (fun x => xorb neg (existsb (citem_match o x) items))
-    | R_Seq a b => flat_map (m f b) (m f a st)
-    | R_Alt a b => m f a st ++ m f b st
+    | R_Set neg items => one (fun x => xorb neg (existsb (citem_match (mk_ropts ic (o_multiline o) (o_dotnl o)) x) items))
+    | R_Seq a b => flat_map (m f ic b) (m f ic a st)
+    | R_Alt a b => m f ic a st ++ m f ic b st
     | R_Rep a mn mx g =>
       match mn with
-      | S mn' => dedup_states nil (flat_map (m f (R_Rep a mn' (option_map pred mx) g)) (m f a st))
+      | S mn' => dedup_states nil (flat_map (m f ic (R_Rep a mn' (option_map pred mx) g)) (m f ic a st))
       | O =>
         match mx with
         | Some O => [st]
         | _ =>
           (* an iteration which matches the empty string ends the repetition (it is kept once) *)
           let more := flat_map (fun st' => if Nat.eqb (fst st') i then [st']
-                                           else m f (R_Rep a 0 (option_map pred mx) g) st') (m f a st) in
+                                           else m f ic (R_Rep a 0 (option_map pred mx) g) st') (m f ic a st) in
           dedup_states nil (if g then more ++ [st] else st :: more)
         end
       end
-    | R_Group n a => map (fun st' => (fst st', set_cap (pred n) (i, fst st') (snd st'))) (m f a st)
+    | R_Group n a => map (fun st' => (fst st', set_cap (pred n) (i, fst st') (snd st'))) (m f ic a st)
     | R_Back n => match nth_error cs (pred n) with
                   | Some (Some (b, e)) => let k := (e - b)%nat in
-                                          if sub_eq b i k then [((i + k)%nat, cs)] else nil
+                                          if sub_eq ic b i k then [((i + k)%nat, cs)] else nil
                   | _ => nil  (* a group which did not take part in the match matches nothing *)
                   end
     | R_Bol => if Nat.eqb i 0 || (o_multiline o && match i with S k => is_nl k | O => false end) then [st] else nil
@@ -169,10 +172,16 @@ Fixpoint m (fuel : nat) (r : re) (st : state) {struct fuel} : list state :=
     | R_WordB b => if Bool.eqb b (xorb (word_before i) (word_at i)) then [st] else nil
     | R_WordStart => if negb (word_before i) && word_at i then [st] else nil
     | R_WordEnd => if word_before i && negb (word_at i) then [st] else nil
-    | R_Look pos a => if Bool.eqb pos (match m f a st with nil => false | _ => true end) then [st] else nil
+    (* a lookahead keeps the groups of its first match *)
+    | R_Look pos a => match m f ic a st with
+                      | nil => if pos then nil else [st]
+                      | (_, cs') :: _ => if pos then [(i, cs')] else nil
+                      end
     | R_LookB pos a =>
-      let found := existsb (fun j => existsb (fun st' => Nat.eqb (fst st') i) (m f a (j, cs))) (seq 0 (S i)) in
+      let found := existsb (fun j => existsb (fun st' => Nat.eqb (fst st') i) (m f ic a (j, cs))) (seq 0 (S i)) in
       if Bool.eqb pos found then [st] else nil
+    | R_Case b a => m f b a st
+    | R_Atomic a => match m f ic a st with x :: _ => [x] | nil => nil end
     end
   end.
 
@@ -181,14 +190,14 @@ End Match.
 Fixpoint re_size (r : re) : nat :=
   match r with
   | R_Seq a b | R_Alt a b => S (re_size a + re_size b)
-  | R_Rep a _ _ _ | R_Group _ a | R_Look _ a | R_LookB _ a => S (re_size a)
+  | R_Rep a _ _ _ | R_Group _ a | R_Look _ a | R_LookB _ a | R_Case _ a | R_Atomic a => S (re_size a)
   | _ => 1
   end.
 
 Fixpoint ngroups (r : re) : nat :=
   match r with
   | R_Seq a b | R_Alt a b => Nat.max (ngroups a) (ngroups b)
-  | R_Rep a _ _ _ | R_Look _ a | R_LookB _ a => ngroups a
+  | R_Rep a _ _ _ | R_Look _ a | R_LookB _ a | R_Case _ a | R_Atomic a => ngroups a
   | R_Group n a => Nat.max n (ngroups a)
   | _ => 0
   end.
@@ -225,7 +234,7 @@ Fixpoint search_from (o : ropts) (p : policy) (r : re) (s : list Z) (i : nat) (f
   match fuel with
   | O => None
   | S f =>
-    match best p i (m o s (fuel_for r s) r (i, repeat None (ngroups r))) with
+    match best p i (m o s (fuel_for r s) (o_icase o) r (i, repeat None (ngroups r))) with
     | Some x => Some x
     | None => if Nat.leb (List.length s) i then None else search_from o p r s (S i) f
     end
@@ -263,7 +272,7 @@ Fixpoint greediness (r : re) : option bool :=
                        | Some k => if Nat.eqb mn k then greediness a else Some g
                        | None => Some g
                        end
-  | R_Group _ a => greediness a
+  | R_Group _ a | R_Case _ a => greediness a
   | _ => None
   end.
 
@@ -274,8 +283,11 @@ Definition pg_policy (r : re) : policy :=
 
     The syntaxes differ in a few escapes: [flav_pg] reads [\y], [\Y], [\m], [\M] as word boundaries and
     [\b] as a backspace (ARE); [flav_backref] allows back references ([\1] .. [\9]: not in RE2);
-    [flav_look] allows lookaheads. *)
-Record flavor : Type := mk_flavor { flav_pg : bool; flav_backref : bool; flav_look : bool }.
+    [flav_look] allows lookaheads, atomic groups and comments; [flav_icu] is the strictness of ICU (a back
+    reference is to a group already opened, [\10] is the tenth group if there is one, a lookbehind has a
+    bounded length); [flav_nest] allows a quantifier on a quantified atom ([a**]: Oracle). *)
+Record flavor : Type := mk_flavor { flav_pg : bool; flav_backref : bool; flav_look : bool; flav_icu : bool;
+                                    flav_nest : bool }.
 
 Definition class_esc (c : Z) : option citem :=
   if c =? 100 then Some CI_Digit else if c =? 68 then Some (CI_Not CI_Digit)
@@ -349,39 +361,49 @@ Fixpoint parse_int (l : list Z) (acc : Z) (seen : bool) : option (Z * list Z) :=
   end.
 
 (** [{m}], [{m,}], [{m,n}] after the [{] *)
-Definition parse_bound (l : list Z) : option (nat * option nat * list Z) :=
+Definition parse_bound (l : list Z) : option (option (nat * option nat * list Z)) :=
   match parse_int l 0 false with
-  | Some (m, 125 :: r) => Some (Z.to_nat m, Some (Z.to_nat m), r)
-  | Some (m, 44 :: 125 :: r) => Some (Z.to_nat m, None, r)
+  | Some (m, 125 :: r) => Some (Some (Z.to_nat m, Some (Z.to_nat m), r))
+  | Some (m, 44 :: 125 :: r) => Some (Some (Z.to_nat m, None, r))
   | Some (m, 44 :: r) => match parse_int r 0 false with
-                         | Some (n, 125 :: r') => if n <? m then None else Some (Z.to_nat m, Some (Z.to_nat n), r')
+                         | Some (n, 125 :: r') => if n <? m then Some None   (* [{3,2}]: an error *)
+                                                  else Some (Some (Z.to_nat m, Some (Z.to_nat n), r'))
                          | _ => None end
   | _ => None
   end.
 
-(** case folding of a sub-pattern, for the scoped inline flag [(?i:...)] and [((?i)...)]: a letter matches
-    its two cases, and the letter ranges of a class are completed with their other case (the back
-    references of the sub-pattern stay case-sensitive) *)
-Definition other_case_ranges (it : citem) : list citem :=
-  match it with
-  | CI_Range a b =>
-    (if Z.leb (Z.max a 97) (Z.min b 122) then CI_Range (Z.max a 97 - 32) (Z.min b 122 - 32) :: nil else nil) ++
-    (if Z.leb (Z.max a 65) (Z.min b 90) then CI_Range (Z.max a 65 + 32) (Z.min b 90 + 32) :: nil else nil)
-  | CI_Upper | CI_Lower => CI_Alpha :: nil
-  | _ => nil
+(** the text starts with a quantifier *)
+Definition quant_next (l : list Z) : bool :=
+  match l with
+  | 42 :: _ | 43 :: _ | 63 :: _ => true
+  | 123 :: r => match parse_bound r with Some _ => true | None => false end
+  | _ => false
   end.
 
-Fixpoint ci_re (r : re) : re :=
+(** the digits of a back reference of ICU after its first digit ([regexcmp.cpp], [doBackRef]): digits are
+    read while the number is less than the number of groups opened so far; the group may be opened later *)
+Fixpoint back_digits (fuel : nat) (g : nat) (n : Z) (l : list Z) : Z * list Z :=
+  match fuel, l with
+  | S f, c :: r => if is_digit c && (n <? Z.of_nat g) then back_digits f g (n * 10 + c - 48) r else (n, l)
+  | _, _ => (n, l)
+  end.
+
+(** the greatest back reference *)
+Fixpoint max_back (r : re) : nat :=
   match r with
-  | R_Char c => if is_upper c || is_lower c then R_Set false (CI_Range (fold c) (fold c) :: CI_Range (fold c - 32) (fold c - 32) :: nil) else r
-  | R_Set neg items => R_Set neg (items ++ flat_map other_case_ranges items)
-  | R_Seq a b => R_Seq (ci_re a) (ci_re b)
-  | R_Alt a b => R_Alt (ci_re a) (ci_re b)
-  | R_Rep a mn mx g => R_Rep (ci_re a) mn mx g
-  | R_Group n a => R_Group n (ci_re a)
-  | R_Look b a => R_Look b (ci_re a)
-  | R_LookB b a => R_LookB b (ci_re a)
-  | _ => r
+  | R_Seq a b | R_Alt a b => Nat.max (max_back a) (max_back b)
+  | R_Rep a _ _ _ | R_Group _ a | R_Look _ a | R_LookB _ a | R_Case _ a | R_Atomic a => max_back a
+  | R_Back n => n
+  | _ => 0%nat
+  end.
+
+(** the length of the texts which the expression matches is bounded *)
+Fixpoint bounded (r : re) : bool :=
+  match r with
+  | R_Seq a b | R_Alt a b => bounded a && bounded b
+  | R_Rep a _ mx _ => match mx with Some _ => bounded a | None => false end
+  | R_Group _ a | R_Case _ a | R_Atomic a => bounded a
+  | _ => true
   end.
 
 Section Parse.
@@ -407,6 +429,11 @@ with p_seq (fuel : nat) (l : list Z) (g : nat) (acc : re) {struct fuel} : option
     match l with
     | nil => Some (acc, nil, g)
     | 124 :: _ | 41 :: _ => Some (acc, l, g)
+    | 40 :: 63 :: 35 :: r =>   (* a comment [(?#...)] *)
+      if flav_look fl then match take_until 41 r nil with Some (_, r') => p_seq f r' g acc | None => None end else None
+    (* [(?i)], [(?-i)] in an expression: up to the end of the enclosing group, through its alternatives *)
+    | 40 :: 63 :: 105 :: 41 :: r => p_flag f true r g acc
+    | 40 :: 63 :: 45 :: 105 :: 41 :: r => p_flag f false r g acc
     | _ =>
       match p_atom f l g with
       | Some (a, r, g') =>
@@ -419,24 +446,46 @@ with p_seq (fuel : nat) (l : list Z) (g : nat) (acc : re) {struct fuel} : option
     end
   end
 
+with p_flag (fuel : nat) (on : bool) (l : list Z) (g : nat) (acc : re) {struct fuel} : option (re * list Z * nat) :=
+  match fuel with
+  | O => None
+  | S f =>
+    if flav_pg fl then None else
+    let sq (x : re) := match acc with R_Empty => R_Case on x | _ => R_Seq acc (R_Case on x) end in
+    match p_seq f l g R_Empty with
+    | Some (x, 124 :: r, g') => match p_alt f r g' with
+                                | Some (y, r', g'') => Some (R_Alt (sq x) (R_Case on y), r', g'')
+                                | None => None end
+    | Some (x, r, g') => Some (sq x, r, g')
+    | None => None
+    end
+  end
+
 with p_quant (fuel : nat) (a : re) (l : list Z) {struct fuel} : option (re * list Z) :=
   match fuel with
   | O => None
   | S f =>
+    (* a quantifier on a quantified atom is an error, but in Oracle *)
+    let next (q : re) (r : list Z) :=
+        if flav_nest fl then p_quant f q r else if quant_next r then None else Some (q, r) in
     let lazy (mn : nat) (mx : option nat) (r : list Z) :=
         match r with
-        | 63 :: r' => p_quant f (R_Rep a mn mx false) r'
-        | 43 :: r' => if flav_pg fl then None else p_quant f (R_Rep a mn mx true) r'   (* possessive: as greedy *)
-        | _ => p_quant f (R_Rep a mn mx true) r
+        | 63 :: r' => next (R_Rep a mn mx false) r'
+        | 43 :: r' => if flav_pg fl then None else next (R_Atomic (R_Rep a mn mx true)) r'   (* possessive *)
+        | _ => next (R_Rep a mn mx true) r
         end in
     match l with
     | 42 :: r => lazy 0%nat None r
     | 43 :: r => lazy 1%nat None r
     | 63 :: r => lazy 0%nat (Some 1%nat) r
     | 123 :: r => match parse_bound r with
-                  | Some (mn, mx, r') => lazy mn mx r'
+                  | Some (Some (mn, mx, r')) => lazy mn mx r'
+                  | Some None => None
                   | None => Some (a, l)  (* a [{] which is not a bound is a character (handled by the atom) *)
                   end
+    | 40 :: 63 :: 35 :: r =>   (* a comment between the atom and its quantifier *)
+      if flav_look fl then match take_until 41 r nil with Some (_, r') => p_quant f a r' | None => None end
+      else Some (a, l)
     | _ => Some (a, l)
     end
   end
@@ -446,14 +495,16 @@ with p_atom (fuel : nat) (l : list Z) (g : nat) {struct fuel} : option (re * lis
   | O => None
   | S f =>
     match l with
-    (* the scoped flag [i]: [(?i:r)], [(?:(?i)r)] and [((?i)r)] (ICU, PCRE, RE2) *)
+    (* the scoped flag [i]: [(?i:r)], [(?-i:r)] (ICU, PCRE, RE2) *)
     | 40 :: 63 :: 105 :: 58 :: r =>
-      match p_alt f r g with Some (a, 41 :: r', g') => Some (ci_re a, r', g') | _ => None end
-    | 40 :: 63 :: 58 :: 40 :: 63 :: 105 :: 41 :: r =>
-      match p_alt f r g with Some (a, 41 :: r', g') => Some (ci_re a, r', g') | _ => None end
-    | 40 :: 40 :: 63 :: 105 :: 41 :: r =>
-      let n := S g in
-      match p_alt f r n with Some (a, 41 :: r', g') => Some (R_Group n (ci_re a), r', g') | _ => None end
+      if flav_pg fl then None else
+      match p_alt f r g with Some (a, 41 :: r', g') => Some (R_Case true a, r', g') | _ => None end
+    | 40 :: 63 :: 45 :: 105 :: 58 :: r =>
+      if flav_pg fl then None else
+      match p_alt f r g with Some (a, 41 :: r', g') => Some (R_Case false a, r', g') | _ => None end
+    | 40 :: 63 :: 62 :: r =>   (* (?> *)
+      if flav_look fl && negb (flav_pg fl)
+      then match p_alt f r g with Some (a, 41 :: r', g') => Some (R_Atomic a, r', g') | _ => None end else None
     | 40 :: 63 :: 58 :: r =>   (* (?: *)
       match p_alt f r g with Some (a, 41 :: r', g') => Some (a, r', g') | _ => None end
     | 40 :: 63 :: 61 :: r =>   (* (?= *)
@@ -461,9 +512,15 @@ with p_atom (fuel : nat) (l : list Z) (g : nat) {struct fuel} : option (re * lis
     | 40 :: 63 :: 33 :: r =>   (* (?! *)
       if flav_look fl then match p_alt f r g with Some (a, 41 :: r', g') => Some (R_Look false a, r', g') | _ => None end else None
     | 40 :: 63 :: 60 :: 61 :: r =>   (* (?<= *)
-      if flav_look fl then match p_alt f r g with Some (a, 41 :: r', g') => Some (R_LookB true a, r', g') | _ => None end else None
+      if flav_look fl then match p_alt f r g with
+                           | Some (a, 41 :: r', g') => if flav_icu fl && negb (bounded a) then None
+                                                       else Some (R_LookB true a, r', g')
+                           | _ => None end else None
     | 40 :: 63 :: 60 :: 33 :: r =>   (* (?<! *)
-      if flav_look fl then match p_alt f r g with Some (a, 41 :: r', g') => Some (R_LookB false a, r', g') | _ => None end else None
+      if flav_look fl then match p_alt f r g with
+                           | Some (a, 41 :: r', g') => if flav_icu fl && negb (bounded a) then None
+                                                       else Some (R_LookB false a, r', g')
+                           | _ => None end else None
     | 40 :: 63 :: _ => None
     | 40 :: r => let n := S g in
                  match p_alt f r n with Some (a, 41 :: r', g') => Some (R_Group n a, r', g') | _ => None end
@@ -479,7 +536,11 @@ with p_atom (fuel : nat) (l : list Z) (g : nat) {struct fuel} : option (re * lis
       | Some ci => Some (R_Set false [ci], r, g)
       | None =>
         if (49 <=? c) && (c <=? 57) then
-          (if flav_backref fl then Some (R_Back (Z.to_nat (c - 48)), r, g) else None)
+          (if negb (flav_backref fl) then None
+           else if flav_icu fl then
+             let '(n, r') := back_digits (List.length r) g (c - 48) r in
+             Some (R_Back (Z.to_nat n), r', g)
+           else Some (R_Back (Z.to_nat (c - 48)), r, g))
         else if c =? 65 then Some (R_Start, r, g)
         else if (c =? 122) || (c =? 90) then Some (R_End, r, g)
         else if flav_pg fl then
@@ -502,15 +563,15 @@ End Parse.
 (** the expression of a pattern; [None] if it is not well formed *)
 Definition parse_re (fl : flavor) (p : list Z) : option re :=
   match p_alt fl (4 * S (List.length p)) p 0 with
-  | Some (r, nil, _) => Some r
+  | Some (r, nil, _) => if flav_icu fl && Nat.ltb (ngroups r) (max_back r) then None else Some r
   | _ => None
   end.
 
-Definition fl_pg := mk_flavor true true true.
-Definition fl_icu := mk_flavor false true true.      (* MySQL 8, OceanBase MySQL mode *)
-Definition fl_pcre := mk_flavor false true true.     (* MariaDB *)
-Definition fl_re2 := mk_flavor false false false.    (* TiDB: Go's regexp *)
-Definition fl_ora := mk_flavor false true false.     (* Oracle *)
+Definition fl_pg := mk_flavor true true true false false.
+Definition fl_icu := mk_flavor false true true true false.      (* MySQL 8, OceanBase MySQL mode *)
+Definition fl_pcre := mk_flavor false true true false false.     (* MariaDB *)
+Definition fl_re2 := mk_flavor false false false false false.    (* TiDB: Go's regexp *)
+Definition fl_ora := mk_flavor false true false false true.     (* Oracle *)
 
 (** * Replacement
 

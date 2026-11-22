@@ -92,8 +92,12 @@ Example my_rx_inline : val MySQL (e_case (pred "regexp" [str "ABC"; str "(?i)^ab
 Proof. check. Qed.
 (** scoped inline flags ([(?i:a)b]: the [a] in either case, the [b] in lower case) *)
 Example my_rx_scoped : (val MySQL (e_case (pred "regexp" [str "Ab"; str "(?i:a)b"]) (int 1) (int 0)),
-                        val PostgreSQL (e_case (pred "~" [str "Ab"; str "((?i)a)b"]) (int 1) (int 0)),
-                        val PostgreSQL (e_case (pred "~" [str "aB"; str "((?i)a)b"]) (int 1) (int 0))) = ("1", "1", "0").
+                        val MySQL (e_case (pred "regexp" [str "Ab"; str "((?i)a)(?-i)b"]) (int 1) (int 0)),
+                        val MySQL (e_case (pred "regexp" [str "aB"; str "((?i)a)(?-i)b"]) (int 1) (int 0)),
+                        (* PostgreSQL has the embedded options at the start of the expression only
+                           ([regc_lex.c]: REG_BADRPT) *)
+                        val PostgreSQL (e_case (pred "~" [str "Ab"; str "((?i)a)b"]) (int 1) (int 0)))
+                       = ("1", "1", "0", "ERROR").
 Proof. check. Qed.
 (** composite interval units: [INTERVAL 1 DAY_HOUR] is one hour, ['1 2'] one day and two hours *)
 Example my_interval_day_hour :

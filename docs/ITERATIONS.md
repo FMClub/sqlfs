@@ -23,3 +23,11 @@ next item. One entry per iteration, newest last.
 | 15 | TODO 8.21, 8.27 | `ABS` / `ROUND` out of the range of `BIGINT`; `TRIM (LEADING FROM s)` | — |
 | 16 | TODO 8.29: the relation theorems of 6.1 and 6.3 | two hypotheses (`Hu`, `Hperm`) were false for the instance: replaced by ones which hold; `Test_Relate.v` instantiates `sql_full_agree3` | TODO 8.30 (`Hnull` and the typed NULLs) |
 | 17 | TODO 8.25 (windows) | acceptance: `NTILE (0)`, frames which start after their end, `LAG` / `LEAD` without `ORDER BY` in MariaDB; the extracted interpreter still builds and agrees with `vm_compute` on two files | — |
+| 18 | TODO 8.25 (regular expressions) | syntax errors of the regular expressions (`a**`, `{37,17}`, ICU: unknown group, unbounded lookbehind); scoped `(?-i)`, atomic groups, comments, `\10`, groups of a lookahead; an example of `Test_Closeout.v` gave PostgreSQL an option inside an expression, which it rejects | — |
+| 19 | TODO 8.22 | JSON paths of the MySQL family: `.*`, `[*]`, ranges, `last`, `**`, the wrapping of a non-array; `JSON_EXTRACT` with several paths | — |
+| 20 | TODO 8.12 | PostgreSQL `to_char (number, format)`: a model of `formatting.c` (`PgNumFormat.v`), checked on the examples of the manual and on `numeric.sql` | — |
+| 21 | TODO 8.32, 8.34 | PostgreSQL texts of numbers: integers in bases 16, 8, 2 with underscores, `numeric` with an exponent, string literals of `VALUES`, `%` on NaN; the runners compile a file over its time limit case by case | 8.34 (found: a newly computable case made a whole file time out) |
+| 22 | TODO 8.31 | `PERCENT_RANK` and `CUME_DIST` typed by dialect (`vs_of_rat`): doubles, 10 decimals in MariaDB, exact in Oracle mode | — |
+| 23 | TODO 8.25 (windows) | MariaDB's mandatory `ORDER BY` for the ranks; `RANGE` frames over other than one sort key; the queries of another mysqltest connection are not translated (privileges) | — |
+| 24 | TODO 8.32 | PostgreSQL: doubles with an exponent, `log (b, x)` of `numeric` on NaN and the infinities | the `-0` of `power ('-inf'::numeric, -3)`: a limit of the representation of the special `numeric` values |
+| 25 | TODO 8.35: audit of iterations 18 to 24 | `JSON_TABLE` row paths with wildcards inside them (`my_seek`); generated tables and conformance summary brought up to date | — |
