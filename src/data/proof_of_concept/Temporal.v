@@ -199,6 +199,7 @@ Definition parse_time (s : string) : option Z :=
   | _ => None
   end.
 
+(** [YYYY-MM-DD[ HH:MM:SS[.ffffff]]], with an optional era after the time too ([4714-11-24 00:00:00 BC]) *)
 Definition parse_timestamp (s : string) : option Z :=
   match split_at " " s with
   | [d] => match parse_date d with Some days => Some (ts_of days 0) | None => None end
@@ -206,6 +207,13 @@ Definition parse_timestamp (s : string) : option Z :=
               | Some days, Some u => if u <? usec_per_day then Some (ts_of days u) else None
               | _, _ => None
               end
+  | [d; t; era] =>
+    if String.eqb era "BC" || String.eqb era "AD" then
+      match parse_date (d ++ " " ++ era), parse_time t with
+      | Some days, Some u => if u <? usec_per_day then Some (ts_of days u) else None
+      | _, _ => None
+      end
+    else None
   | _ => None
   end.
 

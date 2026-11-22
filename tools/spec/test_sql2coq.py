@@ -324,11 +324,54 @@ def dates_before_the_common_era():
         datetime.date(2040, 4, 10) - datetime.date(1970, 1, 1)).days
     # 0001-01-01 is 719162 days before the epoch; 1 BC (year 0) is a leap year of 366 days
     assert sql2coq.temporal_value('0001-01-01 BC', 'date') == '(NullValues.VDate (%d))' % (-719162 - 366)
+    # a timestamp of 1 BC: the day of the date, and the seconds of the time
+    assert sql2coq.temporal_value('0001-01-01 00:00:01 BC', 'timestamp') == '(NullValues.VTs (%d) 0)' % (
+        (-719162 - 366) * 86400 * 1000000 + 1000000)
     try:
         sql2coq.temporal_value('1997-02-29', 'date')
         assert False, 'not a date'
     except sql2coq.Skip:
         pass
+
+
+@test
+def prepared_statement_after_a_result():
+    """Audit after PR 74: a PREPARE after a result is a statement, not a row (TiDB executor/jointest/join)."""
+    out = translate('TiDB', {'a': (
+        "select 2;\n2\n2\nprepare stmt1 from 'select 1';\nset @a = 1;\nexecute stmt1 using @a;\n1\n1\n")})['a']
+    assert '[["2"]]' in case(out, 'a:0'), out
+
+
+@test
+def sorted_result():
+    """Audit after PR 74: under --sorted_result, mysqltest sorts the rows before recording them: the case is
+    unordered, even with an ORDER BY (TiDB executor/jointest/join recorded ORDER BY a DESC as 1, 2, 2)."""
+    with tempfile.TemporaryDirectory() as d:
+        script = ("create table t1 (a int);\ninsert into t1 values (1),(2),(2);\n--sorted_result\n"
+                  "select * from t1 order by a desc;\nselect * from t1 order by a desc;\n")
+        result = ("create table t1 (a int);\ninsert into t1 values (1),(2),(2);\n"
+                  "select * from t1 order by a desc;\na\n1\n2\n2\nselect * from t1 order by a desc;\na\n2\n2\n1\n")
+        open(os.path.join(d, 'a.test'), 'w').write(script)
+        open(os.path.join(d, 'a.result'), 'w').write(result)
+        out = os.path.join(d, 'out')
+        subprocess.run([sys.executable, TOOL, '--dialect', 'TiDB', '--lenient', '--outdir', out, os.path.join(d, 'a.result')],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        text = open(os.path.join(out, 'Spec_a.v')).read()
+        assert re.search(r'mk_case "a:2" false', text) and re.search(r'mk_case "a:3" true', text), text
+
+
+@test
+def unfollowed_changes():
+    """Audit after PR 74 (TODO 8.28): statements which change tables and which the translator does not follow make
+    them unreliable: EXPLAIN ANALYZE of a change, TiDB's BATCH DML, INSERT IGNORE into a table with a foreign key,
+    a temporary table."""
+    out = translate('TiDB', {'a': (
+        "create table t (a int);\ninsert into t values (1);\nexplain analyze insert into t values (2);\n"
+        "select * from t;\na\n1\n2\n"
+        "create table p (i int primary key);\ncreate table c (i int, foreign key (i) references p (i));\n"
+        "insert into p values (1);\ninsert ignore into c values (1), (2);\nselect * from c;\ni\n1\n"
+        "create table u (a int);\ninsert into u values (1);\nselect * from u;\na\n1\n")})['a']
+    assert 'select * from t;' not in out and 'select * from c;' not in out and 'select * from u;' in out, out
 
 
 def main():

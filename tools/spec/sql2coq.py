@@ -626,6 +626,10 @@ class P:
                 while self.eat_op(','):
                     using.append(self.ident())
                 self.need_op(')')
+            # TiDB has FULL OUTER JOIN ... ON, not with USING nor NATURAL (Error 1235), which the syntax of
+            # SqlFull, where USING is an ON condition, cannot tell apart: not translated
+            if DIALECT == 'TiDB' and jt == 'full' and using is not None:
+                raise Skip('full join using (TiDB: not supported)')
             item = ('join', jt, item, r, cond, using)
         return item
 
@@ -1396,7 +1400,7 @@ def temporal_value(txt, ty, fsp=0):
             if m == 2 and dd == 29 and not (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)):
                 raise ValueError(t)
             return '(NullValues.VDate (%d))' % days_from_civil(y, m, dd)
-        if bc:
+        if bc and ty == 'time':
             raise Skip('temporal value before the common era')
         if ty == 'time':
             h, m, s = t.split(':')
@@ -1408,6 +1412,12 @@ def temporal_value(txt, ty, fsp=0):
             t, f = t.split('.')
             # the fractional seconds are rounded to the precision of the column
             frac = int(round(float('0.' + f) * 10 ** fsp)) * 10 ** (6 - fsp)
+        if bc:
+            # the year of the calendar is 1 - Y; datetime has no year 0: the day and the time apart
+            day = temporal_value(t[:10] + ' BC', 'date')
+            days = int(re.search(r'\((-?\d+)\)', day).group(1))
+            tm = datetime.datetime.strptime('2000-01-01' + t[10:], fmt) - datetime.datetime(2000, 1, 1)
+            return '(NullValues.VTs (%d) %d)' % ((days * 86400 + tm.seconds) * 1000000 + frac, fsp)
         d = datetime.datetime.strptime(t, fmt)
         us = ((d - epoch).days * 86400 + (d - epoch).seconds) * 1000000 + frac
         return '(NullValues.VTs (%d) %d)' % (us, fsp)
@@ -1788,6 +1798,7 @@ def rollup_sets(l):
     return [l[:k] for k in range(len(l), -1, -1)]
 
 
+DIALECT = ''
 ORDER_DEPENDENT_WINDOW = ('row_number', 'ntile', 'lag', 'lead', 'first_value', 'last_value', 'nth_value')
 EXPECT_ERROR = False
 
@@ -2461,6 +2472,10 @@ def stmt_complete(s):
 
 def looks_like_statement(l):
     return bool(re.match(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|commit|rollback|use|analyze|call|start|begin)\b', l, re.I)
+                # a prepared statement (TiDB executor/jointest/join: prepare stmt1 from '...';)
+                or re.match(r'^(prepare\s+\w+\s+from|execute\s+\w+(\s+using\b|\s*;)|deallocate\s+prepare)', l, re.I)
+                # TiDB's non-transactional DML, and a VALUES statement (session: VALUES ( ('foo'), ROW('bar') );)
+                or re.match(r'^(batch\s+(on\s+\w+\s+)?limit\s+\d+|values\s*(\(|row\b))', l, re.I)
                 # the connection commands of mysqltest, as the result file echoes them
                 or re.match(r'^(connect\s+\w+,.*;|connection\s+\w+;|disconnect\s+\w+;)$', l, re.I))
 
@@ -2794,10 +2809,17 @@ def test_items(test_src, blocks):
     stmts = []
     cur = ''
     pending_error = False
+    pending_sorted = False
+    sorted_stmts = set()
     for line in test_src.split('\n'):
         st = line.strip()
         if not cur:
             if st == '' or st.startswith('#'):
+                continue
+            # --sorted_result: mysqltest sorts the rows of the next result before it records them, so that their
+            # order is not the order of the engine (TiDB executor/jointest/join: ORDER BY a DESC recorded 1, 2, 2)
+            if re.match(r'^(--\s*)?sorted_result\s*;?$', st, re.I):
+                pending_sorted = True
                 continue
             if st.startswith('--'):
                 if re.match(r'^--\s*error\b', st):
@@ -2812,11 +2834,16 @@ def test_items(test_src, blocks):
             # several statements on one line: each is a statement of the script
             parts = split_statements(cur.strip())
             for k, part in enumerate(parts):
+                if pending_sorted and k == 0:
+                    sorted_stmts.add(len(stmts))
                 stmts.append((part, pending_error and k == 0))
             cur = ''
             pending_error = False
+            pending_sorted = False
     items = []
     bi = 0
+    SORTED_ITEMS.clear()
+    SORTED_ITEMS.update(sorted_stmts)
     for text, err in stmts:
         found = None
         for j in range(bi, min(bi + 8, len(blocks))):
@@ -2833,6 +2860,8 @@ def test_items(test_src, blocks):
 
 LENIENT = False
 USER_FUNCS = set()
+# the items of the script whose result mysqltest sorted (--sorted_result): compared as unordered
+SORTED_ITEMS = set()
 
 
 # the names of the cases of the result files whose base name is not unique among the files of a run
@@ -2841,6 +2870,7 @@ BASE_NAMES = {}
 
 def process(path, out, stats):
     USER_FUNCS.clear()
+    SORTED_ITEMS.clear()
     VIEWS.clear()
     import os
     if os.path.getsize(path) > 3000000:
@@ -2924,7 +2954,7 @@ def process(path, out, stats):
         if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?(sql_mode|names|'
                                 r'character_set_\w+|collation_\w+|time_zone|div_precision_increment|'
                                 r'tidb_enable_new_collation\w*|default_collation\w*|group_concat_max_len|'
-                                r'tidb_enable_noop_functions)\b|^\s*set\s+(character\s+set|charset)\b', s, re.I):
+                                r'tidb_enable_noop_functions|tidb_enable_cascades_planner)\b|^\s*set\s+(character\s+set|charset)\b', s, re.I):
             # (--lenient) the semantics of the rest of the script depends on the new sql_mode, collation, character
             # set, time zone or precision: stop
             stats['skip']['after a change of the session'] = stats['skip'].get('after a change of the session', 0) + len(items) - bi
@@ -2935,6 +2965,16 @@ def process(path, out, stats):
             if re.match(r'^\s*(begin|start\s+transaction)\b', s, re.I):
                 in_txn = True
             ends = re.match(r'^\s*(commit|rollback|end|abort)\b', s, re.I)
+            # statements which change tables and which the translator does not follow (TODO 8.28): EXPLAIN ANALYZE
+            # of a change runs it; TiDB's non-transactional BATCH ... DML; a temporary table shadows the table of
+            # its name; the tables they mention are unreliable
+            if re.match(r'^\s*(explain\s+analyze\s+(insert|update|delete|replace)|batch\b)', s, re.I) or \
+               re.match(r'^\s*create\s+(global\s+|local\s+)?temporary\s+table\b', s, re.I):
+                for t in tables.values():
+                    if re.search(r'\b' + re.escape(t.name) + r'\b', s, re.I):
+                        t.ok = False
+                stats['skip']['unfollowed change'] = stats['skip'].get('unfollowed change', 0) + 1
+                continue
             # a child (INHERITS, PARTITION OF) adds its rows to the parent: the parent is unreliable
             for m in re.finditer(r'\b(?:inherits\s*\(\s*|partition\s+of\s+)(\w+)', s, re.I):
                 if m.group(1).lower() in tables:
@@ -2960,6 +3000,10 @@ def process(path, out, stats):
                     in_txn = False
                 stats['skip']['transaction or routine'] = stats['skip'].get('transaction or routine', 0) + 1
                 continue
+        # LAST_INSERT_ID () is the last key which the session generated, which the translator does not follow
+        if re.match(r'^\s*select\b', s, re.I) and re.search(r'\blast_insert_id\s*\(', s, re.I):
+            stats['skip']['session state'] = stats['skip'].get('session state', 0) + 1
+            continue
         if USER_FUNCS and re.search(r'\b(' + '|'.join(map(re.escape, USER_FUNCS)) + r')\s*\(', s, re.I):
             stats['skip']['user-defined function'] = stats['skip'].get('user-defined function', 0) + 1
             continue
@@ -3049,6 +3093,10 @@ def process(path, out, stats):
             elif head == 'insert':
                 try:
                     t, rows = parse_insert(toks, tables)
+                    # INSERT IGNORE into a table with a foreign key drops the rows whose parent does not exist
+                    # (TiDB executor/foreign_key), which the translator does not check: the table is unreliable
+                    if getattr(t, 'parents', []) and re.match(r'^\s*insert\s+ignore\b', s, re.I):
+                        t.ok = False
                     if t.ok:
                         t.rows.extend(rows)
                 except Skip:
@@ -3151,6 +3199,8 @@ def process(path, out, stats):
                     cases.append('  mk_case_limit %s %d [%s] %s %s %s' % (
                         coq_str('%s:%d' % (base, bi)), qt.limit_any, '; '.join(tabs), cq, exp, sql_txt))
                 else:
+                    if bi in SORTED_ITEMS:
+                        ordered = False
                     cases.append('  mk_case %s %s [%s] %s %s %s' % (
                         coq_str('%s:%d' % (base, bi)), 'true' if ordered else 'false', '; '.join(tabs), cq, exp, sql_txt))
                 stats['translated'] += 1
@@ -3196,7 +3246,8 @@ def main():
             continue
         args = args[2:]
     import os
-    global ENGINE
+    global ENGINE, DIALECT
+    DIALECT = dialect
     ENGINE = {'PostgreSQL': 'postgresql', 'SQLite': 'sqlite', 'OceanBaseOracle': 'oracle'}.get(dialect, 'mysql')
     global SERVER_VERSION
     SERVER_VERSION = {'MariaDB': 110400, 'TiDB': 80011, 'OceanBaseMySQL': 50725, 'PolarDB': 80018}.get(dialect, 80400)
