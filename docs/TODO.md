@@ -985,3 +985,73 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
     difference.
   - `numeric:754` and `numeric:996`, on numbers of 131072 digits: the integers of the model are binary terms, whose
     multiplication is quadratic (TODO 8.15).
+
+## Phase 9 — Backlog after PR 75
+
+Found by the audit after PR 75 (the conformance runs of the commit `b6a731a`, the statistics of the translator,
+the code). The numbers are the queries concerned in those runs.
+
+### Coverage of the conformance runs (high)
+- **9.1 Changes of the session**: a script stops at its first `SET` of `sql_mode`, a collation, `NAMES`, `time_zone`
+  or `div_precision_increment` (skipped: TiDB 20,674, MySQL 12,633, MariaDB 629). The model already has these
+  settings (`my_session`); the translator should go on with the dialect of the new session (a dialect per case),
+  and stop only for a setting which the model does not have.
+- **9.2 `WITH RECURSIVE` in the translator**: the parser rejects it (`Skip('recursive with')`), while `SqlFull.v`
+  has `SQ_WithRec` (TODO 3.6) (PostgreSQL 92, TiDB 118, MariaDB 39).
+- **9.3 Transactions in the replay**: `BEGIN` ... `COMMIT` / `ROLLBACK` / `SAVEPOINT` make the tables unreliable;
+  they can be followed on the tables of the translator (PostgreSQL 818, TiDB 1,201, MySQL 546).
+- **9.4 Changes of the tables**: `UPDATE`, `DELETE`, `INSERT ... SELECT` make their tables unreliable (PostgreSQL 482,
+  TiDB 1,400, MySQL 1,291, OceanBase 494): apply the simple ones in the replay (constants, conditions on columns), or
+  evaluate them with the model.
+- **9.5 Parser gaps**: `db.t` (TiDB 542, MySQL 312), `t.*` (PostgreSQL 45, TiDB 73), a string as an alias
+  `SELECT 1 'a'` (MySQL 142), and the families `expected )` / `primary ('op' ...` (MySQL 809, TiDB 578, PostgreSQL
+  152), to be broken down by construct first.
+- **9.6 Constructs of the model which the translator does not write**: `ROW (...)` (MySQL 54), `ARRAY[...]`
+  (PostgreSQL 55), window functions with `DISTINCT` or `FILTER` (MariaDB 43), casts to more PostgreSQL types (227).
+- **9.7 Non-ASCII strings** (MySQL 220, OceanBase 41): the strings of the model are Coq strings of ASCII
+  characters; needs a representation by code points, with the byte or character semantics of the character set.
+- **9.8 Files over the memory limit**: MariaDB `union` (all its cases), TiDB `index_merge_reader` (13 cases).
+  `compile_spec.sh` splits a file over its time limit only; split it when it runs out of memory too, then find the
+  case which needs the memory.
+
+### Failures left which the model can fix (medium)
+- **9.9 MySQL functions**: `LPAD` / `RPAD` with an empty padding (6 cases), `INTERVAL ()` with NULL arguments (6),
+  `EXTRACT` of the units `..._MICROSECOND` (4), `CAST` of an unsigned to `SIGNED` (2, it wraps), `DATEDIFF` / `SUBTIME` of
+  a number read as a datetime (4), an invalid date string compared with a `DATE` (3, an error), the comparison of a
+  `VARCHAR` (1), the precedence of a chained `BETWEEN` (1, parser).
+- **9.10 Static errors** (the rest of 8.25): the aliases and CTE names of MySQL are case sensitive (`derived_cs`, 4)
+  and two CTE names equal up to the case are an error (`derived_ci`, 2); a position of `ORDER BY` / `GROUP BY` beyond
+  the select list (2); `ESCAPE` with a subquery (1); a window ordered by an alias of the same block; TiDB: aliases in
+  a `WINDOW` clause (2), `USE INDEX` on a view (1), `ONLY_FULL_GROUP_BY` in a scalar subquery (1).
+- **9.11 Harness**: the version comments `/*!NNNNNN*/` and `--2` (MySQL `comments`, 5), a multi-line statement echoed
+  as rows (`date_formats:0`), `RENAME TABLE` read as a row (`lowercase_table:12`).
+- **9.12 TiDB's doubles**: `tan`, `cot`, `exp` of Go's math library, which are not correctly rounded (4): model its
+  algorithms for TiDB, or record them as an implementation detail.
+- **9.13 Server state**: roles (9), locks (7), XA, `RESET CONNECTION`, time zones, error simulation count as failures;
+  the translator should not translate them (state which the model does not have), as it does for `LAST_INSERT_ID`.
+
+### Model and proofs
+- **9.14 Typed NULLs of the relation theorems** (8.30).
+- **9.15 MariaDB's incremental aggregates of moving frames** (8.37, not done): a field of the record `dialect` for the
+  aggregates of a frame from the frames before it, and the proofs which relate dialects.
+- **9.16 Long numbers** (the rest of 8.15): numbers of 131,072 digits; machine integers (`Uint63`, `PrimInt63`) or
+  another representation of the decimals.
+- **9.17 Ledger gaps** (`OPEN_ISSUES.md` I9): the value of a bare column in SQLite, MariaDB, OceanBase (rows 5, 20),
+  time zones other than UTC (row 12), Unicode case folding (row 24).
+- **9.18 Further engines** (8.7): DuckDB, then CockroachDB.
+
+### Code and maintenance
+- **9.19 Stopgaps of PR 75 to replace by explicit fields**: the symbols `__datestyle` / `__client_text` of
+  `PostgreSQL_regress`, the pseudo-collation `float8out` of `SpecRunner.v`, the marker `k / 10 = 40` of the special
+  `numeric` values, MariaDB recognised by `ms_regex = 1` in `MySQL.v`.
+- **9.20 Stable identifiers of the cases**: an identifier is the position of the statement in its script, which moves
+  when the translator counts another directive (`roles:52` became `roles:70`); a hash of the statement and its
+  occurrence would let runs be compared case by case.
+- **9.21 `summary.py`** reads the generated files to count the cases of a file over the limit, which the next run
+  deletes; the runner should print the number of cases of each file in its log.
+- **9.22 A conformance smoke test in CI**: a fixed sample of cases (with the result files it needs), so that a
+  regression of the harness like 8.36 is seen before a full run.
+- **9.23 `tools/spec/sql2coq.py`** is one file of 3,300 lines: lexer and parser, translation, replay of the scripts,
+  command line.
+- **9.24 `OPEN_ISSUES.md` I9** lists as open rows 16 (arrays), 18b (ordered-set aggregates), 21 (row values) and 22
+  (static typing), which are done (TODO 2.8, 3.7, 6.2, `Aggregates.v`).
