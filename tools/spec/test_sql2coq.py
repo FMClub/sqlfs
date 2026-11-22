@@ -259,6 +259,15 @@ def split_of_a_file_of_cases():
         assert (n, sorted(fails), unfinished) == (3, ['a:1'], 1), (n, fails, unfinished)
 
 
+@test
+def queries_of_another_connection():
+    """Iteration 23: the queries run under a connection other than the default one are not translated."""
+    out = translate('MariaDB', {'a': (
+        "select 1;\n1\n1\nconnect  u1,'localhost',u1,,;\nconnection u1;\nselect 2;\n2\n2\n"
+        "disconnect u1;\nconnection default;\nselect 3;\n3\n3\n")})['a']
+    assert 'select 1;' in out and 'select 3;' in out and 'select 2;' not in out, out
+
+
 def main():
     failed = 0
     for t in TESTS:

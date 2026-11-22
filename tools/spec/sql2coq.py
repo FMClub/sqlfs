@@ -2371,7 +2371,9 @@ def stmt_complete(s):
 
 
 def looks_like_statement(l):
-    return bool(re.match(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|commit|rollback|use|analyze|call|start|begin)\b', l, re.I))
+    return bool(re.match(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|commit|rollback|use|analyze|call|start|begin)\b', l, re.I)
+                # the connection commands of mysqltest, as the result file echoes them
+                or re.match(r'^(connect\s+\w+,.*;|connection\s+\w+;|disconnect\s+\w+;)$', l, re.I))
 
 
 # the AUTO_INCREMENT columns (their positions) of the tables
@@ -2711,6 +2713,10 @@ def test_items(test_src, blocks):
             if st.startswith('--'):
                 if re.match(r'^--\s*error\b', st):
                     pending_error = True
+                # --connect (name, ...) and --connection name: the connection of the statements which follow
+                m = re.match(r'^--\s*(connection|connect)\b\s*\(?\s*(\w+)', st, re.I)
+                if m:
+                    stmts.append(('connection %s' % m.group(2), False))
                 continue
         cur += line + '\n'
         if stmt_complete(cur):
@@ -2811,9 +2817,20 @@ def process(path, out, stats):
         stats['skipped_files'] += 1
         return
     in_txn = False
+    other_conn = False
     for bi, (stmt, res, expect_err) in enumerate(items):
         s = stmt.strip()
         if len(s) > 20000:
+            continue
+        # mysqltest's connect / connection: the queries of a connection other than the default one are not
+        # translated (their results depend on the privileges of its user and on its session: MariaDB
+        # cte_nonrecursive_not_embedded reads a table which the user may not read)
+        m = re.match(r'^\s*(connection|connect)\b\s*\(?\s*(\w+)', s, re.I)
+        if m:
+            other_conn = m.group(2).lower() != 'default'
+            continue
+        if other_conn:
+            stats['skip']['another connection'] = stats['skip'].get('another connection', 0) + 1
             continue
         if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?(sql_mode|names|'
                                 r'character_set_\w+|collation_\w+|time_zone|div_precision_increment|'

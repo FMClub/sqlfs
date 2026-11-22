@@ -117,3 +117,28 @@ Example frame_ok :
   map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Rows (Preceding 1) Current_Row)) [o_by (col c0) Asc]))
       [PostgreSQL; MySQL; MariaDB; SQLite] = [true; true; true; true].
 Proof. check. Qed.
+
+(** iteration 23 (TODO 8.25): MariaDB requires an [ORDER BY] for the ranks too ([is_order_list_mandatory]); a
+    [RANGE] frame with an offset needs exactly one sort key in every engine, and any [RANGE] frame bounded at one
+    end needs it in MariaDB ([ER_RANGE_FRAME_NEEDS_SIMPLE_ORDERBY]) *)
+Example rank_without_order :
+  (map (fun d => accepts_q d (win w_rank [])) [PostgreSQL; MySQL; MariaDB; SQLite],
+   map (fun d => accepts_q d (win w_cume_dist [])) [PostgreSQL; MariaDB],
+   map (fun d => accepts_q d (win w_row_number [])) [PostgreSQL; MariaDB],
+   accepts_q MariaDB (win w_rank [o_by (col c0) Asc]))
+  = ([true; true; false; true], [true; false], [true; true], true).
+Proof. check. Qed.
+Definition two_keys := [o_by (col c0) Asc; o_by (col c0) Desc].
+Example range_keys :
+  (map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Range (Preceding 1) Current_Row)) two_keys))
+       [PostgreSQL; MySQL; MariaDB; SQLite],
+   map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Range (Preceding 1) Current_Row)) []))
+       [PostgreSQL; MariaDB],
+   map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Range (Preceding 1) Current_Row)) [o_by (col c0) Asc]))
+       [PostgreSQL; MySQL; MariaDB; SQLite],
+   map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Range Unbounded_Preceding Current_Row)) two_keys))
+       [PostgreSQL; MySQL; MariaDB; SQLite],
+   map (fun d => accepts_q d (win (w_agg "sum" (col c0) (Frame_Range Unbounded_Preceding Unbounded_Following)) two_keys))
+       [PostgreSQL; MariaDB])
+  = ([false; false; false; false], [false; false], [true; true; true; true], [true; true; false; true], [true; true]).
+Proof. check. Qed.

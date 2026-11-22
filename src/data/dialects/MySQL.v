@@ -1027,7 +1027,7 @@ Definition my_supports (f : feature) : bool :=
   match f with
   | F_Full_Join | F_Frame_Groups | F_Filter_Agg | F_Nulls_Order => false
   (* no [EXCLUDE] in frames; [RESPECT NULLS] and [FROM FIRST] only *)
-  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate | F_Frame_Bounds | F_Ntile_Zero => false
+  | F_Frame_Exclusion | F_Null_Treatment | F_From_Last | F_Rec_Aggregate | F_Group_Aggregate | F_Frame_Bounds | F_Ntile_Zero | F_Range_Offset_Keys => false
   (* [ONLY_FULL_GROUP_BY] is in the default [sql_mode]; functional dependencies are not modelled *)
   | F_Fetch_Ties | F_Fetch_Percent => false
   (* only [WITH ROLLUP] *)
