@@ -250,8 +250,19 @@ Definition hyp_agg (which : string) (desc : bool) (isnull : value -> bool) (orde
   match pairs_of l with
   | nil => if String.eqb which "rank" || String.eqb which "dense_rank" then Value_Z (Some 1)
            else to_float false (if String.eqb which "cume_dist" then Qc_of_Z 1 else Qc_of_Z 0)
-  | (_, h) :: _ =>
+  | (_, h0) :: _ =>
     let xs := map fst (pairs_of l) in
+    (* an untyped literal takes the type of the key ([select_common_type]): [rank ('3') WITHIN GROUP (ORDER BY x)]
+       with an integer [x] ranks the number 3 *)
+    let numeric (v : value) := match v with
+                               | Value_Z (Some _) | Value_I (Some _) | Value_Q (Some _) | Value_D (Some _)
+                               | Value_F (Some _) => true
+                               | _ => false end in
+    let h := match h0 with
+             | Value_string (Some _) => if existsb numeric xs then
+                                          match cast_Q h0 with Value_Err _ => h0 | v => v end
+                                        else h0
+             | _ => h0 end in
     let n := List.length xs in
     let before (x : value) : bool :=
         if isnull x then desc && negb (isnull h)

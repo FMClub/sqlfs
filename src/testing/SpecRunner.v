@@ -125,6 +125,8 @@ Definition client_value (d : vsem) (v : NullValues.value) : NullValues.value :=
            (Some (IEEE.pg_text (NullValues.fmt_of (Nat.odd k)) (IEEE.special_of_tag (Nat.div (Nat.modulo k 10) 2)) x,
                   "float8out"))
     else v
+  (* a date or a timestamp in the DateStyle of the dialect, when it has one ([PostgreSQL_regress]) *)
+  | NullValues.Value_T (Some _) => match vs_symb d "__client_text" with Some f => f (v :: nil) | None => v end
   | _ => v
   end.
 

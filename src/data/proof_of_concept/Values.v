@@ -949,7 +949,13 @@ Definition is_F (v : value) : bool := match v with Value_F _ => true | _ => fals
 (** the number of decimals of a double of the MySQL family ([Item::decimals]): [None] when it is not fixed
     ([NOT_FIXED_DEC]), the text being then the shortest one; it is kept in [k / 10] ([d + 1], or 0) *)
 Definition fdec (v : value) : option nat :=
-  match v with Value_F (Some (_, k)) => match Nat.div k 10 with O => None | S d => Some d end | _ => None end.
+  match v with
+  | Value_F (Some (_, k)) => match Nat.div k 10 with
+                             | O => None
+                             | S d => if Nat.leb 39 d then None else Some d   (* [k / 10 = 40]: [num_special] *)
+                             end
+  | _ => None
+  end.
 
 Definition with_fdec (d : option nat) (v : value) : value :=
   match v with
@@ -959,6 +965,20 @@ Definition with_fdec (d : option nat) (v : value) : value :=
 Definition is_F32 (v : value) : bool := match v with Value_F (Some (_, k)) => Nat.odd k | _ => false end.
 Definition is_special (v : value) : bool :=
   match float_parts v with Some (F_Finite, _, _) | Some (F_NegZero, _, _) | None => false | _ => true end.
+
+(** NaN and the infinities of PostgreSQL's [numeric] are the special values of the doubles, marked by [k / 10 = 40]
+    (a number of decimals which [with_fdec] never gives, and which [fdec] ignores): the operations which differ
+    on the two types can tell them apart ([power ('-inf'::numeric, -3)] is [0], a [numeric], which has no [-0]) *)
+Definition num_special (sp : fspecial) : value := Value_F (Some (Q2Qc 0, (2 * tag_of sp + 400)%nat)).
+Definition is_num_special (v : value) : bool :=
+  match v with Value_F (Some (_, k)) => Nat.eqb (Nat.div k 10) 40 && is_special v | _ => false end.
+(** the result of an operation of [numeric] computed by the doubles: no [-0], and its special values marked *)
+Definition as_numeric (r : value) : value :=
+  match float_parts r with
+  | Some (F_NegZero, _, _) => Value_D (Some (Q2Qc 0, 0%nat, 0%nat))
+  | Some ((F_NaN | F_PosInf | F_NegInf) as sp, _, _) => num_special sp
+  | _ => r
+  end.
 
 (** the text of a float, as PostgreSQL prints it *)
 Definition pg_float_text (v : value) : option string :=
@@ -973,12 +993,16 @@ Definition pg_float_text (v : value) : option string :=
     overflows, or a non-zero result which underflows to zero, is an error ([float_overflow_error],
     [float_underflow_error]); division by zero is an error. The infinities and NaN of the operands
     follow IEEE 754. *)
-Definition special_op (op : string) (a b : fspecial) (sa sb : bool) : option fspecial :=
-  (* [sa], [sb]: the operands are negative (for the infinities and the zeros) *)
+Definition special_op (op : string) (a b : fspecial) (sa sb za zb : bool) : option fspecial :=
+  (* [sa], [sb]: the operands are negative (for the infinities and the zeros); [za], [zb]: they are zeros *)
   match a, b with
   | F_NaN, _ | _, F_NaN => Some F_NaN
   | F_Finite, F_Finite | F_Finite, F_NegZero | F_NegZero, F_Finite | F_NegZero, F_NegZero => None
-  | _, _ =>
+  (* an infinity times a zero is NaN (IEEE 754, [float8mul], [mul_var] of [numeric.c]) *)
+  | _, _ => if String.eqb op "*" && (za || zb) then Some F_NaN
+            (* a division by zero is an error before the infinities ([float8div], [numeric_div]): left to the
+               finite case *)
+            else if String.eqb op "/" && zb then None else
     let ia := match a with F_PosInf | F_NegInf => true | _ => false end in
     let ib := match b with F_PosInf | F_NegInf => true | _ => false end in
     match op with
@@ -1014,7 +1038,11 @@ Definition pg_flt2 (op : string) (exact : Qc -> Qc -> Qc) (old : list value -> v
       let w32 := (is_F32 v1 || negb (is_F v1)) && (is_F32 v2 || negb (is_F v2)) in
       match float_value v1, float_value v2 with
       | Some (a, x, _), Some (b, y, _) =>
-        match special_op op a b (sign_neg a x) (sign_neg b y) with
+        let zero (sp : fspecial) (q : Qc) := match sp with
+                                             | F_NegZero => true
+                                             | F_Finite => match Qccompare q (Q2Qc 0) with Eq => true | _ => false end
+                                             | _ => false end in
+        match special_op op a b (sign_neg a x) (sign_neg b y) (zero a x) (zero b y) with
         | Some sp => VF w32 (sp, Q2Qc 0)
         | None =>
           if String.eqb op "/" && match Qccompare y (Q2Qc 0) with Eq => true | _ => false end
@@ -1304,7 +1332,7 @@ Definition float_to_numeric (v : value) : value :=
       VDec q sc sc
   | Some (F_NegZero, _, _) => VDec (Q2Qc 0) 0 0
   (* [NaN] and the infinities of [numeric] are those of [double precision]: the value is kept *)
-  | Some ((F_NaN | F_PosInf | F_NegInf) as sp, _, _) => VF false (sp, Q2Qc 0)
+  | Some ((F_NaN | F_PosInf | F_NegInf) as sp, _, _) => num_special sp
   | None => Value_D None
   end.
 
@@ -1421,9 +1449,9 @@ Definition cast_Q v :=
     | None =>
       (* [NaN], [Infinity], [-Infinity] ([numeric_in]): represented by the special values of the doubles *)
       let u := string_map lower_ascii t in
-      if String.eqb u "nan" then VF false (F_NaN, Q2Qc 0)
-      else if String.eqb u "infinity" || String.eqb u "inf" || String.eqb u "+infinity" || String.eqb u "+inf" then VF false (F_PosInf, Q2Qc 0)
-      else if String.eqb u "-infinity" || String.eqb u "-inf" then VF false (F_NegInf, Q2Qc 0)
+      if String.eqb u "nan" then num_special F_NaN
+      else if String.eqb u "infinity" || String.eqb u "inf" || String.eqb u "+infinity" || String.eqb u "+inf" then num_special F_PosInf
+      else if String.eqb u "-infinity" || String.eqb u "-inf" then num_special F_NegInf
       else Value_Err "invalid input syntax for type numeric"
     end
   | _ => Value_Q None
@@ -1975,7 +2003,8 @@ Definition pg_num_exp (q : Qc) (sc : nat) : value :=
   let v := Qmult (this q) (434294481903252 # 1000000000000000) in
   let v := Qmax (-2000) (Qmin 2000 v) in
   let r := pg_clamp_scale (16 - Z.quot (Qnum v) (Zpos (Qden v))) sc in
-  match exp_exact (this q) with
+  (* every digit of the result: those of its integer part (about [v]) and [r] decimals, with a margin *)
+  match exp_digits (this q) (Z.abs (Z.quot (Qnum v) (Zpos (Qden v))) + Z.of_nat r + 20) with
   | Some e => VDec (dec_round (Q2Qc e) r) r r
   (* an underflow is 0 with the largest scale ([exp_var]); an overflow is an error *)
   | None => if Z.ltb (Qnum (this q)) 0 then VDec (Qc_of_Z 0) 1000 1000 else Value_Err "value overflows numeric format"
@@ -2006,7 +2035,7 @@ Fixpoint zpow_pos (a : Z) (p : positive) : Z :=
   | xI p' => let h := zpow_pos a p' in h * h * a
   end.
 
-Definition pow_round (a : Z) (b : positive) (n : Z) (r : nat) : Qc :=
+Definition pow_round_exact (a : Z) (b : positive) (n : Z) (r : nat) : Qc :=
   let '(num, den) :=
       match n with
       | Z0 => (1, 1)
@@ -2015,6 +2044,41 @@ Definition pow_round (a : Z) (b : positive) (n : Z) (r : nat) : Qc :=
       end in
   let m := (2 * Z.abs num * Z.pow 10 (Z.of_nat r) + den) / (2 * den) in
   Qcdiv (Qc_of_Z (if Z.ltb num 0 then - m else m)) (Qc_pow10 r).
+
+(** the same with a fixed point of [p] bits (a mantissa [m] and a binary exponent [e]: [m * 2^e]), for large
+    exponents, where the exact powers have tens of thousands of digits (TODO 8.15): [p] covers the bits of the
+    result, the [r] decimals and 96 bits of margin for the rounding of the products *)
+Local Open Scope Z_scope.
+Definition fnorm (p : Z) (me : Z * Z) : Z * Z :=
+  let '(m, e) := me in let s := Z.log2 m + 1 - p in if 0 <? s then (Z.shiftr m s, e + s) else (m, e).
+Definition fmul (p : Z) (x y : Z * Z) : Z * Z := fnorm p (fst x * fst y, snd x + snd y).
+Fixpoint fpow (p : Z) (x : Z * Z) (k : positive) : Z * Z :=
+  match k with
+  | xH => x
+  | xO k' => let h := fpow p x k' in fmul p h h
+  | xI k' => let h := fpow p x k' in fmul p (fmul p h h) x
+  end.
+(** [(u / v) ^ k] rounded to [r] decimals, [u, v > 0] *)
+Definition pow_round_fp (u : Z) (v : positive) (k : positive) (r : nat) : Z :=
+  (* the bits of the result: [k log2 (u / v)], from [ln] with 256 bits, and a margin *)
+  let bits := Z.max 0 (Qceiling (Qdiv (Qmult (inject_Z (Zpos k)) (ln_exact (Qmake u v))) (ln_exact 2)) + 8) in
+  let p := bits + Z.of_nat r * 3322 / 1000 + 96 + 2 * Z.log2 (Zpos k) in
+  let x := fnorm p (Z.shiftl u (p + Z.log2 (Zpos v) + 1) / Zpos v, - (p + Z.log2 (Zpos v) + 1)) in
+  let '(m, e) := fpow p x k in
+  let t := m * 10 ^ Z.of_nat r in
+  if 0 <=? e then Z.shiftl t e else Z.shiftr (t + Z.shiftl 1 (- e - 1)) (- e).
+
+Definition pow_round (a : Z) (b : positive) (n : Z) (r : nat) : Qc :=
+  if (64 <=? Z.abs n) && negb (a =? 0) then
+    let neg := Z.ltb a 0 && Z.odd n in
+    let m := match n with
+             | Zpos k => pow_round_fp (Z.abs a) b k r
+             | Zneg k => pow_round_fp (Zpos b) (Z.to_pos (Z.abs a)) k r
+             | Z0 => 1 end in
+    Qcdiv (Qc_of_Z (if neg then - m else m)) (Qc_pow10 r)
+  else pow_round_exact a b n r.
+Local Open Scope string_scope.
+
 
 (** [power] of [numeric] ([power_var], [power_var_int] of [numeric.c]): the scale of the result gives it 16
     significant digits, and at least the scales of the arguments: [16 - trunc (log10 (x ^ y))], between the larger
@@ -2195,6 +2259,9 @@ Definition pg_math_table (num_power : list value -> value) : list (string * (lis
                         else if existsb (fun v => match v with Value_string (Some _) => true | _ => false end) l
                                 && negb (existsb is_F l') && negb (existsb is_D l')
                              then dpow l
+                             (* a special value of [numeric] with numbers which are not doubles: [power] of [numeric] *)
+                             else if existsb is_num_special l' && forallb (fun v => negb (is_F v) || is_num_special v) l'
+                             then as_numeric (dpow l')
                              else dpow l')
   :: nil.
 
@@ -2484,9 +2551,12 @@ Definition symbol_table_raw : list (string * (list value -> value)) :=
                             match to_ts v with Some t => Value_string (Some (pg_format (S (String.length fmt)) t fmt)) 
                                           | None => if is_null v then Value_string None else Value_Err "function does not exist" end
                           | _ => Value_string None end)
+  (* a negative year is a year before the common era: [make_date (-44, 3, 15)] is 0044-03-15 BC, the year 0 of
+     the calendar; there is no year 0 ([make_date] of [date.c]) *)
   :: ("make_date", fun l => match map int_of l with
-                            | Some y :: Some m :: Some d :: nil => 
-                              if valid_date y m d then VDate (days_from_civil y m d) else Value_Err "date field value out of range"
+                            | Some y0 :: Some m :: Some d :: nil => 
+                              let y := if Z.ltb y0 0 then y0 + 1 else y0 in
+                              if negb (Z.eqb y0 0) && valid_date y m d then VDate (days_from_civil y m d) else Value_Err "date field value out of range"
                             | _ => Value_T None end)
   (* the time of the statement ([Temporal.statement_time]) *)
   :: ("now", fun _ => VTsTz statement_time 6) :: ("current_timestamp", fun _ => VTsTz statement_time 6)

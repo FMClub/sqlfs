@@ -94,9 +94,19 @@ expected output of `src/test/regress` (`expected/*.out`, the psql tables) with `
 with `sql2coq.py --dialect PostgreSQL --lenient`, and checks it. The tables of `test_setup.sql` are loaded first (their
 `COPY` files become `INSERT`s; `tenk1` and `tenk2`, of 10,000 rows, are left out). A result is not checked when it cannot
 be read without ambiguity: an empty cell (NULL and `''` print the same), a cell on several lines, a date printed after the
-test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres` style. In `--lenient` mode a transaction
+test changed `DateStyle`, a time zone or an interval in the `postgres` style. The cases are evaluated by the dialect
+`PostgreSQL_regress` (`--eval-dialect`): PostgreSQL with the DateStyle `Postgres, MDY` of the regression database, in
+which the dates and timestamps are converted to text and printed (`03-09-2010`, `Tue Mar 09 00:00:00 2010`, BC dates
+included). In `--lenient` mode a transaction
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
+
+Run 16 (the commit `b6a731a`, the fixes of TODO 8.37): **513** translated, **1** fails (`numeric:996`, numbers of
+131072 digits), 1 not run (`numeric:754`, of the same kind). The 14 other failures of run 14 pass or, for 4 of them,
+are not checkable (the order of a scan: `ROW_NUMBER` among peers or without `ORDER BY`, `json_object_agg`). The
+cases evaluate with the DateStyle of the regression database (`PostgreSQL_regress`), which checks the BC dates and
+found two errors (the translator read `'2040-04-10 BC'` as a date of the common era; `make_date` with a negative
+year).
 
 Run 14 (iteration 25, the commit `0e36d0b` with the fix of the runner of TODO 8.36): **517** translated, **15** fail,
 1 not run (`numeric:754`, over the limit of a case: `numeric.sql` is now compiled case by case when it goes over the
@@ -197,6 +207,9 @@ modelled since this run); 15 views changed through `UPDATE`/`INSERT` (the transl
 unreliable: 2 remain); 9 `CURRENT_ROLE ()` and other session state; `INTERVAL ()` with a NULL bound, `varbinary`
 (binary strings), locks, temporary tables, time zones: not modelled or server state.
 
+Run 7 (the commit `b6a731a`): **1308** translated, **81** fail (89 in run 5); `LAST_INSERT_ID ()` is not translated
+(session state), and three results which mysqltest had sorted (`--sorted_result`) are compared as unordered.
+
 Run 5 (iteration 18, the commit `afef183`): **1314** translated (103 of them expect an error), **89** fail (124 in
 run 4, on the same cases). The 35 cases which pass now are regular expressions: the syntax errors of ICU (`a**`,
 `a{37,17}`, a reference to a group which does not exist, a lookbehind without bound), `(?-i)`, atomic groups,
@@ -210,6 +223,15 @@ literals with a time zone offset (`TIMESTAMP '2024-01-01 14:00:00+01:00'`, MySQL
 non-JSON arguments, where TiDB reports an error that the model gives as a value; integer overflow errors (`ABS (-2^63)`):
 the integers of the MySQL family are unbounded in the model; results which hold a statement of the script (scripts
 without `;` echo): harness.
+
+Run 6 (the commit `b6a731a`): **2061** translated, **17** fail (50 in run 4), 14 not run (a file over the memory limit,
+and one case of `executor/jointest/join`, which went over the time limit of its file and is now compiled case by
+case). The statements which the translator does not follow make their tables unreliable (TODO 8.28: `EXPLAIN
+ANALYZE` of a change, `BATCH` DML, temporary tables which shadow a table, `INSERT IGNORE` into a table with a foreign
+key); `--sorted_result` is honoured (`join:115` was compared in the order of its `ORDER BY`). The 17 left: the last
+digit of `tan`, `cot`, `exp` of doubles (TiDB's Go math library), session state (`core_integration`, `externals`),
+`USE INDEX` on a view, the aliases of a `WINDOW` clause and of `HAVING` with `ANY_VALUE`, `INET_ATON`, an overflow of
+a join key, an `INTERVAL` of a fraction of a second, `(SELECT sin (a))` under `ONLY_FULL_GROUP_BY`.
 
 Run 3 (iteration 9; the translator forgets the options of earlier tables of the same name, and the models of
 iterations 6 to 9): **2095** translated, **128** fail, 1 file (13 cases) over the memory limit. The groups: 38 of

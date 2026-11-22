@@ -143,11 +143,12 @@ Example like_case :
   holds_in (pred "like" [str "ABC"; str "a%"]) = [false; true; true; true; false].
 Proof. check. Qed.
 
-(** A string and a number: not comparable in PostgreSQL (UNKNOWN here, an error in
-    PostgreSQL); converted to a number in MySQL and Oracle; different in SQLite, where
-    the numbers are smaller than the strings. *)
-Example string_number_eq : 
-  holds_in (pred "=" [str "1"; int 1]) = [false; true; false; true; true].
+(** A string and a number: in PostgreSQL the literal has the type [unknown] and takes the type of the
+    other operand ([select_common_type]: ['1' = 1] is true; a [text] value compared with a number would be
+    an error); converted to a number in MySQL and Oracle; different in SQLite, where the numbers are
+    smaller than the strings. *)
+Example string_number_eq :
+  holds_in (pred "=" [str "1"; int 1]) = [true; true; false; true; true].
 Proof. check. Qed.
 
 Example string_number_not_eq : 

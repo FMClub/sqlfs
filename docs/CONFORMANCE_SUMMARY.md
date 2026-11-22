@@ -5,18 +5,20 @@ for the suites, the method and the explanation of each failure).
 
 | Suite | Dialect | Translated | Failing | Not run (time or memory limit) | Pass |
 |---|---|---|---|---|---|
-| OceanBase test suite (run 21) | `OceanBaseMySQL` | 775 | 0 | 1 | 774 |
-| PostgreSQL regression tests (run 14) | `PostgreSQL` | 517 | 15 | 1 | 501 |
-| MariaDB mysql-test, 44 files (run 7) | `MariaDB` | 402 | 5 | 37 | 360 |
-| TiDB integrationtest (run 4) | `TiDB` | 2102 | 50 | 13 | 2039 |
-| MySQL mysql-test (run 5) | `MySQL` | 1314 | 89 | 0 | 1225 |
+| OceanBase test suite (run 23) | `OceanBaseMySQL` | 773 | 0 | 0 | 773 |
+| PostgreSQL regression tests (run 16) | `PostgreSQL` | 513 | 1 | 1 | 511 |
+| MariaDB mysql-test, 44 files (run 9) | `MariaDB` | 394 | 2 | 37 | 355 |
+| TiDB integrationtest (run 6) | `TiDB` | 2061 | 17 | 14 | 2030 |
+| MySQL mysql-test (run 7) | `MySQL` | 1308 | 81 | 0 | 1227 |
 
 "Not run" counts the cases whose compilation stopped at the time or memory limit of the runner (a file over the limit is compiled again case by case); "Pass" is the rest of the translated cases minus the failing ones.
 
-Since run 4 of TiDB and MySQL and run 5 of MariaDB, the translated cases include the queries which the engine
-rejects: such a case passes when the dialect does not accept the query or its evaluation fails. The runs of
-OceanBase and TiDB are those of the commit `187fe5d` (iteration 15); MySQL run 5 is of `afef183` (iteration 18);
-PostgreSQL run 14 and MariaDB run 7 are of `0e36d0b` with the fix of the runner of TODO 8.36 (iteration 25).
-MariaDB translates 26 cases fewer than in run 5: 24 put a window function in the argument of an aggregate, which
-`SqlFull.v` cannot write (iteration 17; run 5 translated them wrongly), and 2 run under a connection other than
-the default one (iteration 23).
+The translated cases include the queries which the engine rejects (TiDB 49, MySQL 103, MariaDB 8): such a case
+passes when the dialect does not accept the query or its evaluation fails. All the runs are of the commit `b6a731a`
+(the fixes of TODO 8.37 and 8.28). Fewer cases are translated than in the runs before: the window functions and
+the aggregates whose result depends on the order of the scan (`ROW_NUMBER` over a window without `ORDER BY`, or
+among peers, `json_object_agg` without `ORDER BY`), the queries of `LAST_INSERT_ID ()`, of another mysqltest
+connection and of the tables which a statement that the translator does not follow changed are not checkable.
+The failures left: PostgreSQL `numeric:996` (numbers of 131072 digits; `numeric:754`, of the same kind, is the
+case not run); MariaDB `win_avg:3`, `win_sum:3` (its incremental aggregates of a moving frame); TiDB and MySQL:
+`docs/CONFORMANCE.md`.

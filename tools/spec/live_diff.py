@@ -13,7 +13,6 @@ left out (the errors are not compared).
   tools/spec/live_diff.py --engine mariadb --lib LIBDIR --n 300 --seed 1 --out DIR   (a server on the default socket)
 """
 import argparse
-import os
 import random
 import sqlite3
 import subprocess

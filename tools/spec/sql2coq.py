@@ -135,19 +135,26 @@ VIEWS = {}
 
 def values_types(rows):
     """The type of a column of VALUES in PostgreSQL (select_common_type): a string literal has no type of
-    its own and takes the type of the other entries of its column. Here: when all the entries which are not
-    string literals are casts to one type, the literals are cast to it too ((VALUES ('0'::numeric), ('4.2'))
-    is a column of numerics)."""
+    its own and takes the type of the other entries of its column. Here: when the entries which are not string
+    literals are casts to one type T, and number literals if T is a numeric type, the string literals are cast
+    to T too ((VALUES ('0'::numeric), ('4.2')) and (VALUES (1::numeric), (2), ('NaN')) are columns of
+    numerics)."""
+    numeric = ('numeric', 'decimal', 'float8', 'float4', 'real', 'double precision', 'float')
     rows = [list(r) for r in rows]
     for j in range(len(rows[0])):
         col = [r[j] for r in rows]
         typed = [e for e in col if not (isinstance(e, tuple) and e[0] == 'str')]
         if len(typed) == len(col) or not typed:
             continue
-        if all(isinstance(e, tuple) and e[0] == 'cast' for e in typed) and len(set(repr(e[1]) for e in typed)) == 1:
-            for r in rows:
-                if r[j][0] == 'str':
-                    r[j] = ('cast', typed[0][1], r[j])
+        casts = [e for e in typed if isinstance(e, tuple) and e[0] == 'cast']
+        nums = [e for e in typed if isinstance(e, tuple) and e[0] == 'num']
+        if not casts or len(casts) + len(nums) != len(typed) or len(set(repr(e[1]) for e in casts)) != 1:
+            continue
+        if nums and casts[0][1] not in numeric:
+            continue
+        for r in rows:
+            if r[j][0] == 'str':
+                r[j] = ('cast', casts[0][1], r[j])
     return rows
 
 
@@ -619,6 +626,10 @@ class P:
                 while self.eat_op(','):
                     using.append(self.ident())
                 self.need_op(')')
+            # TiDB has FULL OUTER JOIN ... ON, not with USING nor NATURAL (Error 1235), which the syntax of
+            # SqlFull, where USING is an ON condition, cannot tell apart: not translated
+            if DIALECT == 'TiDB' and jt == 'full' and using is not None:
+                raise Skip('full join using (TiDB: not supported)')
             item = ('join', jt, item, r, cond, using)
         return item
 
@@ -1356,15 +1367,41 @@ def scaled_lit(txt):
     return ('-' if neg else '') + str(n), len(b)
 
 
+def days_from_civil(y, m, d):
+    """The number of days from 1970-01-01 of a date of the proleptic Gregorian calendar, the year 0 being 1 BC
+    (days_from_civil of Temporal.v)."""
+    y -= m <= 2
+    era = y // 400
+    yoe = y - era * 400
+    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + d - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
 def temporal_value(txt, ty, fsp=0):
     """The Coq value of a DATE, DATETIME, TIMESTAMP or TIME column holding the text txt."""
     import datetime
     epoch = datetime.datetime(1970, 1, 1)
     t = txt.strip()
+    # a date before the common era ('2040-04-10 BC'): the year 1 BC is the year 0 of the calendar
+    bc = False
+    if t.upper().endswith(' BC'):
+        bc, t = True, t[:-3].strip()
+    elif t.upper().endswith(' AD'):
+        t = t[:-3].strip()
     try:
         if ty == 'date':
-            d = datetime.datetime.strptime(t[:10], '%Y-%m-%d')
-            return '(NullValues.VDate (%d))' % (d - epoch).days
+            if len(t) != 10:
+                raise ValueError(t)
+            y, m, dd = int(t[0:4]), int(t[5:7]), int(t[8:10])
+            datetime.date(2000, m, dd) if not (m == 2 and dd == 29) else None  # the month and the day exist
+            if bc:
+                y = 1 - y
+            if m == 2 and dd == 29 and not (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)):
+                raise ValueError(t)
+            return '(NullValues.VDate (%d))' % days_from_civil(y, m, dd)
+        if bc and ty == 'time':
+            raise Skip('temporal value before the common era')
         if ty == 'time':
             h, m, s = t.split(':')
             us = ((int(h) * 60 + int(m)) * 60) * 1000000 + int(round(float(s) * 1000000))
@@ -1375,6 +1412,12 @@ def temporal_value(txt, ty, fsp=0):
             t, f = t.split('.')
             # the fractional seconds are rounded to the precision of the column
             frac = int(round(float('0.' + f) * 10 ** fsp)) * 10 ** (6 - fsp)
+        if bc:
+            # the year of the calendar is 1 - Y; datetime has no year 0: the day and the time apart
+            day = temporal_value(t[:10] + ' BC', 'date')
+            days = int(re.search(r'\((-?\d+)\)', day).group(1))
+            tm = datetime.datetime.strptime('2000-01-01' + t[10:], fmt) - datetime.datetime(2000, 1, 1)
+            return '(NullValues.VTs (%d) %d)' % ((days * 86400 + tm.seconds) * 1000000 + frac, fsp)
         d = datetime.datetime.strptime(t, fmt)
         us = ((d - epoch).days * 86400 + (d - epoch).seconds) * 1000000 + frac
         return '(NullValues.VTs (%d) %d)' % (us, fsp)
@@ -1755,6 +1798,10 @@ def rollup_sets(l):
     return [l[:k] for k in range(len(l), -1, -1)]
 
 
+DIALECT = ''
+ORDER_DEPENDENT_WINDOW = ('row_number', 'ntile', 'lag', 'lead', 'first_value', 'last_value', 'nth_value')
+EXPECT_ERROR = False
+
 RANKING = {'row_number': 'w_row_number', 'rank': 'w_rank', 'dense_rank': 'w_dense_rank',
            'percent_rank': 'w_percent_rank', 'cume_dist': 'w_cume_dist'}
 
@@ -1766,6 +1813,20 @@ def numctx(e):
     if ENGINE == 'mysql' and isinstance(e, tuple) and e[0] == 'call' and e[1] == 'dayname':
         return (e[0], 'weekday') + tuple(e[2:])
     return e
+
+
+ORDERED_AGGS = ('array_agg', 'string_agg', 'json_agg', 'jsonb_agg', 'json_object_agg', 'xmlagg')
+
+
+def has_ordered_agg(e):
+    """an aggregate whose result keeps the order of its input, without DISTINCT"""
+    if isinstance(e, list):
+        return any(has_ordered_agg(x) for x in e)
+    if not isinstance(e, tuple):
+        return False
+    if e[0] == 'call' and isinstance(e[1], str) and e[1].lower() in ORDERED_AGGS and not e[4]:  # e[4]: DISTINCT
+        return True
+    return any(has_ordered_agg(x) for x in e[1:])
 
 
 def has_call(e, name):
@@ -1987,6 +2048,31 @@ class QTr:
                                                  'None' if off == 0 else '(Some %d%%N)' % off,
                                                  'None' if lim is None else '(Some %d%%N)' % lim), bool(order)
 
+    def window_ties(self, frm, part, wo):
+        """Two rows of the table of a FROM of one table have the same keys of a window (its PARTITION BY and its
+        ORDER BY, plain columns of the table); False when this cannot be told (a join, an expression)."""
+        if not (isinstance(frm, tuple) and frm[0] == 'table'):
+            return False
+        try:
+            t = self.table_of(frm[1])
+        except Skip:
+            return False
+        idx = {n.lower(): i for i, (n, _) in enumerate(t.cols)}
+        names = (frm[1].lower(), frm[2].lower())
+        keys = []
+        for x in list(part) + [x for x, _, _ in wo]:
+            if not (isinstance(x, tuple) and x[0] == 'col' and x[2].lower() in idx and
+                    (x[1] is None or x[1].lower() in names)):
+                return False
+            keys.append(idx[x[2].lower()])
+        seen = set()
+        for r in t.rows:
+            k = tuple(r[i] for i in keys)
+            if k in seen:
+                return True
+            seen.add(k)
+        return False
+
     def window_select(self, s, exprs, order, limit, parent, tr):
         """A query with window functions: an inner query computes the arguments, the partition and order
         keys of the windows and the other parts of the select items (with the WHERE, GROUP BY and HAVING of
@@ -2087,6 +2173,16 @@ class QTr:
                 if excl:
                     fr = '(Frame_Excl %s %s)' % (fr, excl)
             name, args, star = call[1], call[2], call[3]
+            # over a window without ORDER BY, these functions number or pick the rows in the order of the scan,
+            # which is implementation defined (as LIMIT without ORDER BY); a query which the engine rejects
+            # (MariaDB: LAG without ORDER BY) is still a case
+            if not wo and name in ORDER_DEPENDENT_WINDOW and not EXPECT_ERROR:
+                raise Skip('window function without order by (the rows are implementation defined)')
+            # the same among the peers of its ORDER BY: over one table, the keys of the window must not be equal
+            # on two of its rows (window.sql: ROW_NUMBER () OVER (PARTITION BY depname ORDER BY enroll_date), two
+            # employees of a department enrolled the same day)
+            if wo and name in ORDER_DEPENDENT_WINDOW and not EXPECT_ERROR and self.window_ties(frm, part, wo):
+                raise Skip('window function among peers (the rows are implementation defined)')
 
             def lit_nat(x):
                 if x[0] != 'num' or '.' in x[1] or x[1].startswith('-'):
@@ -2228,6 +2324,11 @@ class QTr:
                 raise Skip('limit without order by (the rows are implementation defined)')
         if any(has_call(e, 'group_concat') for e, _ in exprs):
             raise Skip('group_concat (the order of the elements is implementation defined)')
+        # the same for the aggregates of PostgreSQL which keep the order of their input, over the rows of a FROM
+        # (without ORDER BY inside the aggregate, which the parser does not take: the scan order); with
+        # DISTINCT the input is sorted
+        if ENGINE == 'postgresql' and frm and any(has_ordered_agg(e) for e, _ in exprs):
+            raise Skip('array_agg / string_agg / json_agg (the order of the elements is implementation defined)')
         w = tr.cond(where) if where is not None else 'c_true'
         if where is not None and has_agg(where):
             raise Skip('aggregate in where')
@@ -2371,6 +2472,10 @@ def stmt_complete(s):
 
 def looks_like_statement(l):
     return bool(re.match(r'^(select|insert|update|delete|create|drop|alter|set|show|explain|truncate|replace|with|commit|rollback|use|analyze|call|start|begin)\b', l, re.I)
+                # a prepared statement (TiDB executor/jointest/join: prepare stmt1 from '...';)
+                or re.match(r'^(prepare\s+\w+\s+from|execute\s+\w+(\s+using\b|\s*;)|deallocate\s+prepare)', l, re.I)
+                # TiDB's non-transactional DML, and a VALUES statement (session: VALUES ( ('foo'), ROW('bar') );)
+                or re.match(r'^(batch\s+(on\s+\w+\s+)?limit\s+\d+|values\s*(\(|row\b))', l, re.I)
                 # the connection commands of mysqltest, as the result file echoes them
                 or re.match(r'^(connect\s+\w+,.*;|connection\s+\w+;|disconnect\s+\w+;)$', l, re.I))
 
@@ -2704,10 +2809,17 @@ def test_items(test_src, blocks):
     stmts = []
     cur = ''
     pending_error = False
+    pending_sorted = False
+    sorted_stmts = set()
     for line in test_src.split('\n'):
         st = line.strip()
         if not cur:
             if st == '' or st.startswith('#'):
+                continue
+            # --sorted_result: mysqltest sorts the rows of the next result before it records them, so that their
+            # order is not the order of the engine (TiDB executor/jointest/join: ORDER BY a DESC recorded 1, 2, 2)
+            if re.match(r'^(--\s*)?sorted_result\s*;?$', st, re.I):
+                pending_sorted = True
                 continue
             if st.startswith('--'):
                 if re.match(r'^--\s*error\b', st):
@@ -2722,11 +2834,16 @@ def test_items(test_src, blocks):
             # several statements on one line: each is a statement of the script
             parts = split_statements(cur.strip())
             for k, part in enumerate(parts):
+                if pending_sorted and k == 0:
+                    sorted_stmts.add(len(stmts))
                 stmts.append((part, pending_error and k == 0))
             cur = ''
             pending_error = False
+            pending_sorted = False
     items = []
     bi = 0
+    SORTED_ITEMS.clear()
+    SORTED_ITEMS.update(sorted_stmts)
     for text, err in stmts:
         found = None
         for j in range(bi, min(bi + 8, len(blocks))):
@@ -2743,6 +2860,8 @@ def test_items(test_src, blocks):
 
 LENIENT = False
 USER_FUNCS = set()
+# the items of the script whose result mysqltest sorted (--sorted_result): compared as unordered
+SORTED_ITEMS = set()
 
 
 # the names of the cases of the result files whose base name is not unique among the files of a run
@@ -2751,6 +2870,7 @@ BASE_NAMES = {}
 
 def process(path, out, stats):
     USER_FUNCS.clear()
+    SORTED_ITEMS.clear()
     VIEWS.clear()
     import os
     if os.path.getsize(path) > 3000000:
@@ -2834,7 +2954,7 @@ def process(path, out, stats):
         if LENIENT and re.match(r'^\s*set\s+(session\s+|global\s+|@@session\.|@@global\.|@@)?(sql_mode|names|'
                                 r'character_set_\w+|collation_\w+|time_zone|div_precision_increment|'
                                 r'tidb_enable_new_collation\w*|default_collation\w*|group_concat_max_len|'
-                                r'tidb_enable_noop_functions)\b|^\s*set\s+(character\s+set|charset)\b', s, re.I):
+                                r'tidb_enable_noop_functions|tidb_enable_cascades_planner)\b|^\s*set\s+(character\s+set|charset)\b', s, re.I):
             # (--lenient) the semantics of the rest of the script depends on the new sql_mode, collation, character
             # set, time zone or precision: stop
             stats['skip']['after a change of the session'] = stats['skip'].get('after a change of the session', 0) + len(items) - bi
@@ -2845,6 +2965,18 @@ def process(path, out, stats):
             if re.match(r'^\s*(begin|start\s+transaction)\b', s, re.I):
                 in_txn = True
             ends = re.match(r'^\s*(commit|rollback|end|abort)\b', s, re.I)
+            # statements which change tables and which the translator does not follow (TODO 8.28): EXPLAIN ANALYZE
+            # of a change runs it; TiDB's non-transactional BATCH ... DML; a temporary table shadows a table of its
+            # name (a temporary table of a new name is created as the others); the tables they mention are
+            # unreliable
+            tmp = re.match(r'^\s*create\s+(global\s+|local\s+)?temp(orary)?\s+table\s+(if\s+not\s+exists\s+)?(\w+)', s, re.I)
+            if re.match(r'^\s*(explain\s+analyze\s+(insert|update|delete|replace)|batch\b)', s, re.I) or \
+               tmp and tmp.group(4).lower() in tables:
+                for t in tables.values():
+                    if re.search(r'\b' + re.escape(t.name) + r'\b', s, re.I):
+                        t.ok = False
+                stats['skip']['unfollowed change'] = stats['skip'].get('unfollowed change', 0) + 1
+                continue
             # a child (INHERITS, PARTITION OF) adds its rows to the parent: the parent is unreliable
             for m in re.finditer(r'\b(?:inherits\s*\(\s*|partition\s+of\s+)(\w+)', s, re.I):
                 if m.group(1).lower() in tables:
@@ -2870,6 +3002,10 @@ def process(path, out, stats):
                     in_txn = False
                 stats['skip']['transaction or routine'] = stats['skip'].get('transaction or routine', 0) + 1
                 continue
+        # LAST_INSERT_ID () is the last key which the session generated, which the translator does not follow
+        if re.match(r'^\s*select\b', s, re.I) and re.search(r'\blast_insert_id\s*\(', s, re.I):
+            stats['skip']['session state'] = stats['skip'].get('session state', 0) + 1
+            continue
         if USER_FUNCS and re.search(r'\b(' + '|'.join(map(re.escape, USER_FUNCS)) + r')\s*\(', s, re.I):
             stats['skip']['user-defined function'] = stats['skip'].get('user-defined function', 0) + 1
             continue
@@ -2959,6 +3095,10 @@ def process(path, out, stats):
             elif head == 'insert':
                 try:
                     t, rows = parse_insert(toks, tables)
+                    # INSERT IGNORE into a table with a foreign key drops the rows whose parent does not exist
+                    # (TiDB executor/foreign_key), which the translator does not check: the table is unreliable
+                    if getattr(t, 'parents', []) and re.match(r'^\s*insert\s+ignore\b', s, re.I):
+                        t.ok = False
                     if t.ok:
                         t.rows.extend(rows)
                 except Skip:
@@ -3030,6 +3170,8 @@ def process(path, out, stats):
                 qt = QTr(tables)
                 qt.top_select = q[1] if q[0] == 'orderq' and not q[2] else q
                 qt.limit_any = None
+                global EXPECT_ERROR
+                EXPECT_ERROR = failed
                 cq, ncols, ordered, _ = qt.query(q)
                 rows = parse_results(res, ncols)
                 # the engine rejects the query (the suites of the MySQL family, --lenient): the model must too
@@ -3059,6 +3201,8 @@ def process(path, out, stats):
                     cases.append('  mk_case_limit %s %d [%s] %s %s %s' % (
                         coq_str('%s:%d' % (base, bi)), qt.limit_any, '; '.join(tabs), cq, exp, sql_txt))
                 else:
+                    if bi in SORTED_ITEMS:
+                        ordered = False
                     cases.append('  mk_case %s %s [%s] %s %s %s' % (
                         coq_str('%s:%d' % (base, bi)), 'true' if ordered else 'false', '; '.join(tabs), cq, exp, sql_txt))
                 stats['translated'] += 1
@@ -3087,10 +3231,14 @@ Open Scope string_scope.
 
 def main():
     args = sys.argv[1:]
-    dialect, outdir = 'OceanBaseMySQL', None
+    dialect, outdir, eval_dialect = 'OceanBaseMySQL', None, None
     while args and args[0].startswith('--'):
         if args[0] == '--dialect':
             dialect = args[1]
+        elif args[0] == '--eval-dialect':
+            # the dialect which evaluates the cases, when it is not the one of --dialect: a variant with the
+            # settings of the session which recorded the results (PostgreSQL_regress, DateStyle 'Postgres, MDY')
+            eval_dialect = args[1]
         elif args[0] == '--outdir':
             outdir = args[1]
         elif args[0] == '--lenient':
@@ -3100,7 +3248,8 @@ def main():
             continue
         args = args[2:]
     import os
-    global ENGINE
+    global ENGINE, DIALECT
+    DIALECT = dialect
     ENGINE = {'PostgreSQL': 'postgresql', 'SQLite': 'sqlite', 'OceanBaseOracle': 'oracle'}.get(dialect, 'mysql')
     global SERVER_VERSION
     SERVER_VERSION = {'MariaDB': 110400, 'TiDB': 80011, 'OceanBaseMySQL': 50725, 'PolarDB': 80018}.get(dialect, 80400)
@@ -3121,7 +3270,7 @@ def main():
         for base, cases in out:
             name = re.sub(r'\W', '_', base)
             body = 'Definition cases_%s : list spec_case := [\n%s\n].\n' % (name, ';\n'.join(cases))
-            body += 'Eval vm_compute in (diagnose %s cases_%s).\n' % (dialect, name)
+            body += 'Eval vm_compute in (diagnose %s cases_%s).\n' % (eval_dialect or dialect, name)
             if outdir:
                 os.makedirs(outdir, exist_ok=True)
                 with open(os.path.join(outdir, 'Spec_%s.v' % name), 'w') as f:

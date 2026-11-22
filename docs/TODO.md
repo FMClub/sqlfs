@@ -772,6 +772,11 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   skipped: 19 more cases are translated (775), all pass.
 - **8.15 Speed of the text of a long decimal** (iteration 6): `1.234 ^ 5678` (519 digits) takes 70 seconds to
   check, most of it in the conversion to text.
+  **Status: PARTIAL** (after PR 74). The power of a large integer exponent is computed by a fixed point of the size
+  of the result (`pow_round_fp`): `1.234 ^ 5678` takes 1 s (81 s before), with the same digits; `exp` of a
+  `numeric` by `exp_digits` (shifts instead of divisions by powers of 2). Open: the numbers of 131072 digits
+  (`10::numeric ^ 131071`, `to_char` of `1.2345e131071`).
+
 - **8.16 The calendar conversions are not proved** (iteration 8; the bug of 8.13 was in them): prove that
   `civil_from_days` and `days_from_civil` are inverse of each other.
   **Status: DONE** (iteration 8). `src/data/proof_of_concept/TemporalFacts.v`: `civil_round_trip` (every day),
@@ -851,6 +856,10 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
 - **8.28 Replay of the scripts** (iteration 14): the failing cases of TiDB which come from statements the
   translator does not follow (`EXPLAIN ANALYZE` of an `INSERT`, cascading foreign keys, temporary tables shadowing a
   table, `LAST_INSERT_ID ()`, batch DML): the tables they change must be marked unreliable.
+  **Status: DONE** (after PR 74). `EXPLAIN ANALYZE` of a change, TiDB's `BATCH ... DML`, a temporary table, and an
+  `INSERT IGNORE` into a table with a foreign key (which drops the rows without a parent) make the tables which
+  they mention unreliable; the cascades of `UPDATE` and `DELETE` were followed already (`parents`); a query of
+  `LAST_INSERT_ID ()` is not translated (session state). Tests in `tools/spec/test_sql2coq.py`.
 - **8.29 The hypotheses of the relation between `Sql.v` and `SqlFull.v` could not be met** (iteration 16): two
   hypotheses of `sql_full_agree`, `sql_full_agree2`, `sql_full_agree3`, `sql_full_alg`, `sql_full_alg3` and
   `positional_agree` were false for the instance of the project, so that these theorems said nothing about it.
@@ -915,3 +924,64 @@ Items found by the audits of the iterations (`docs/ITERATIONS.md`). Each item sa
   **Status: DONE** (iteration 25). The text of a double of PostgreSQL is tagged as a number (`Value_C` with the
   pseudo-collation `float8out`, `SpecRunner.v`); a test in `Test_Float.v`.
 
+- **8.37 The failures left after iteration 25** (audit after PR 74): the 15 failing cases of PostgreSQL run 14 and
+  the 5 of MariaDB run 7, by cause.
+  - Model, small: `rank ('3') WITHIN GROUP (ORDER BY x)` with an integer `x` (the literal is not converted to the
+    type of the key; `aggregates:429`); `power (float8 '-inf', float8 '-2') = '0'` is NULL (the comparison of a
+    double with an untyped literal; `float8:134`); `SUM` over a frame which holds a `NaN` of `numeric` gives NULL
+    instead of NaN (`window:397`); the text of `json_object_agg` (`{ "k" : "v" }`, `json:425`); `MEDIAN (x) OVER ()`
+    of MariaDB gives NULL (`win_percentile:59, 60`).
+  - Model, larger: `GROUPING` in a scalar subquery of a grouped block (`groupingsets:206`); MariaDB computes the
+    aggregates of a moving frame incrementally (the row which enters is added, the row which leaves subtracted),
+    so that the doubles differ in the last digit from a sum of the frame (`win_avg:3`, `win_sum:3`); the precision
+    of `exp` of a large `numeric` (`numeric:985`).
+  - Representation: the special `numeric` values are doubles (`numeric:563`, `numeric:613`, the `-0`); very long
+    decimals (`numeric:996`, and `numeric:754` over the time limit: TODO 8.15).
+  - Harness: `ROW_NUMBER` / `NTILE` over a window without `ORDER BY`, or among peers of its `ORDER BY`, are
+    implementation-defined and should not be translated (`window:313, 324, 327`, MariaDB `win_empty_over:2`); the
+    spaces at the end of a psql cell are lost (`json:87`); `concat` of a date prints it in the `DateStyle` of the
+    session, which the converter changes only for whole cells (`text:54, 56`).
+  **Status: PARTIAL** (after PR 74). Done:
+  - `rank ('3') WITHIN GROUP`: the hypothetical row takes the type of the keys (`hyp_agg`, `Aggregates.v`);
+  - a literal compared with a number takes its type in PostgreSQL (`vs_cmp_coerce`, as for the dates: `5 = '5'`
+    is true, `5 = '5.5'` an error); `Test_Dialects.v` asserted the former UNKNOWN, a limit of the model which its
+    own comment contradicted;
+  - a column of `VALUES` with a cast to a numeric type and number literals types its string literals too
+    (translator), so `SUM` over a frame holding `'NaN'` gives NaN;
+  - `json_object_agg`, `array_agg`, `string_agg`, `json_agg` without `DISTINCT` over the rows of a `FROM` keep the scan
+    order, which is implementation defined: not translated, as `group_concat`;
+  - MariaDB's `MEDIAN (x) OVER ()` (`maria_window_aggs`, a double of 10 decimals);
+  - `GROUPING (x)` belongs to the block of the columns of `x` (`grouping_of`, `SqlFull.v`); the proofs of
+    `SqlScopeQuery.v` and `SqlRename.v` follow (`grouping_of_R`, `grouping_R`);
+  - `0 * Infinity` is NaN and `Infinity / 0` a division by zero (`special_op`), for the doubles and the `numeric`
+    values: the products of `numeric:563`;
+  - the special values of `numeric` are marked (`num_special`, `k / 10 = 40`, which `fdec` ignores): `power` of a
+    special `numeric` gives a `numeric` (`0`, not `-0`);
+  - `exp` of `numeric` with every digit of the result (`exp_digits`, `IEEE.v`; 4 s for `exp (1234.5678)`, whose
+    digits were wrong after the 77th); the power of a large integer exponent by a fixed point of the size of the
+    result (`pow_round_fp`: 1 s for `1.234 ^ 5678`, which took 81 s);
+  - `ROW_NUMBER`, `NTILE`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE` over a window without `ORDER BY`,
+    or over one table with two rows of the same keys of the window, are not translated (but a query which the
+    engine rejects: MariaDB's `LAG` without `ORDER BY`);
+  - the spaces at the end of a psql cell are kept in a column of one row wider than its header;
+  - the DateStyle `Postgres, MDY` of the regression database: the dialect `PostgreSQL_regress` writes the dates and
+    the timestamps so in its conversions to text, and its client prints them so; `pg2result.py` no longer
+    converts the cells to ISO. This checks the BC dates, which were not, and found two errors: the translator
+    read `'2040-04-10 BC'` as `2040-04-10`, and `make_date (-44, 3, 15)` was 45 BC (a negative year is BC, and
+    there is no year 0).
+  Tests: `Test_Grouping.v`, `Test_Date.v`, `Test_Decimal.v`, `Test_OrderedSet.v`, `Test_Range.v`, `Test_Dialects.v`,
+  and 4 new tests in `tools/spec/test_sql2coq.py`.
+  The runs which checked these fixes found more defects of the harness, fixed too: mysqltest's `--sorted_result`
+  was ignored, so a result which mysqltest had sorted was compared in the order of an `ORDER BY` (TiDB
+  `executor/jointest/join` recorded `ORDER BY a DESC` as `1, 2, 2`: not an engine bug); `PREPARE`, `EXECUTE`,
+  `BATCH` and a `VALUES` statement after a result were read as its rows; TiDB's `FULL JOIN ... USING` (not
+  supported by TiDB, and written as an `ON` by `SqlFull.v`) and its cascades planner are not translated; a
+  timestamp before the common era is read by the model and by the translator.
+  Not done, with the reason:
+  - MariaDB's incremental aggregates of a moving frame (`win_avg:3`, `win_sum:3`, the last digit of a double): the
+    aggregate of a frame is a function of the values of the frame (`interp_agg` of the record `dialect`); MariaDB's
+    result depends on the frames before it in the partition. Modelling it needs a new field of the core record and
+    changes to every proof which relates dialects (congruence, refinement, the relation theorems), for a rounding
+    difference.
+  - `numeric:754` and `numeric:996`, on numbers of 131072 digits: the integers of the model are binary terms, whose
+    multiplication is quadratic (TODO 8.15).

@@ -29,6 +29,7 @@ UTC: a query is evaluated at one instant, and the session time zone is UTC.
 ## Known differences
 
 - Time zones other than UTC are not modelled (TODO 1.5).
+- PostgreSQL's `DateStyle`: the dialect `PostgreSQL` writes the dates and timestamps in the ISO style (the default `ISO, MDY`); `PostgreSQL_regress` in the `Postgres, MDY` style of the regression database (`03-09-2010`, `Tue Mar 09 00:00:00 2010`), in its conversions to text (`::text`, `concat`, `concat_ws`, `||`, `format`) and in its client. The times, the intervals and the timestamps with a time zone are not converted.
 - MySQL zero dates (`0000-00-00`, a month or a day of 0): the model has no such date. `STR_TO_DATE` of a format without a month or a day returns NULL, where MySQL returns a zero date.
 - `TIME_FORMAT` with hours above 23 shows the hour modulo 24; MySQL shows the whole hour count.
 - `justify_interval` does not make the signs of the fields agree. PostgreSQL makes `1 mon -1 hour` into `29 days 23:00:00`.

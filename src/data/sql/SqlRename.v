@@ -1082,12 +1082,30 @@ simpl in S3; subst h'; unfold is_hidden; destruct h as [ | x h]; [reflexivity | 
 exact (existsb_eqb_re e (x :: h)).
 Qed.
 
-Lemma grouping_R : forall env' env x, REnv env' env ->
-  match env' with (_, _, hid) :: _ => if existsb (sexpr_eqb (re x)) hid then 1%Z else 0%Z | nil => 0%Z end =
-  match env with (_, _, hid) :: _ => if existsb (sexpr_eqb x) hid then 1%Z else 0%Z | nil => 0%Z end.
+(** [GROUPING (x)] reads the slice which binds the columns of [x] ([grouping_of]) *)
+Lemma grouping_cols_re : forall x, grouping_cols (re x) = map rho (grouping_cols x).
 Proof.
-intros env' env x H; destruct H as [ | [[sa' g'] h'] [[sa g] h] env' env [_ [_ S3]] _]; [reflexivity | ].
-simpl in S3; subst h'; rewrite existsb_eqb_re; reflexivity.
+fix IH 1; intro x; destruct x; try reflexivity.
+cbn [r_e grouping_cols]; induction l as [ | e l IHl]; [reflexivity | ].
+cbn [map flat_map]; rewrite map_app, IH, IHl; reflexivity.
+Qed.
+
+Lemma grouping_hid_R : forall x cols env' env, REnv env' env ->
+  existsb (sexpr_eqb (re x)) (grouping_hid env' (map rho cols)) = existsb (sexpr_eqb x) (grouping_hid env cols).
+Proof.
+intros x cols env' env H; induction H as [ | [[sa' g'] h'] [[sa g] h] env' env [S1 [S2 S3]] H IH]; [reflexivity | ].
+simpl in *; rewrite (existsb_map_rho (fun a => a inS? sa)) by (intro a; rewrite (Fset.mem_eq_2 _ _ _ S1), mem_rs; reflexivity).
+destruct (existsb _ cols); [subst h'; apply existsb_eqb_re | exact IH].
+Qed.
+
+Lemma grouping_R : forall env' env x, REnv env' env ->
+  existsb (sexpr_eqb (re x)) (grouping_of env' (re x)) = existsb (sexpr_eqb x) (grouping_of env x).
+Proof.
+intros env' env x H; unfold grouping_of; rewrite grouping_cols_re.
+destruct (grouping_cols x) as [ | c cols].
+- destruct H as [ | [[sa' g'] h'] [[sa g] h] env' env [_ [_ S3]] _]; [reflexivity | ].
+  simpl in S3; subst h'; apply existsb_eqb_re.
+- apply (grouping_hid_R x (c :: cols)); exact H.
 Qed.
 
 Lemma agg_env_rec_R : forall cols env' env, REnv env' env -> REnv (agg_env_rec (map rho cols) env') (agg_env_rec cols env).
@@ -1260,7 +1278,7 @@ Qed.
 Lemma e_grouping : forall x, Ee x -> Ee (E_Grouping x).
 Proof.
 open_e; intros x _ ce' ce env' env Hc He; hid (E_Grouping x).
-f_equal; apply grouping_R; exact He.
+rewrite (grouping_R env' env x He); reflexivity.
 Qed.
 
 Lemma e_conj : forall a c1 c2, Ec c1 -> Ec c2 -> Ec (C_Conj a c1 c2).

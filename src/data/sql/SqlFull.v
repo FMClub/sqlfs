@@ -894,6 +894,29 @@ Definition is_hidden (env : senv) (e : sexpr) : bool :=
   | _ => false
   end.
 
+(** [GROUPING (x)] belongs to the block of the columns of [x], as an aggregate does ([agglevelsup]): in a
+    subquery, [GROUPING (v1)] of a column [v1] of the outer block tells whether the outer block groups it
+    (PostgreSQL [groupingsets.sql]). The columns of a grouping expression: those of its columns and functions. *)
+Fixpoint grouping_cols (e : sexpr) : list attribute :=
+  match e with
+  | E_Col a => a :: nil
+  | E_Fun _ l => flat_map grouping_cols l
+  | _ => nil
+  end.
+
+(** the hidden expressions of the first slice which binds one of [cols] *)
+Fixpoint grouping_hid (env : senv) (cols : list attribute) : list sexpr :=
+  match env with
+  | nil => nil
+  | (sa, _, hid) :: env' => if existsb (fun a => a inS? sa) cols then hid else grouping_hid env' cols
+  end.
+
+Definition grouping_of (env : senv) (x : sexpr) : list sexpr :=
+  match grouping_cols x with
+  | nil => match env with (_, _, hid) :: _ => hid | nil => nil end
+  | cols => grouping_hid env cols
+  end.
+
 Definition null_of (a : attribute) := default_value T (type_of_attribute T a).
 
 (** The NULL tuple over a set of attributes: the padding of outer joins. *)
@@ -1806,11 +1829,7 @@ Fixpoint eval_sexpr (ce : cte_env) (env : senv) (e : sexpr) {struct e} : value :
   then null O
   else 
   match e with
-  | E_Grouping x => 
-    value_of_Z O (match env with
-                  | (_, _, hid) :: _ => if existsb (sexpr_eqb x) hid then 1%Z else 0%Z
-                  | nil => 0%Z
-                  end)
+  | E_Grouping x => value_of_Z O (if existsb (sexpr_eqb x) (grouping_of env x) then 1%Z else 0%Z)
   | E_Const v => const_of O v
   | E_Col a => lookup env a
   | E_Fun f l => 

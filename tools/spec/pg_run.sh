@@ -15,7 +15,8 @@ fi
 T="$(mktemp -d)"
 python3 "$ROOT/tools/spec/pg2result.py" "$PG/src/test/regress" "$T" "$@"
 rm -rf "$ROOT/src/testing/pgspec"
-python3 "$ROOT/tools/spec/sql2coq.py" --dialect PostgreSQL --lenient --outdir "$ROOT/src/testing/pgspec" "$T"/*.result
+# the cases are evaluated with the DateStyle of the regression database (PostgreSQL_regress)
+python3 "$ROOT/tools/spec/sql2coq.py" --dialect PostgreSQL --eval-dialect PostgreSQL_regress --lenient --outdir "$ROOT/src/testing/pgspec" "$T"/*.result
 rm -rf "$T"
 cd "$ROOT/src"
 # a file over FILE_TIMEOUT is compiled again case by case (compile_spec.sh); the outputs of the files are not
