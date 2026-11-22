@@ -182,3 +182,12 @@ Example having_a_grouped_condition :
   shown_rows PostgreSQL (select_full Set_All (s_list [as_ big c0]) items c_true (g_rollup [big]) (c_expr big)) =
   [["1"; "NULL"; "NULL"]].
 Proof. check. Qed.
+
+(** [GROUPING (x)] in a scalar subquery belongs to the block of the columns of [x] (TODO 8.37; PostgreSQL
+    [groupingsets.sql]: [select (select grouping (v1)) from (values ((select 1))) v (v1) group by cube (v1)]
+    is 0 for the set which groups [v1], 1 for the empty set; here two brands, then the empty set) *)
+Example grouping_in_subquery :
+  result_is PostgreSQL
+    (select_grouped [as_ (e_sub (select_where [as_ (grouping b) c0] [] c_true)) c0] items (g_sets [[b]; []])) 1
+    [["0"]; ["0"]; ["1"]] = true.
+Proof. check. Qed.

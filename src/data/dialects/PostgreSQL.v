@@ -790,9 +790,9 @@ Definition PostgreSQL : vsem :=
                          | Value_bool _ => false
                          | Value_string (Some s) => match bool_of_string s with Some _ => false | None => true end
                          | _ => true end)
-          (* a string compared with a date, a time or a timestamp is read as one: the literal of type
-             [unknown] takes the type of the other operand ([select_common_type]); a string which is not a
-             date is an error, as in PostgreSQL *)
+          (* a string compared with a date, a time, a timestamp or a number is read as one: the literal of
+             type [unknown] takes the type of the other operand ([select_common_type]); a string which is not
+             a value of that type is an error, as in PostgreSQL ([5 = '5'] is true, [5 = '5.5'] an error) *)
           (fun p _ l =>
              if existsb (String.eqb p) ("=" :: "<>" :: "!=" :: "<" :: "<=" :: ">" :: ">=" :: nil)%string
              then let conv (other v : value) :=
@@ -801,9 +801,63 @@ Definition PostgreSQL : vsem :=
                         let kind := Nat.modulo k 10 in
                         pg_old (if Nat.eqb kind 0 then "cast_date" else if Nat.eqb kind 1 then "cast_time"
                                 else if Nat.eqb kind 3 then "cast_timestamptz" else "cast_timestamp") (v :: nil)
+                      | Value_F (Some (_, k)), Value_string (Some _) =>
+                        pg_old (if Nat.odd k then "cast_float4" else "cast_float8") (v :: nil)
+                      | Value_I (Some (_, w)), Value_string (Some _) =>
+                        pg_old (if Nat.eqb w 16 then "cast_smallint" else "cast_int") (v :: nil)
+                      | Value_Z (Some _), Value_string (Some _) => pg_old "cast_bigint" (v :: nil)
+                      | (Value_D (Some _) | Value_Q (Some _)), Value_string (Some _) => pg_old "cast_numeric" (v :: nil)
                       | _, _ => v end in
                   match l with a :: b :: nil => conv b a :: conv a b :: nil | _ => l end
              else l)
           (fun l => l)
           pg_table_funs
           (fun q => to_float false (Q2Qc q)).
+
+(** * The DateStyle [Postgres, MDY] of the regression database
+
+    [pg_regress] runs the regression tests with [PGDATESTYLE = 'Postgres, MDY'] ([EncodeDateOnly],
+    [EncodeDateTime] of [datetime.c] with [USE_POSTGRES_DATES] and [DateOrder = DATEORDER_MDY]): a date is
+    [03-09-2010], a timestamp [Tue Mar 09 00:00:00.5 2010], with [BC] before the common era. The dialect
+    [PostgreSQL_regress] converts the dates and the timestamps to text in this style ([::text], [concat],
+    [concat_ws], [||], [format]), and its client prints them so ([__client_text], read by [SpecRunner.v]);
+    [__datestyle] gives the setting. Times, intervals and the timestamps with a time zone keep their text (the
+    tests whose cells show a time zone or an interval in the [postgres_verbose] style are not checked). *)
+Definition pg_mdy_date (days : Z) : string :=
+  if Z.eqb days date_infinity then "infinity" else if Z.eqb days (- date_infinity) then "-infinity" else
+  let '(y, m, d) := civil_from_days days in
+  (pad 2 m ++ "-" ++ pad 2 d ++ "-" ++ (if Z.leb y 0 then pad 4 (1 - y) ++ " BC" else pad 4 y))%string.
+
+Definition pg_postgres_timestamp (ts : Z) : string :=
+  if Z.eqb ts ts_infinity then "infinity" else if Z.eqb ts (- ts_infinity) then "-infinity" else
+  let days := ts_days ts in
+  let '(y, m, d) := civil_from_days days in
+  (substring 0 3 (day_name (day_of_week days)) ++ " " ++ substring 0 3 (month_name m) ++ " " ++ pad 2 d ++ " " ++
+   pg_time_text (ts_usec ts) ++ " " ++ (if Z.leb y 0 then pad 4 (1 - y) ++ " BC" else pad 4 y))%string.
+
+Definition pg_datestyle_value (v : value) : value :=
+  match temporal_parts v with
+  | Some (0%nat, d, _) => Value_string (Some (pg_mdy_date d))
+  | Some (2%nat, t, _) => Value_string (Some (pg_postgres_timestamp t))
+  | _ => v
+  end.
+
+Definition pg_datestyle_funs : list string := ("cast_string" :: "concat" :: "concat_ws" :: "||" :: "format" :: nil)%string.
+
+Definition PostgreSQL_regress : vsem :=
+  {| vs_name := vs_name PostgreSQL; vs_pred := vs_pred PostgreSQL;
+     vs_symb := fun s =>
+       if String.eqb s "__datestyle" then Some (fun _ => Value_string (Some "Postgres, MDY"%string))
+       else if String.eqb s "__client_text" then Some (fun l => match l with v :: _ => pg_datestyle_value v | nil => Value_string None end)
+       else match vs_symb PostgreSQL s with
+            | Some f => Some (if existsb (String.eqb s) pg_datestyle_funs then fun l => f (map pg_datestyle_value l) else f)
+            | None => None
+            end;
+     vs_agg := vs_agg PostgreSQL;
+     vs_is_null := vs_is_null PostgreSQL; vs_truth := vs_truth PostgreSQL; vs_of_truth := vs_of_truth PostgreSQL;
+     vs_eq3 := vs_eq3 PostgreSQL; vs_order := vs_order PostgreSQL; vs_canon := vs_canon PostgreSQL;
+     vs_nulls_smallest := vs_nulls_smallest PostgreSQL; vs_supports := vs_supports PostgreSQL;
+     vs_scalar_first := vs_scalar_first PostgreSQL; vs_pred_error := vs_pred_error PostgreSQL;
+     vs_const := vs_const PostgreSQL; vs_truth_error := vs_truth_error PostgreSQL;
+     vs_cmp_coerce := vs_cmp_coerce PostgreSQL; vs_unify := vs_unify PostgreSQL;
+     vs_table_fun := vs_table_fun PostgreSQL; vs_of_rat := vs_of_rat PostgreSQL |}.

@@ -470,8 +470,42 @@ Proof. open_v; prep_s; unf; scong. Qed.
 Lemma v_sub : forall q, Vq q -> Ve (E_Sub q).
 Proof. open_v; prep_s; unf; scong. Qed.
 
+(** [GROUPING (x)] reads the slice which binds the columns of [x] ([grouping_of]): they are attributes of [x] *)
+Lemma grouping_cols_atts : forall (x : sexpr T relname) a, In a (grouping_cols x) -> In a (atts_e T relname x).
+Proof.
+fix IH 1; intros x a Ha; destruct x; cbn [grouping_cols] in Ha; cbn [atts_e]; try (destruct Ha; fail).
+- exact Ha.
+- revert Ha; induction l as [ | e l IHl]; intro Ha; [destruct Ha | ].
+  cbn [flat_map] in Ha |- *; apply in_app_or in Ha; apply in_or_app; destruct Ha as [Ha | Ha].
+  + left; exact (IH e a Ha).
+  + right; exact (IHl Ha).
+Qed.
+
+Lemma grouping_hid_unbound : forall cols env, (forall a, In a cols -> unbound env a) -> grouping_hid env cols = nil.
+Proof.
+intros cols env; induction env as [ | [[sa g] h] env IH]; intro H; [reflexivity | ]; simpl.
+replace (existsb (fun a => mem a sa) cols) with false.
+- apply IH; intros a Ha s Hs; apply (H a Ha); right; exact Hs.
+- symmetry; apply Bool.not_true_iff_false; intro K; apply existsb_exists in K; destruct K as [a [Ha K]].
+  assert (K' : mem a sa = false) by exact (H a Ha _ (or_introl eq_refl)); rewrite K' in K; discriminate.
+Qed.
+
+Lemma grouping_of_R : forall A B x, R A B -> incl (atts_e T relname x) U -> grouping_of A x = grouping_of B x.
+Proof.
+intros A B x H Hx; unfold grouping_of.
+assert (K : forall a, In a (grouping_cols x) -> In a U) by (intros a Ha; apply Hx; apply grouping_cols_atts; exact Ha).
+destruct (grouping_cols x) as [ | c cols]; [destruct H; reflexivity | ].
+induction H as [[[sa g] h] | [[sa g] h] A B H IH]; cbn [grouping_hid].
+- destruct (existsb _ _); [reflexivity | ].
+  rewrite !grouping_hid_unbound; [reflexivity | | ]; intros a Ha; [apply F2 | apply F1]; apply K; exact Ha.
+- destruct (existsb _ _); [reflexivity | exact IH].
+Qed.
+
 Lemma v_grouping : forall x, Ve x -> Ve (E_Grouping x).
-Proof. open_v; prep_s; unf; match goal with HR : R ?A ?B |- _ => destruct HR end; reflexivity. Qed.
+Proof.
+open_v; prep_s; unf.
+match goal with HR : R ?A ?B, HI : incl _ U |- _ => rewrite (grouping_of_R A B x HR HI); destruct HR end; reflexivity.
+Qed.
 
 Lemma v_conj : forall a c1 c2, Vc c1 -> Vc c2 -> Vc (C_Conj a c1 c2).
 Proof. open_v; prep_s; unf; split; scong. Qed.

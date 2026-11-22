@@ -1210,13 +1210,22 @@ Definition with_my_aliases (t : list (string * (list value -> value))) : list (s
                                                     | _ => Value_Err "wrong number of arguments" end) :: nil
        | None => nil end.
 
+(** MariaDB's inverse distribution functions, which it has as window functions only: [MEDIAN (x)] is
+    [PERCENTILE_CONT (0.5)] of the partition, a double of 10 decimals ([Item_sum_percentile_cont],
+    [decimals = 10]) *)
+Definition maria_window_aggs : list (string * (list value -> value)) :=
+  match string_assoc _ "median" (ordered_set_table false is_null num_of_value my_order) with
+  | Some f => ("median", fun l => with_fdec (Some 10%nat) (f l)) :: nil
+  | None => nil
+  end.
+
 Definition mysql_vs (name : string) (supports : feature -> bool) : vsem :=
   mk_vsem name
           (table_of_list (like_table my_skit true (rep_of (ms_coll ss)) (rep_of (ms_coll ss)) (Some 92)
                           ++ ("regexp", rx_like my_rx false) :: ("not regexp", fun l => negb3 (rx_like my_rx false l))
                           :: my_pred_table))
           (table_of_list (with_my_aliases (sys_table default_env name ++ my_closeout_funs ++ my_symbol_table)))
-          (table_of_list my_aggregate_table)
+          (table_of_list (my_aggregate_table ++ (if Nat.eqb (ms_regex ss) 1 then maria_window_aggs else nil)))
           is_null
           my_truth
           my_of_truth

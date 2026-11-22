@@ -94,7 +94,10 @@ expected output of `src/test/regress` (`expected/*.out`, the psql tables) with `
 with `sql2coq.py --dialect PostgreSQL --lenient`, and checks it. The tables of `test_setup.sql` are loaded first (their
 `COPY` files become `INSERT`s; `tenk1` and `tenk2`, of 10,000 rows, are left out). A result is not checked when it cannot
 be read without ambiguity: an empty cell (NULL and `''` print the same), a cell on several lines, a date printed after the
-test changed `DateStyle`, a time zone, a BC date or an interval in the `postgres` style. In `--lenient` mode a transaction
+test changed `DateStyle`, a time zone or an interval in the `postgres` style. The cases are evaluated by the dialect
+`PostgreSQL_regress` (`--eval-dialect`): PostgreSQL with the DateStyle `Postgres, MDY` of the regression database, in
+which the dates and timestamps are converted to text and printed (`03-09-2010`, `Tue Mar 09 00:00:00 2010`, BC dates
+included). In `--lenient` mode a transaction
 block, a routine, a data-modifying `WITH` or an inheritance child makes the tables it mentions unreliable, instead of
 skipping the file.
 

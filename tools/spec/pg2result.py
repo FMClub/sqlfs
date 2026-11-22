@@ -130,22 +130,17 @@ def parse_out(lines):
     return items
 
 
-MONTHS = {m: i + 1 for i, m in enumerate(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct',
-                                           'Nov', 'Dec'])}
-
-
 def iso_cell(c):
     """The regression database runs with DateStyle 'Postgres, MDY': a date is printed 04-09-1957 and a
-    timestamp Mon Feb 23 00:00:00.5 2004; they are written in the ISO style, which the model prints.
-    A timestamp with a time zone, a BC date and an interval in the postgres style give None."""
-    m = re.fullmatch(r'(\d\d)-(\d\d)-(\d{4})', c)
-    if m:
-        return '%s-%s-%s' % (m.group(3), m.group(1), m.group(2))
-    m = re.fullmatch(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (\w{3}) (\d\d) (\d\d:\d\d:\d\d(?:\.\d+)?) (\d{4})', c)
-    if m and m.group(2) in MONTHS:
-        return '%s-%02d-%s %s' % (m.group(5), MONTHS[m.group(2)], m.group(3), m.group(4))
-    if re.search(r'\b(BC|PST|PDT|UTC|GMT)\b', c) or c.startswith('@ ') or \
-       re.match(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \w{3} \d\d ', c):
+    timestamp Mon Feb 23 00:00:00.5 2004. The runner evaluates the cases with this DateStyle too (the dialect
+    PostgreSQL_regress, and its client in SpecRunner.v), so the cell is kept as it is: a date inside a text
+    (concat (..., d)) is in this style as well. A timestamp with a time zone (the database is in PST8PDT, the
+    model in UTC) and an interval in the postgres_verbose style give None."""
+    if re.search(r'\b(PST|PDT|UTC|GMT|LMT)\b', c) or c.startswith('@ '):
+        return None
+    # a timestamp of the Postgres style followed by a time zone ('Thu Jan 01 00:00:00 1001 LMT')
+    if re.match(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \w{3} \d\d \d\d:\d\d', c) and not \
+       re.fullmatch(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \w{3} \d\d \d\d:\d\d:\d\d(\.\d+)? \d{4}( BC)?', c):
         return None
     return c
 
@@ -161,14 +156,19 @@ def aligned_cells(header, rule, raw):
     cells keep their leading spaces. If no cell has, either the column is aligned on the right or every value
     fills it; the cells are kept as they are too, and the comparison of a number ignores its leading spaces
     (SpecRunner.v, cell_ok). The spaces at the end of a value cannot be told from the padding: they are
-    dropped."""
+    dropped, but in a column of one row wider than its header, which the value fills."""
     widths = [len(seg) - 2 for seg in rule.split('+')]
     if len(widths) != len(header):
         return [[c.strip() for c in r] for r in raw]
     cols = []
     for j, w in enumerate(widths):
         contents = [r[j][1:].ljust(w)[:w] for r in raw]
-        cols.append([c.rstrip() for c in contents])
+        # a column wider than its header has a value of its width; with one row, it is the cell, whose spaces at
+        # the end are then data (' true '::json)
+        if len(contents) == 1 and w > len(header[j]):
+            cols.append(contents)
+        else:
+            cols.append([c.rstrip() for c in contents])
     return [list(r) for r in zip(*cols)] if cols and raw else []
 
 
@@ -192,7 +192,7 @@ def convert_output(out):
             return ['ERROR ambiguous empty cell']
         cells = [iso_cell(c) for c in cells]
         if any(c is None for c in cells):
-            return ['ERROR time zone, BC date or interval style']
+            return ['ERROR time zone or interval style']
         if STATEMENT.match(cells[0]):
             return ['ERROR a row which reads as a statement']
         rows.append('\t'.join(cells))

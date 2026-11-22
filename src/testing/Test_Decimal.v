@@ -168,3 +168,28 @@ Example pg_log_specials :
    text PostgreSQL (fn "log" [fn "cast_numeric" [str "-inf"]; str "2"]))
   = (Some IEEE.F_NegInf, Some IEEE.F_PosInf, Some IEEE.F_NaN, Some IEEE.F_NaN, "0", "ERROR", "ERROR").
 Proof. check. Qed.
+
+(** TODO 8.37: an infinity times a zero is NaN, an infinity divided by zero an error ([float8mul], [float8div]);
+    [power] of a special [numeric] value gives a [numeric] ([0], not [-0]); [exp] of a large [numeric] has every
+    digit; the power of a large integer exponent by the fixed point equals the exact one *)
+Example special_products :
+  (kind PostgreSQL (fn "*" [fn "cast_float8" [str "inf"]; fn "cast_float8" [str "0"]]),
+   kind PostgreSQL (fn "*" [fn "cast_numeric" [str "-inf"]; fn "cast_numeric" [str "0"]]),
+   text PostgreSQL (fn "/" [fn "cast_float8" [str "inf"]; fn "cast_float8" [str "0"]]),
+   text PostgreSQL (fn "power" [fn "cast_numeric" [str "-inf"]; str "-3"]),
+   kind PostgreSQL (fn "power" [fn "cast_float8" [str "-inf"]; fn "cast_float8" [str "-3"]]))
+  = (Some IEEE.F_NaN, Some IEEE.F_NaN, "ERROR", "0", Some IEEE.F_NegZero).
+Proof. check. Qed.
+Example exp_digits_e :
+  (match IEEE.exp_digits (QArith_base.inject_Z 1) 40 with
+   | Some q => QArith_base.Qnum q * 10 ^ 30 / Zpos (QArith_base.Qden q) | None => 0 end)%Z
+  = 2718281828459045235360287471352%Z.
+Proof. check. Qed.
+Example pow_round_fp :
+  forallb (fun x => let '(a, b, n, r) := x in
+                     NullValues.Qc_eq_bool (NullValues.pow_round a b n r) (NullValues.pow_round_exact a b n r))
+          [(1234%Z, 1000%positive, 100%Z, 20%nat); (1234%Z, 1000%positive, (-100)%Z, 30%nat);
+           ((-17)%Z, 10%positive, 77%Z, 5%nat); ((-17)%Z, 10%positive, (-65)%Z, 90%nat);
+           (999999%Z, 1000000%positive, 300%Z, 40%nat)]
+  = true.
+Proof. check. Qed.

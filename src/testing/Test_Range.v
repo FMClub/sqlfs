@@ -88,3 +88,10 @@ Example percent_rank_mariadb :
     [["1"; "0.0000000000"]; ["2"; "0.2500000000"]; ["2"; "0.2500000000"]; ["3"; "0.7500000000"]; ["5"; "1.0000000000"]]
   = true.
 Proof. check. Qed.
+
+(** MariaDB's [MEDIAN (x) OVER ()]: a double of 10 decimals ([win_percentile.result]; TODO 8.37) *)
+Example median_mariadb :
+  result_is MariaDB (window five [w_as (w_agg "median" (col c0) whole_partition) [] [] c1]) 2
+    [["1"; "2.0000000000"]; ["2"; "2.0000000000"]; ["2"; "2.0000000000"]; ["3"; "2.0000000000"]; ["5"; "2.0000000000"]]
+  = true.
+Proof. check. Qed.

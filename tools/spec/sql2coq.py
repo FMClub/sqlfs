@@ -135,19 +135,26 @@ VIEWS = {}
 
 def values_types(rows):
     """The type of a column of VALUES in PostgreSQL (select_common_type): a string literal has no type of
-    its own and takes the type of the other entries of its column. Here: when all the entries which are not
-    string literals are casts to one type, the literals are cast to it too ((VALUES ('0'::numeric), ('4.2'))
-    is a column of numerics)."""
+    its own and takes the type of the other entries of its column. Here: when the entries which are not string
+    literals are casts to one type T, and number literals if T is a numeric type, the string literals are cast
+    to T too ((VALUES ('0'::numeric), ('4.2')) and (VALUES (1::numeric), (2), ('NaN')) are columns of
+    numerics)."""
+    numeric = ('numeric', 'decimal', 'float8', 'float4', 'real', 'double precision', 'float')
     rows = [list(r) for r in rows]
     for j in range(len(rows[0])):
         col = [r[j] for r in rows]
         typed = [e for e in col if not (isinstance(e, tuple) and e[0] == 'str')]
         if len(typed) == len(col) or not typed:
             continue
-        if all(isinstance(e, tuple) and e[0] == 'cast' for e in typed) and len(set(repr(e[1]) for e in typed)) == 1:
-            for r in rows:
-                if r[j][0] == 'str':
-                    r[j] = ('cast', typed[0][1], r[j])
+        casts = [e for e in typed if isinstance(e, tuple) and e[0] == 'cast']
+        nums = [e for e in typed if isinstance(e, tuple) and e[0] == 'num']
+        if not casts or len(casts) + len(nums) != len(typed) or len(set(repr(e[1]) for e in casts)) != 1:
+            continue
+        if nums and casts[0][1] not in numeric:
+            continue
+        for r in rows:
+            if r[j][0] == 'str':
+                r[j] = ('cast', casts[0][1], r[j])
     return rows
 
 
@@ -1356,15 +1363,41 @@ def scaled_lit(txt):
     return ('-' if neg else '') + str(n), len(b)
 
 
+def days_from_civil(y, m, d):
+    """The number of days from 1970-01-01 of a date of the proleptic Gregorian calendar, the year 0 being 1 BC
+    (days_from_civil of Temporal.v)."""
+    y -= m <= 2
+    era = y // 400
+    yoe = y - era * 400
+    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + d - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
 def temporal_value(txt, ty, fsp=0):
     """The Coq value of a DATE, DATETIME, TIMESTAMP or TIME column holding the text txt."""
     import datetime
     epoch = datetime.datetime(1970, 1, 1)
     t = txt.strip()
+    # a date before the common era ('2040-04-10 BC'): the year 1 BC is the year 0 of the calendar
+    bc = False
+    if t.upper().endswith(' BC'):
+        bc, t = True, t[:-3].strip()
+    elif t.upper().endswith(' AD'):
+        t = t[:-3].strip()
     try:
         if ty == 'date':
-            d = datetime.datetime.strptime(t[:10], '%Y-%m-%d')
-            return '(NullValues.VDate (%d))' % (d - epoch).days
+            if len(t) != 10:
+                raise ValueError(t)
+            y, m, dd = int(t[0:4]), int(t[5:7]), int(t[8:10])
+            datetime.date(2000, m, dd) if not (m == 2 and dd == 29) else None  # the month and the day exist
+            if bc:
+                y = 1 - y
+            if m == 2 and dd == 29 and not (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)):
+                raise ValueError(t)
+            return '(NullValues.VDate (%d))' % days_from_civil(y, m, dd)
+        if bc:
+            raise Skip('temporal value before the common era')
         if ty == 'time':
             h, m, s = t.split(':')
             us = ((int(h) * 60 + int(m)) * 60) * 1000000 + int(round(float(s) * 1000000))
@@ -1755,6 +1788,9 @@ def rollup_sets(l):
     return [l[:k] for k in range(len(l), -1, -1)]
 
 
+ORDER_DEPENDENT_WINDOW = ('row_number', 'ntile', 'lag', 'lead', 'first_value', 'last_value', 'nth_value')
+EXPECT_ERROR = False
+
 RANKING = {'row_number': 'w_row_number', 'rank': 'w_rank', 'dense_rank': 'w_dense_rank',
            'percent_rank': 'w_percent_rank', 'cume_dist': 'w_cume_dist'}
 
@@ -1766,6 +1802,20 @@ def numctx(e):
     if ENGINE == 'mysql' and isinstance(e, tuple) and e[0] == 'call' and e[1] == 'dayname':
         return (e[0], 'weekday') + tuple(e[2:])
     return e
+
+
+ORDERED_AGGS = ('array_agg', 'string_agg', 'json_agg', 'jsonb_agg', 'json_object_agg', 'xmlagg')
+
+
+def has_ordered_agg(e):
+    """an aggregate whose result keeps the order of its input, without DISTINCT"""
+    if isinstance(e, list):
+        return any(has_ordered_agg(x) for x in e)
+    if not isinstance(e, tuple):
+        return False
+    if e[0] == 'call' and isinstance(e[1], str) and e[1].lower() in ORDERED_AGGS and not e[4]:  # e[4]: DISTINCT
+        return True
+    return any(has_ordered_agg(x) for x in e[1:])
 
 
 def has_call(e, name):
@@ -1987,6 +2037,31 @@ class QTr:
                                                  'None' if off == 0 else '(Some %d%%N)' % off,
                                                  'None' if lim is None else '(Some %d%%N)' % lim), bool(order)
 
+    def window_ties(self, frm, part, wo):
+        """Two rows of the table of a FROM of one table have the same keys of a window (its PARTITION BY and its
+        ORDER BY, plain columns of the table); False when this cannot be told (a join, an expression)."""
+        if not (isinstance(frm, tuple) and frm[0] == 'table'):
+            return False
+        try:
+            t = self.table_of(frm[1])
+        except Skip:
+            return False
+        idx = {n.lower(): i for i, (n, _) in enumerate(t.cols)}
+        names = (frm[1].lower(), frm[2].lower())
+        keys = []
+        for x in list(part) + [x for x, _, _ in wo]:
+            if not (isinstance(x, tuple) and x[0] == 'col' and x[2].lower() in idx and
+                    (x[1] is None or x[1].lower() in names)):
+                return False
+            keys.append(idx[x[2].lower()])
+        seen = set()
+        for r in t.rows:
+            k = tuple(r[i] for i in keys)
+            if k in seen:
+                return True
+            seen.add(k)
+        return False
+
     def window_select(self, s, exprs, order, limit, parent, tr):
         """A query with window functions: an inner query computes the arguments, the partition and order
         keys of the windows and the other parts of the select items (with the WHERE, GROUP BY and HAVING of
@@ -2087,6 +2162,16 @@ class QTr:
                 if excl:
                     fr = '(Frame_Excl %s %s)' % (fr, excl)
             name, args, star = call[1], call[2], call[3]
+            # over a window without ORDER BY, these functions number or pick the rows in the order of the scan,
+            # which is implementation defined (as LIMIT without ORDER BY); a query which the engine rejects
+            # (MariaDB: LAG without ORDER BY) is still a case
+            if not wo and name in ORDER_DEPENDENT_WINDOW and not EXPECT_ERROR:
+                raise Skip('window function without order by (the rows are implementation defined)')
+            # the same among the peers of its ORDER BY: over one table, the keys of the window must not be equal
+            # on two of its rows (window.sql: ROW_NUMBER () OVER (PARTITION BY depname ORDER BY enroll_date), two
+            # employees of a department enrolled the same day)
+            if wo and name in ORDER_DEPENDENT_WINDOW and not EXPECT_ERROR and self.window_ties(frm, part, wo):
+                raise Skip('window function among peers (the rows are implementation defined)')
 
             def lit_nat(x):
                 if x[0] != 'num' or '.' in x[1] or x[1].startswith('-'):
@@ -2228,6 +2313,11 @@ class QTr:
                 raise Skip('limit without order by (the rows are implementation defined)')
         if any(has_call(e, 'group_concat') for e, _ in exprs):
             raise Skip('group_concat (the order of the elements is implementation defined)')
+        # the same for the aggregates of PostgreSQL which keep the order of their input, over the rows of a FROM
+        # (without ORDER BY inside the aggregate, which the parser does not take: the scan order); with
+        # DISTINCT the input is sorted
+        if ENGINE == 'postgresql' and frm and any(has_ordered_agg(e) for e, _ in exprs):
+            raise Skip('array_agg / string_agg / json_agg (the order of the elements is implementation defined)')
         w = tr.cond(where) if where is not None else 'c_true'
         if where is not None and has_agg(where):
             raise Skip('aggregate in where')
@@ -3030,6 +3120,8 @@ def process(path, out, stats):
                 qt = QTr(tables)
                 qt.top_select = q[1] if q[0] == 'orderq' and not q[2] else q
                 qt.limit_any = None
+                global EXPECT_ERROR
+                EXPECT_ERROR = failed
                 cq, ncols, ordered, _ = qt.query(q)
                 rows = parse_results(res, ncols)
                 # the engine rejects the query (the suites of the MySQL family, --lenient): the model must too
@@ -3087,10 +3179,14 @@ Open Scope string_scope.
 
 def main():
     args = sys.argv[1:]
-    dialect, outdir = 'OceanBaseMySQL', None
+    dialect, outdir, eval_dialect = 'OceanBaseMySQL', None, None
     while args and args[0].startswith('--'):
         if args[0] == '--dialect':
             dialect = args[1]
+        elif args[0] == '--eval-dialect':
+            # the dialect which evaluates the cases, when it is not the one of --dialect: a variant with the
+            # settings of the session which recorded the results (PostgreSQL_regress, DateStyle 'Postgres, MDY')
+            eval_dialect = args[1]
         elif args[0] == '--outdir':
             outdir = args[1]
         elif args[0] == '--lenient':
@@ -3121,7 +3217,7 @@ def main():
         for base, cases in out:
             name = re.sub(r'\W', '_', base)
             body = 'Definition cases_%s : list spec_case := [\n%s\n].\n' % (name, ';\n'.join(cases))
-            body += 'Eval vm_compute in (diagnose %s cases_%s).\n' % (dialect, name)
+            body += 'Eval vm_compute in (diagnose %s cases_%s).\n' % (eval_dialect or dialect, name)
             if outdir:
                 os.makedirs(outdir, exist_ok=True)
                 with open(os.path.join(outdir, 'Spec_%s.v' % name), 'w') as f:

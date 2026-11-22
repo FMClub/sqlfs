@@ -362,6 +362,43 @@ Definition exp_exact (q : Q) : option Q :=
 
 Definition ln_exact (q : Q) : Q := q_of_fp (fp_ln_q q).
 
+(** [exp q] with [digits] significant decimal digits (for [numeric], whose [exp] gives every digit of a result
+    of hundreds of digits: [exp (1234.5678)] has 537): fixed point of [p] bits, [ln 2] by the series
+    [2 atanh (1/3)], the reduction [q = k ln 2 + r], the Taylor series of [r / 2^32], then 32 squarings (the
+    numbers of the model are binary terms: few multiplications of large numbers, the divisions by small numbers
+    are cheap). [None] when [exp q] is out of every range, as [exp_exact]. *)
+Fixpoint ln2_series (fuel : nat) (i t acc : Z) : Z :=
+  (* [t = one / 3^(2i+1)] *)
+  match fuel with
+  | O => acc
+  | S f => if t =? 0 then acc else ln2_series f (i + 1) (t / 9) (acc + t / (2 * i + 1))
+  end.
+
+(** [p] is the number of bits of the fixed point: a division by [2^p] is a shift *)
+Fixpoint exp_taylor (fuel : nat) (p r term i acc : Z) : Z :=
+  match fuel with
+  | O => acc
+  | S f => let t := Z.shiftr (term * r) p / i in
+           if t =? 0 then acc else exp_taylor f p r t (i + 1) (acc + t)
+  end.
+
+Fixpoint square_n (n : nat) (p e : Z) : Z :=
+  match n with O => e | S m => square_n m p (Z.shiftr (e * e) p) end.
+
+Definition exp_digits (q : Q) (digits : Z) : option Q :=
+  let p := digits * 3322 / 1000 + 96 in
+  let one := 2 ^ p in
+  let fuel := Z.to_nat (p + 64) in
+  (* [ln 2] with 32 more bits, rounded down to [p] bits *)
+  let l2 := Z.shiftr (2 * ln2_series fuel 0 (Z.shiftl one 32 / 3) 0) 32 in
+  let x := Qnum q * one / Zpos (Qden q) in
+  let k := (2 * x + l2) / (2 * l2) in
+  if (5000 <? k) || (k <? -5000) then None
+  else
+    let r := Z.shiftr (x - k * l2) 32 in
+    let e := square_n 32 p (exp_taylor fuel p r one 1 one) in
+    Some (if 0 <=? k then Qmake (e * 2 ^ k) (Z.to_pos one) else Qmake e (Z.to_pos (one * 2 ^ (- k)))).
+
 (** the integer cube root, by Newton's method *)
 Fixpoint icbrt_iter (fuel : nat) (n x : Z) : Z :=
   match fuel with

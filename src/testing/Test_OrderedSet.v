@@ -87,3 +87,9 @@ Proof. check. Qed.
 Example os_15 : os OceanBaseOracle "median" None Asc = ["3"].
 Proof. check. Qed.
 
+
+(** an untyped literal takes the type of the key (TODO 8.37; [aggregates.sql]:
+    [rank ('3') WITHIN GROUP (ORDER BY x)]) *)
+Example os_literal : (os PostgreSQL "hyp_rank_asc" (Some (str "3")) Asc, os PostgreSQL "hyp_rank_asc" (Some (str "4")) Asc)
+                     = (["3"], ["4"]).
+Proof. check. Qed.

@@ -190,3 +190,17 @@ Example pg_inf_trunc : text PostgreSQL (fn "date_trunc" [str "week"; fn "cast_ti
 Proof. vm_compute; reflexivity. Qed.
 Example pg_inf_ts_of_date : text PostgreSQL (fn "cast_timestamp" [fn "cast_date" [str "-infinity"]]) = "-infinity".
 Proof. vm_compute; reflexivity. Qed.
+
+(** The DateStyle [Postgres, MDY] of the regression database (TODO 8.37: [PostgreSQL_regress]): the text of a
+    date and of a timestamp, also inside [concat]; [make_date] with a negative year is a year before the common
+    era, and the year 0 does not exist *)
+Example datestyle_postgres :
+  (text PostgreSQL_regress (dt "2010-03-09"), text PostgreSQL_regress (ts "2004-02-23 00:00:00.5"),
+   text PostgreSQL_regress (fn "concat" [str "a"; dt "2010-03-09"]), text PostgreSQL (dt "2010-03-09"),
+   text PostgreSQL_regress (dt "0044-03-15 BC"))
+  = ("03-09-2010", "Mon Feb 23 00:00:00.5 2004", "a03-09-2010", "2010-03-09", "03-15-0044 BC").
+Proof. check. Qed.
+Example make_date_bc :
+  (text PostgreSQL (fn "make_date" [int (-44); int 3; int 15]), text PostgreSQL (fn "make_date" [int 0; int 7; int 15]))
+  = ("0044-03-15 BC", "ERROR").
+Proof. check. Qed.

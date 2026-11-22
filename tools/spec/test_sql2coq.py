@@ -217,6 +217,10 @@ def padding_of_a_psql_table():
     # texts which all fill their column (to_char (x, '9.999EEEE')): the leading spaces are data
     out = conv([' numeric    ', '------------', '  0.000e+00', ' -4.200e+00', '(2 rows)'])
     assert out == ['numeric', ' 0.000e+00', '-4.200e+00'], out
+    # one row, wider than its header: the value fills the column, its spaces at the end are kept
+    assert conv(['  json  ', '--------', '  true  ', '(1 row)']) == ['json', ' true '], conv(['  json  ', '--------', '  true  ', '(1 row)'])
+    # one row under a wider header: the padding is dropped
+    assert conv([' ?column? ', '----------', ' t        ', '(1 row)']) == ['?column?', 't']
     # a text under a wider header
     assert conv([' to_char ', '---------', '  485', '(1 row)']) == ['to_char', ' 485']
 
@@ -229,6 +233,12 @@ def string_literals_of_values():
         "WITH v(x) AS (VALUES('0'::numeric),('4.2')) SELECT x FROM v;\nx\n0\n4.2\n")})['a']
     c = case(out, 'a:0')
     assert c.count('fn "cast_numeric"') == 2, c
+    # number literals in a column of numerics (window.sql: VALUES (1, 1::numeric), (2, 2), (3, 'NaN'))
+    out = translate('PostgreSQL', {'a': "SELECT b FROM (VALUES (1::numeric), (2), ('NaN')) t(b);\nb\n1\n2\nNaN\n"})['a']
+    assert '(fn "cast_numeric" [(str "NaN")])' in case(out, 'a:0'), out
+    # not with a column of texts
+    out = translate('PostgreSQL', {'a': "SELECT b FROM (VALUES ('x'::text), (2), ('y')) t(b);\nb\nx\n2\ny\n"})['a']
+    assert '(fn "cast_text" [(str "y")])' not in case(out, 'a:0'), out
 
 
 @test
@@ -266,6 +276,59 @@ def queries_of_another_connection():
         "select 1;\n1\n1\nconnect  u1,'localhost',u1,,;\nconnection u1;\nselect 2;\n2\n2\n"
         "disconnect u1;\nconnection default;\nselect 3;\n3\n3\n")})['a']
     assert 'select 1;' in out and 'select 3;' in out and 'select 2;' not in out, out
+
+
+@test
+def order_of_the_ordered_aggregates():
+    """Audit after PR 74: json_object_agg, array_agg, ... over the rows of a FROM keep the scan order, which is
+    implementation defined; with DISTINCT, or without FROM, the result is determined."""
+    out = translate('PostgreSQL', {'a': (
+        "SELECT json_object_agg(a, b) FROM (VALUES (1, 2), (3, 4)) t(a, b);\njson_object_agg\n{ \"1\" : 2, \"3\" : 4 }\n"
+        "SELECT json_object_agg(1, 2);\njson_object_agg\n{ \"1\" : 2 }\n"
+        "select array_agg(distinct a) from (values (1),(2)) v(a);\narray_agg\n{1,2}\n")})['a']
+    assert case(out, 'a:0') == '' and case(out, 'a:1') != '' and case(out, 'a:2') != '', out
+
+
+@test
+def window_without_order():
+    """Audit after PR 74: ROW_NUMBER, NTILE, LAG, ... over a window without ORDER BY are implementation defined;
+    RANK and the aggregates are not; a query which the engine rejects is still a case."""
+    out = translate('MariaDB', {'a': (
+        "create table t1 (pk int, a int);\ninsert into t1 values (1, 1), (2, 2);\n"
+        "select pk, row_number() over () from t1;\npk\trow_number() over ()\n1\t1\n2\t2\n"
+        "select pk, rank() over () from t1;\npk\trank() over ()\n1\t1\n2\t1\n"
+        "select pk, row_number() over (order by pk) from t1;\npk\trow_number() over (order by pk)\n1\t1\n2\t2\n"
+        "select pk, lag(pk, 1) over () from t1;\n"
+        "ERROR HY000: No order list in window specification for 'lag'\n")})['a']
+    assert case(out, 'a:2') == '', out
+    assert case(out, 'a:3') != '' and case(out, 'a:4') != '', out
+    assert case(out, 'a:5').startswith('mk_case_error'), out
+    # among peers: two rows with the same key of the ORDER BY
+    out = translate('MariaDB', {'a': (
+        "create table t1 (pk int, a int);\ninsert into t1 values (1, 1), (2, 1), (3, 2);\n"
+        "select pk, row_number() over (order by a) from t1;\npk\tr\n1\t1\n2\t2\n3\t3\n"
+        "select pk, row_number() over (order by pk) from t1;\npk\tr\n1\t1\n2\t2\n3\t3\n"
+        "select pk, rank() over (order by a) from t1;\npk\tr\n1\t1\n2\t1\n3\t3\n")})['a']
+    assert case(out, 'a:2') == '' and case(out, 'a:3') != '' and case(out, 'a:4') != '', out
+
+
+@test
+def dates_before_the_common_era():
+    """Audit after PR 74: a date literal of a table '2040-04-10 BC' is a date of the year -2039 (it was read as
+    2040-04-10)."""
+    sys.path.insert(0, HERE)
+    import sql2coq
+    import datetime
+    assert sql2coq.temporal_value('1970-01-01', 'date') == '(NullValues.VDate (0))'
+    assert sql2coq.temporal_value('2040-04-10', 'date') == '(NullValues.VDate (%d))' % (
+        datetime.date(2040, 4, 10) - datetime.date(1970, 1, 1)).days
+    # 0001-01-01 is 719162 days before the epoch; 1 BC (year 0) is a leap year of 366 days
+    assert sql2coq.temporal_value('0001-01-01 BC', 'date') == '(NullValues.VDate (%d))' % (-719162 - 366)
+    try:
+        sql2coq.temporal_value('1997-02-29', 'date')
+        assert False, 'not a date'
+    except sql2coq.Skip:
+        pass
 
 
 def main():
