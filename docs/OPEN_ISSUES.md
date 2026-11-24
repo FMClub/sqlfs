@@ -291,3 +291,38 @@ store tables as lists (insertion order, as the engines without a clustered key d
 Decision (iteration 5): option (a). Reopen if a result which depends on the stored order has to be compared with an
 engine row by row.
 
+
+## I12 — MySQL 8.4.13 behaviours met by SQLMRLab's bridge — OPEN (to compare with the MySQL dialect)
+
+SQLMRLab (`github.com/FMClub/SQLMRLab`, `rocq/bridge/`) proves metamorphic relations between queries in
+`SqlFull.v` with the MySQL dialect and runs them, through ValScope's checker, on MySQL 8.4.13. Its audits (rounds 15
+to 23, November 2026) ran some 165,000 queries of an integer fragment against an evaluator of their own and against
+the server. Three groups of findings concern this repository. None of them was checked against the model here; each
+entry says what would have to be checked.
+
+**1. Types of the columns of a set operation.** The bridge relies on `unify_rows` keeping the keys of values
+(`unify_keeps_keys` in SQLMRLab's `rocq/bridge/Unify.v`). On the server:
+- a select item `NULL` is a `BINARY(0)` column once it goes through a `UNION` or a `DISTINCT` in a derived table; a
+  set operation of it with an `INT` column is a `VARCHAR`, and a condition above compares the values as strings
+  (`'2' > '10'`); `MAX(NULL)` and `MIN(NULL)` are strings in the same way, `SUM(NULL)` is a `DOUBLE`;
+- `DATE` with `DATETIME` gives `DATETIME`, `FLOAT` with `DOUBLE` widens the `FLOAT` (`1.1` becomes
+  `1.100000023841858`), `BIT` of two lengths gives the longer.
+Open: does the MySQL dialect give these types to such columns, and does `unify_rows` then still keep the keys? A
+conformance case per item would answer it.
+
+**2. Grammar.** ValScope's front end (sqlglot) reads some texts otherwise than MySQL, which the bridge's audits found
+by comparing the two texts on the server: the comparison operators are one level, left to right (`a = b < 1` is
+`(a = b) < 1`); the upper bound of `BETWEEN` is a predicate (`a BETWEEN b AND c NOT IN (0, 1)`); a comma binds weaker
+than `JOIN`, so the `ON` of `t, u JOIN v ON ...` does not see `t`; `COLLATE` binds tighter than any operator. The
+translator here already reads the `BETWEEN` bound as MySQL does (`tools/spec/sql2coq.py`, the comment at the upper
+bound of `BETWEEN`); the other three were not checked.
+
+**3. Candidate engine defects.** Eight wrong results of MySQL 8.4.13, each with a script, are recorded in ValScope as
+`issues/025` to `issues/032` (branch `bridge/mysql-defects-and-audit-status` of `github.com/FMClub/ValScope`): `!!x`
+read as `!x`; a correlated `EXCEPT ALL` under `EXISTS`; `EXCEPT` / `INTERSECT` in a derived table matching a NULL with
+a `NOT NULL` value (a form of ValScope's 008); a `SELECT *` operand of `INTERSECT` under `EXISTS`; a correlated `MIN`
+over a left join and a further join; a constant item of a derived table on the NULL side of a left join; `IN` over a
+grouped sub-query with `HAVING`; a left join whose `ON` is an `IN` over an empty sub-query. They are not in
+`docs/ENGINE_BUGS.md`, whose entries need a correct result stated by a fix or by the developers: none of them was
+reported upstream. Options: replay them with `tools/spec/engine_bugs/run.sh` as cases where the model's result is
+the expected one, or wait for upstream reports.
