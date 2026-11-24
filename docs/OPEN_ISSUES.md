@@ -302,7 +302,7 @@ entry says what would have to be checked.
 
 **1. Types of the columns of a set operation.** The bridge relies on `unify_rows` keeping the keys of values
 (`unify_keeps_keys` in SQLMRLab's `rocq/bridge/Unify.v`). On the server:
-- a select item `NULL` is a `BINARY(0)` column once it goes through a `UNION` or a `DISTINCT` in a derived table; a
+- a select item `NULL` is a binary string column (result type `VAR_STRING`) once it goes through a `UNION` or a `DISTINCT` in a derived table; a
   set operation of it with an `INT` column is a `VARCHAR`, and a condition above compares the values as strings
   (`'2' > '10'`); `MAX(NULL)` and `MIN(NULL)` are strings in the same way, `SUM(NULL)` is a `DOUBLE`;
 - `DATE` with `DATETIME` gives `DATETIME`, `FLOAT` with `DOUBLE` widens the `FLOAT` (`1.1` becomes
